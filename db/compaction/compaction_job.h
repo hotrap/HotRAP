@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "db/blob/blob_file_completion_callback.h"
+#include "db/blob/blob_garbage_meter.h"
 #include "db/column_family.h"
 #include "db/compaction/compaction_iterator.h"
 #include "db/flush_scheduler.h"
@@ -109,7 +110,79 @@ class CompactionJob {
   IOStatus io_status() const { return io_status_; }
 
  protected:
-  struct SubcompactionState;
+  // Maintains state for each sub-compaction
+  struct SubcompactionState {
+    // Files produced by this subcompaction
+    struct Output;
+    struct LevelOutput {
+      std::vector<Output> outputs;
+      std::unique_ptr<WritableFileWriter> outfile;
+      std::unique_ptr<TableBuilder> builder;
+      uint64_t current_output_file_size = 0;
+      const Output* current_output_const() const;
+      Output* current_output();
+      Status AddToBuilder(const Slice& key, const Slice& value);
+      Slice SmallestUserKey() const;
+      Slice LargestUserKey() const;
+      void CleanupCompaction(const Status& sub_status,
+          std::shared_ptr<rocksdb::Cache> table_cache);
+    };
+
+    const Compaction* compaction;
+    std::unique_ptr<CompactionIterator> c_iter;
+
+    // The boundaries of the key-range this compaction is interested in. No two
+    // subcompactions may have overlapping key-ranges.
+    // 'start' is inclusive, 'end' is exclusive, and nullptr means unbounded
+    Slice *start, *end;
+
+    // The return status of this subcompaction
+    Status status;
+
+    // The return IO Status of this subcompaction
+    IOStatus io_status;
+
+    // State kept for output being generated
+    std::vector<BlobFileAddition> blob_file_additions;
+    std::unique_ptr<BlobGarbageMeter> blob_garbage_meter;
+    LevelOutput start_level_output;
+    LevelOutput next_level;
+
+    // Some identified files with old oldest ancester time and the range should be
+    // isolated out so that the output file(s) in that range can be merged down
+    // for TTL and clear the timestamps for the range.
+    std::vector<FileMetaData*> files_to_cut_for_ttl;
+    int cur_files_to_cut_for_ttl = -1;
+    int next_files_to_cut_for_ttl = 0;
+
+    // State during the subcompaction
+    uint64_t total_bytes = 0;
+    uint64_t num_output_records = 0;
+    CompactionJobStats compaction_job_stats;
+    uint64_t approx_size = 0;
+    // An index that used to speed up ShouldStopBefore().
+    size_t grandparent_index = 0;
+    // The number of bytes overlapping between the current output and
+    // grandparent files used in ShouldStopBefore().
+    uint64_t overlapped_bytes = 0;
+    // A flag determine whether the key has been seen in ShouldStopBefore()
+    bool seen_key = false;
+    // sub compaction job id, which is used to identify different sub-compaction
+    // within the same compaction job.
+    const uint32_t sub_job_id;
+
+    SubcompactionState(Compaction* c, Slice* _start, Slice* _end, uint64_t size,
+                      uint32_t _sub_job_id);
+
+    void FillFilesToCutForTtl();
+
+    // Returns true iff we should stop building the current output
+    // before processing "internal_key".
+    bool ShouldStopBefore(const Slice& internal_key, uint64_t curr_file_size);
+
+    Status ProcessOutFlowIfNeeded(const Slice& key, const Slice& value);
+  };
+
   // CompactionJob state
   struct CompactionState;
 
@@ -154,11 +227,17 @@ class CompactionJob {
 
   Status FinishCompactionOutputFile(
       const Status& input_status, SubcompactionState* sub_compact,
+      SubcompactionState::LevelOutput* level_output,
       CompactionRangeDelAggregator* range_del_agg,
       CompactionIterationStats* range_del_out_stats,
       const Slice* next_table_min_key = nullptr);
+  Status WriteCompactionOutputFile(
+    const Status& input_status, SubcompactionState* sub_compact,
+    SubcompactionState::LevelOutput* level_output);
   Status InstallCompactionResults(const MutableCFOptions& mutable_cf_options);
-  Status OpenCompactionOutputFile(SubcompactionState* sub_compact);
+  Status OpenCompactionOutputFile(
+    SubcompactionState* sub_compact,
+    SubcompactionState::LevelOutput* level_output);
   void UpdateCompactionJobStats(
     const InternalStats::CompactionStats& stats) const;
   void RecordDroppedKeys(const CompactionIterationStats& c_iter_stats,

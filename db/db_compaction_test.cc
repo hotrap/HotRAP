@@ -5034,6 +5034,7 @@ INSTANTIATE_TEST_CASE_P(DBCompactionTestWithParam, DBCompactionTestWithParam,
                                           std::make_tuple(4, true),
                                           std::make_tuple(4, false)));
 
+#if 0
 TEST_P(DBCompactionDirectIOTest, DirectIO) {
   Options options = CurrentOptions();
   Destroy(options);
@@ -5065,6 +5066,7 @@ TEST_P(DBCompactionDirectIOTest, DirectIO) {
   Destroy(options);
   delete options.env;
 }
+#endif
 
 INSTANTIATE_TEST_CASE_P(DBCompactionDirectIOTest, DBCompactionDirectIOTest,
                         testing::Bool());

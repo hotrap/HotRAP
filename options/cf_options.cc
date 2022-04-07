@@ -486,6 +486,10 @@ static std::unordered_map<std::string, OptionTypeInfo>
                      name, value, addr);
                }
              })},
+        {"compaction_router",
+         OptionTypeInfo::AsCustomRawPtr<const CompactionRouter>(
+             offsetof(struct MutableCFOptions, compaction_router),
+             OptionVerificationType::kByName, OptionTypeFlags::kAllowNull)},
         // End special case properties
 };
 

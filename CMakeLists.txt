@@ -873,6 +873,7 @@ set(SOURCES
         utilities/checkpoint/checkpoint_impl.cc
         utilities/compaction_filters.cc
         utilities/compaction_filters/remove_emptyvalue_compactionfilter.cc
+        utilities/compaction_routers.cc
         utilities/debug.cc
         utilities/env_mirror.cc
         utilities/env_timed.cc
