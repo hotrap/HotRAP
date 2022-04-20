@@ -1478,7 +1478,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
     CompactionRouter::Decision output_decision;
     if (compaction_router) {
-      output_decision = compaction_router->Route(level, key);
+      output_decision = compaction_router->Route(level, c_iter->user_key());
     } else {
       output_decision = CompactionRouter::Decision::kNextLevel;
     }
