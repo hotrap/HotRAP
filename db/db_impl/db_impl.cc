@@ -1888,9 +1888,6 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
     RecordTick(stats_, NUMBER_KEYS_READ);
     size_t size = 0;
     if (s.ok()) {
-      auto router = cfd->GetLatestMutableCFOptions()->compaction_router;
-      router->Access(key);
-
       if (get_impl_options.get_value) {
         size = get_impl_options.value->size();
       } else {
@@ -1912,6 +1909,8 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
       }
       RecordTick(stats_, BYTES_READ, size);
       PERF_COUNTER_ADD(get_read_bytes, size);
+      auto router = cfd->GetLatestMutableCFOptions()->compaction_router;
+      router->Access(key, size);
     }
     RecordInHistogram(stats_, BYTES_PER_READ, size);
   }
