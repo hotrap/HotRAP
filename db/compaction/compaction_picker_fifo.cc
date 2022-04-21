@@ -20,6 +20,7 @@
 #include "util/string_util.h"
 
 namespace ROCKSDB_NAMESPACE {
+#if 0
 namespace {
 uint64_t GetTotalFilesSize(const std::vector<FileMetaData*>& files) {
   uint64_t total_size = 0;
@@ -29,6 +30,7 @@ uint64_t GetTotalFilesSize(const std::vector<FileMetaData*>& files) {
   return total_size;
 }
 }  // anonymous namespace
+#endif
 
 bool FIFOCompactionPicker::NeedsCompaction(
     const VersionStorageInfo* vstorage) const {
@@ -40,6 +42,14 @@ Compaction* FIFOCompactionPicker::PickTTLCompaction(
     const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
     const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
     LogBuffer* log_buffer) {
+  (void)cf_name;
+  (void)mutable_cf_options;
+  (void)mutable_db_options;
+  (void)vstorage;
+  (void)log_buffer;
+  assert("Not supported yet!\n" || false);
+  return nullptr;
+#if 0
   assert(mutable_cf_options.ttl > 0);
 
   const int kLevel0 = 0;
@@ -118,12 +128,22 @@ Compaction* FIFOCompactionPicker::PickTTLCompaction(
       vstorage->CompactionScore(0),
       /* is deletion compaction */ true, CompactionReason::kFIFOTtl);
   return c;
+#endif
 }
 
 Compaction* FIFOCompactionPicker::PickSizeCompaction(
     const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
     const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
     LogBuffer* log_buffer) {
+  (void)cf_name;
+  (void)mutable_cf_options;
+  (void)mutable_db_options;
+  (void)vstorage;
+  (void)log_buffer;
+  assert("Not supported yet!\n" || false);
+  __builtin_unreachable();
+  return nullptr;
+#if 0
   const int kLevel0 = 0;
   const std::vector<FileMetaData*>& level_files = vstorage->LevelFiles(kLevel0);
   uint64_t total_size = GetTotalFilesSize(level_files);
@@ -211,12 +231,22 @@ Compaction* FIFOCompactionPicker::PickSizeCompaction(
       vstorage->CompactionScore(0),
       /* is deletion compaction */ true, CompactionReason::kFIFOMaxSize);
   return c;
+#endif
 }
 
 Compaction* FIFOCompactionPicker::PickCompactionToWarm(
     const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
     const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,
     LogBuffer* log_buffer) {
+  (void)cf_name;
+  (void)mutable_cf_options;
+  (void)mutable_db_options;
+  (void)vstorage;
+  (void)log_buffer;
+  assert("Not supported yet!\n" || false);
+  __builtin_unreachable();
+  return nullptr;
+#if 0
   if (mutable_cf_options.compaction_options_fifo.age_for_warm == 0) {
     return nullptr;
   }
@@ -317,6 +347,7 @@ Compaction* FIFOCompactionPicker::PickCompactionToWarm(
       vstorage->CompactionScore(0),
       /* is deletion compaction */ false, CompactionReason::kChangeTemperature);
   return c;
+#endif
 }
 
 Compaction* FIFOCompactionPicker::PickCompaction(

@@ -1085,6 +1085,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
 CompactionServiceJobStatus
 CompactionJob::ProcessKeyValueCompactionWithCompactionService(
     SubcompactionState* sub_compact) {
+    (void)sub_compact;
 #if 0
   assert(sub_compact);
   assert(sub_compact->compaction);
@@ -1293,7 +1294,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
   uint64_t prev_cpu_micros = db_options_.clock->CPUNanos() / 1000;
 
-  ColumnFamilyData* cfd = sub_compact->compaction->column_family_data();
+  const Compaction* c = sub_compact->compaction;
+  ColumnFamilyData* cfd = c->column_family_data();
 
   // Create compaction filter and fail the compaction if
   // IgnoreSnapshots() = false because it is not supported anymore
@@ -1301,8 +1303,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       cfd->ioptions()->compaction_filter;
   std::unique_ptr<CompactionFilter> compaction_filter_from_factory = nullptr;
   if (compaction_filter == nullptr) {
-    compaction_filter_from_factory =
-        sub_compact->compaction->CreateCompactionFilter();
+    compaction_filter_from_factory = c->CreateCompactionFilter();
     compaction_filter = compaction_filter_from_factory.get();
   }
   if (compaction_filter != nullptr && !compaction_filter->IgnoreSnapshots()) {
@@ -1313,7 +1314,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
   CompactionRouter* compaction_router =
       cfd->GetCurrentMutableCFOptions()->compaction_router;
-  const int level = sub_compact->compaction->level();
+  const int level = c->level();
 
   CompactionRangeDelAggregator range_del_agg(&cfd->internal_comparator(),
                                              existing_snapshots_);
@@ -1477,10 +1478,18 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     }
 
     CompactionRouter::Decision output_decision;
-    if (compaction_router) {
-      output_decision = compaction_router->Route(level, c_iter->user_key());
-    } else {
+    if (level == 0 || compaction_router == NULL) {
       output_decision = CompactionRouter::Decision::kNextLevel;
+    } else if (
+        (c->next_level_smallest()->size() &&
+            cfd->user_comparator()->Compare(c_iter->user_key(),
+                c->next_level_smallest()->user_key()) < 0) ||
+        (c->next_level_largest()->size() &&
+            cfd->user_comparator()->Compare(c_iter->user_key(),
+                c->next_level_largest()->user_key()) > 0)) {
+      output_decision = CompactionRouter::Decision::kCurrentLevel;
+    } else {
+      output_decision = compaction_router->Route(level, c_iter->user_key());
     }
     SubcompactionState::LevelOutput *level_output = NULL;
     switch (output_decision) {

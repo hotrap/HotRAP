@@ -74,6 +74,7 @@ class Compaction {
              const MutableCFOptions& mutable_cf_options,
              const MutableDBOptions& mutable_db_options,
              std::vector<CompactionInputFiles> inputs, int output_level,
+             InternalKey next_level_smallest, InternalKey next_level_largest,
              uint64_t target_file_size, uint64_t max_compaction_bytes,
              uint32_t output_path_id, CompressionType compression,
              CompressionOptions compression_opts,
@@ -99,6 +100,12 @@ class Compaction {
 
   // Outputs will go to this level
   int output_level() const { return output_level_; }
+  const InternalKey* next_level_smallest() const {
+    return &next_level_smallest_;
+  }
+  const InternalKey* next_level_largest() const {
+    return &next_level_largest_;
+  }
 
   // Returns the number of input levels in this compaction.
   size_t num_input_levels() const { return inputs_.size(); }
@@ -348,6 +355,7 @@ class Compaction {
 
   const int start_level_;    // the lowest level to be compacted
   const int output_level_;  // levels to which output files are stored
+  InternalKey next_level_smallest_, next_level_largest_;
   uint64_t max_output_file_size_;
   uint64_t max_compaction_bytes_;
   uint32_t max_subcompactions_;

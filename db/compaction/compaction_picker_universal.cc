@@ -315,6 +315,7 @@ void UniversalCompactionBuilder::SortedRun::Dump(char* out_buf,
   }
 }
 
+#if 0
 void UniversalCompactionBuilder::SortedRun::DumpSizeInfo(
     char* out_buf, size_t out_buf_size, size_t sorted_run_count) const {
   if (level == 0) {
@@ -333,6 +334,7 @@ void UniversalCompactionBuilder::SortedRun::DumpSizeInfo(
              level, sorted_run_count, size, compensated_file_size);
   }
 }
+#endif
 
 std::vector<UniversalCompactionBuilder::SortedRun>
 UniversalCompactionBuilder::CalculateSortedRuns(
@@ -509,6 +511,7 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
   return c;
 }
 
+#if 0
 uint32_t UniversalCompactionBuilder::GetPathId(
     const ImmutableCFOptions& ioptions,
     const MutableCFOptions& mutable_cf_options, uint64_t file_size) {
@@ -542,6 +545,7 @@ uint32_t UniversalCompactionBuilder::GetPathId(
   }
   return p;
 }
+#endif
 
 //
 // Consider compaction files based on their size differences with
@@ -549,6 +553,11 @@ uint32_t UniversalCompactionBuilder::GetPathId(
 //
 Compaction* UniversalCompactionBuilder::PickCompactionToReduceSortedRuns(
     unsigned int ratio, unsigned int max_number_of_files_to_compact) {
+  (void)ratio;
+  (void)max_number_of_files_to_compact;
+  assert("Not supported yet!\n" || false);
+  return nullptr;
+#if 0
   unsigned int min_merge_width =
       mutable_cf_options_.compaction_options_universal.min_merge_width;
   unsigned int max_merge_width =
@@ -756,6 +765,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionToReduceSortedRuns(
       Temperature::kUnknown,
       /* max_subcompactions */ 0, grandparents, /* is manual */ false, score_,
       false /* deletion_compaction */, compaction_reason);
+#endif
 }
 
 // Look at overall size amplification. If size amplification
@@ -871,6 +881,10 @@ Compaction* UniversalCompactionBuilder::PickCompactionToReduceSizeAmp() {
 
 Compaction* UniversalCompactionBuilder::PickIncrementalForReduceSizeAmp(
     double fanout_threshold) {
+  (void)fanout_threshold;
+  assert("Not supported yet!" || false);
+  return nullptr;
+#if 0
   // Try find all potential compactions with total size just over
   // options.max_compaction_size / 2, and take the one with the lowest
   // fanout (defined in declaration of the function).
@@ -1081,11 +1095,15 @@ Compaction* UniversalCompactionBuilder::PickIncrementalForReduceSizeAmp(
       /* max_subcompactions */ 0, /* grandparents */ {}, /* is manual */ false,
       score_, false /* deletion_compaction */,
       CompactionReason::kUniversalSizeAmplification);
+#endif
 }
 
 // Pick files marked for compaction. Typically, files are marked by
 // CompactOnDeleteCollector due to the presence of tombstones.
 Compaction* UniversalCompactionBuilder::PickDeleteTriggeredCompaction() {
+  assert("Not supported yet!" || false);
+  return nullptr;
+#if 0
   CompactionInputFiles start_level_inputs;
   int output_level;
   std::vector<CompactionInputFiles> inputs;
@@ -1224,10 +1242,16 @@ Compaction* UniversalCompactionBuilder::PickDeleteTriggeredCompaction() {
       /* max_subcompactions */ 0, grandparents, /* is manual */ false, score_,
       false /* deletion_compaction */,
       CompactionReason::kFilesMarkedForCompaction);
+#endif
 }
 
 Compaction* UniversalCompactionBuilder::PickCompactionToOldest(
     size_t start_index, CompactionReason compaction_reason) {
+  (void)start_index;
+  (void)compaction_reason;
+  assert("Not supported yet!" || false);
+  return nullptr;
+#if 0
   assert(start_index < sorted_runs_.size());
 
   // Estimate total file size
@@ -1298,6 +1322,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionToOldest(
       Temperature::kUnknown,
       /* max_subcompactions */ 0, /* grandparents */ {}, /* is manual */ false,
       score_, false /* deletion_compaction */, compaction_reason);
+#endif
 }
 
 Compaction* UniversalCompactionBuilder::PickPeriodicCompaction() {
@@ -1366,6 +1391,7 @@ Compaction* UniversalCompactionBuilder::PickPeriodicCompaction() {
   return c;
 }
 
+#if 0
 uint64_t UniversalCompactionBuilder::GetMaxOverlappingBytes() const {
   if (!mutable_cf_options_.compaction_options_universal.incremental) {
     return port::kMaxUint64;
@@ -1376,6 +1402,7 @@ uint64_t UniversalCompactionBuilder::GetMaxOverlappingBytes() const {
     return mutable_cf_options_.target_file_size_base / 2 * 3;
   }
 }
+#endif
 }  // namespace ROCKSDB_NAMESPACE
 
 #endif  // !ROCKSDB_LITE

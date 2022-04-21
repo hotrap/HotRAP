@@ -184,11 +184,23 @@ class CompactionPicker {
       const std::vector<CompactionInputFiles>& inputs, int level) const;
 
   bool SetupOtherInputs(const std::string& cf_name,
-                        const MutableCFOptions& mutable_cf_options,
                         VersionStorageInfo* vstorage,
                         CompactionInputFiles* inputs,
                         CompactionInputFiles* output_level_inputs,
-                        int* parent_index, int base_index);
+                        int* parent_index);
+
+  bool ExpandStartLevelInputsWithRouter(
+      const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
+      VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
+      CompactionInputFiles* output_level_inputs,
+      InternalKey *next_level_smallest, InternalKey *next_level_largest,
+      int base_index);
+
+  bool ExpandStartLevelInputs(
+      const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
+      VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
+      CompactionInputFiles* output_level_inputs,
+      int* parent_index, int base_index);
 
   void GetGrandparents(VersionStorageInfo* vstorage,
                        const CompactionInputFiles& inputs,

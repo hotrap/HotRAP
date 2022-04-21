@@ -333,6 +333,16 @@ Compaction* CompactionPicker::CompactFiles(
     const std::vector<CompactionInputFiles>& input_files, int output_level,
     VersionStorageInfo* vstorage, const MutableCFOptions& mutable_cf_options,
     const MutableDBOptions& mutable_db_options, uint32_t output_path_id) {
+  (void)compact_options;
+  (void)input_files;
+  (void)output_level;
+  (void)vstorage;
+  (void)mutable_cf_options;
+  (void)mutable_db_options;
+  (void)output_path_id;
+  assert("Not supported yet!\n" || false);
+  return NULL;
+#if 0
   assert(input_files.size());
   // This compaction output should not overlap with a running compaction as
   // `SanitizeCompactionInputFiles` should've checked earlier and db mutex
@@ -364,6 +374,7 @@ Compaction* CompactionPicker::CompactFiles(
       /* grandparents */ {}, true);
   RegisterCompaction(c);
   return c;
+#endif
 }
 
 Status CompactionPicker::GetCompactionInputsFromFileNumbers(
@@ -431,18 +442,14 @@ bool CompactionPicker::IsRangeInCompaction(VersionStorageInfo* vstorage,
 // Populates the set of inputs of all other levels that overlap with the
 // start level.
 // Now we assume all levels except start level and output level are empty.
-// Will also attempt to expand "start level" if that doesn't expand
-// "output level" or cause "level" to include a file for compaction that has an
-// overlapping user-key with another file.
 // REQUIRES: input_level and output_level are different
 // REQUIRES: inputs->empty() == false
 // Returns false if files on parent level are currently in compaction, which
 // means that we can't compact them
 bool CompactionPicker::SetupOtherInputs(
-    const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
-    VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
-    CompactionInputFiles* output_level_inputs, int* parent_index,
-    int base_index) {
+    const std::string& cf_name, VersionStorageInfo* vstorage,
+    CompactionInputFiles* inputs, CompactionInputFiles* output_level_inputs,
+    int* parent_index) {
   assert(!inputs->empty());
   assert(output_level_inputs->empty());
   const int input_level = inputs->level;
@@ -460,7 +467,6 @@ bool CompactionPicker::SetupOtherInputs(
 
   InternalKey smallest, largest;
 
-  // Get the range one last time.
   GetRange(*inputs, &smallest, &largest);
 
   // Populate the set of next-level files (inputs_GetOutputLevelInputs()) to
@@ -476,12 +482,56 @@ bool CompactionPicker::SetupOtherInputs(
       return false;
     }
   }
+  return true;
+}
 
-  // See if we can further grow the number of inputs in "level" without
-  // changing the number of "level+1" files we pick up. We also choose NOT
-  // to expand if this would cause "level" to include some entries for some
-  // user key, while excluding other entries for the same user key. This
-  // can happen when one user key spans multiple files.
+// The keys in the next level might be promoted into the start level.
+// So we have to add the files in the start level that overlap with the range
+// of the next level. It is possible that some keys in the inputs of the start
+// level does not in the range of the next level. Those keys should be kept in
+// the start level in compaction.
+bool CompactionPicker::ExpandStartLevelInputsWithRouter(
+    const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
+    VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
+    CompactionInputFiles* output_level_inputs, InternalKey *next_level_smallest,
+    InternalKey *next_level_largest, int base_index) {
+  if (output_level_inputs->empty()) {
+    return true;
+  }
+  const int input_level = inputs->level;
+  const uint64_t limit = mutable_cf_options.max_compaction_bytes;
+  const uint64_t output_level_inputs_size =
+      TotalCompensatedFileSize(output_level_inputs->files);
+
+  // Get closed interval of output level
+  GetRange(*inputs, *output_level_inputs, next_level_smallest,
+    next_level_largest);
+  vstorage->GetOverlappingInputs(input_level, next_level_smallest,
+                                 next_level_largest, &inputs->files, base_index,
+                                 nullptr);
+  uint64_t inputs_size = TotalCompensatedFileSize(inputs->files);
+  if (!ExpandInputsToCleanCut(cf_name, vstorage, inputs)) {
+    return false;
+  }
+  if (output_level_inputs_size + inputs_size >= limit ||
+      AreFilesInCompaction(inputs->files)) {
+    return false;
+  }
+  return true;
+}
+
+// See if we can further grow the number of inputs in "level" without
+// changing the number of "level+1" files we pick up. We also choose NOT
+// to expand if this would cause "level" to include some entries for some
+// user key, while excluding other entries for the same user key. This
+// can happen when one user key spans multiple files.
+bool CompactionPicker::ExpandStartLevelInputs(
+    const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
+    VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
+    CompactionInputFiles* output_level_inputs, int* parent_index,
+    int base_index) {
+  const int input_level = inputs->level;
+  const int output_level = output_level_inputs->level;
   if (!output_level_inputs->empty()) {
     const uint64_t limit = mutable_cf_options.max_compaction_bytes;
     const uint64_t output_level_inputs_size =
@@ -572,6 +622,21 @@ Compaction* CompactionPicker::CompactRange(
     const CompactRangeOptions& compact_range_options, const InternalKey* begin,
     const InternalKey* end, InternalKey** compaction_end, bool* manual_conflict,
     uint64_t max_file_num_to_ignore) {
+  (void)cf_name;
+  (void)mutable_cf_options;
+  (void)mutable_db_options;
+  (void)vstorage;
+  (void)input_level;
+  (void)output_level;
+  (void)compact_range_options;
+  (void)begin;
+  (void)end;
+  (void)compaction_end;
+  (void)manual_conflict;
+  (void)max_file_num_to_ignore;
+  assert("Not supported yet!" || false);
+  return nullptr;
+#if 0
   // CompactionPickerFIFO has its own implementation of compact range
   assert(ioptions_.compaction_style != kCompactionStyleFIFO);
 
@@ -833,6 +898,7 @@ Compaction* CompactionPicker::CompactRange(
   vstorage->ComputeCompactionScore(ioptions_, mutable_cf_options);
 
   return compaction;
+#endif
 }
 
 #ifndef ROCKSDB_LITE
