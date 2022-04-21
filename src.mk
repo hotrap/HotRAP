@@ -244,6 +244,7 @@ LIB_SOURCES =                                                   \
   utilities/checkpoint/checkpoint_impl.cc                       \
   utilities/compaction_filters.cc                               \
   utilities/compaction_filters/remove_emptyvalue_compactionfilter.cc    \
+  utilities/compaction_routers.cc                                \
   utilities/convenience/info_log_finder.cc                      \
   utilities/debug.cc                                            \
   utilities/env_mirror.cc                                       \
