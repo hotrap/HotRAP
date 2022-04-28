@@ -211,10 +211,11 @@ Compaction::Compaction(
     std::vector<CompactionInputFiles> _inputs, int _output_level,
     InternalKey _next_level_smallest, InternalKey _next_level_largest,
     uint64_t _target_file_size, uint64_t _max_compaction_bytes,
-    uint32_t _output_path_id, CompressionType _compression,
-    CompressionOptions _compression_opts, Temperature _output_temperature,
-    uint32_t _max_subcompactions, std::vector<FileMetaData*> _grandparents,
-    bool _manual_compaction, double _score, bool _deletion_compaction,
+    uint32_t _start_level_path_id, uint32_t _latter_level_path_id,
+    CompressionType _compression, CompressionOptions _compression_opts,
+    Temperature _output_temperature, uint32_t _max_subcompactions,
+    std::vector<FileMetaData*> _grandparents, bool _manual_compaction,
+    double _score, bool _deletion_compaction,
     CompactionReason _compaction_reason)
     : input_vstorage_(vstorage),
       start_level_(_inputs[0].level),
@@ -229,7 +230,8 @@ Compaction::Compaction(
       input_version_(nullptr),
       number_levels_(vstorage->num_levels()),
       cfd_(nullptr),
-      output_path_id_(_output_path_id),
+      start_level_path_id_(_start_level_path_id),
+      later_level_path_id_(_latter_level_path_id),
       output_compression_(_compression),
       output_compression_opts_(_compression_opts),
       output_temperature_(_output_temperature),
@@ -326,7 +328,7 @@ bool Compaction::IsTrivialMove() const {
   }
 
   if (!(start_level_ != output_level_ && num_input_levels() == 1 &&
-          input(0, 0)->fd.GetPathId() == output_path_id() &&
+          input(0, 0)->fd.GetPathId() == latter_level_path_id() &&
           InputCompressionMatchesOutput())) {
     return false;
   }

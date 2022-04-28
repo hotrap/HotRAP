@@ -680,6 +680,11 @@ Status DB::OpenAsSecondary(
 Status DBImplSecondary::CompactWithoutInstallation(
     ColumnFamilyHandle* cfh, const CompactionServiceInput& input,
     CompactionServiceResult* result) {
+  (void)cfh;
+  (void)input;
+  (void)result;
+  return Status::NotSupported();
+#if 0
   InstrumentedMutexLock l(&mutex_);
   auto cfd = static_cast_with_check<ColumnFamilyHandleImpl>(cfh)->cfd();
   if (!cfd) {
@@ -757,6 +762,7 @@ Status DBImplSecondary::CompactWithoutInstallation(
                            &s);
   result->status = s;
   return s;
+#endif
 }
 
 Status DB::OpenAndCompact(

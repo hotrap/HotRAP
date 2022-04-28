@@ -26,6 +26,7 @@
 #include "db/job_context.h"
 #include "db/log_writer.h"
 #include "db/memtable_list.h"
+#include "db/output_validator.h"
 #include "db/range_del_aggregator.h"
 #include "db/version_edit.h"
 #include "db/write_controller.h"
@@ -70,7 +71,8 @@ class CompactionJob {
       const FileOptions& file_options, VersionSet* versions,
       const std::atomic<bool>* shutting_down,
       const SequenceNumber preserve_deletes_seqnum, LogBuffer* log_buffer,
-      FSDirectory* db_directory, FSDirectory* output_directory,
+      FSDirectory* db_directory, FSDirectory* start_level_output_directory,
+      FSDirectory* latter_level_output_directory,
       FSDirectory* blob_output_directory, Statistics* stats,
       InstrumentedMutex* db_mutex, ErrorHandler* db_error_handler,
       std::vector<SequenceNumber> existing_snapshots,
@@ -113,12 +115,28 @@ class CompactionJob {
   // Maintains state for each sub-compaction
   struct SubcompactionState {
     // Files produced by this subcompaction
-    struct Output;
+    struct Output {
+      Output(FileMetaData&& _meta, const InternalKeyComparator& _icmp,
+            bool _enable_order_check, bool _enable_hash, bool _finished = false,
+            uint64_t precalculated_hash = 0)
+          : meta(std::move(_meta)),
+            validator(_icmp, _enable_order_check, _enable_hash,
+                      precalculated_hash),
+            finished(_finished) {}
+      FileMetaData meta;
+      OutputValidator validator;
+      bool finished;
+      std::shared_ptr<const TableProperties> table_properties;
+    };
     struct LevelOutput {
+      uint32_t path_id_;
       std::vector<Output> outputs;
       std::unique_ptr<WritableFileWriter> outfile;
       std::unique_ptr<TableBuilder> builder;
       uint64_t current_output_file_size = 0;
+
+      LevelOutput(uint32_t path_id) : path_id_(path_id) {}
+      uint32_t path_id() const { return path_id_; }
       const Output* current_output_const() const;
       Output* current_output();
       Status AddToBuilder(const Slice& key, const Slice& value);
@@ -126,6 +144,9 @@ class CompactionJob {
       Slice LargestUserKey() const;
       void CleanupCompaction(const Status& sub_status,
           std::shared_ptr<rocksdb::Cache> table_cache);
+      // Get table file name in where it's outputting to
+      std::string GetTableFileName(const ImmutableOptions* ioptions,
+          uint64_t file_number);
     };
 
     const Compaction* compaction;
@@ -146,7 +167,7 @@ class CompactionJob {
     std::vector<BlobFileAddition> blob_file_additions;
     std::unique_ptr<BlobGarbageMeter> blob_garbage_meter;
     LevelOutput start_level_output;
-    LevelOutput later_level_output;
+    LevelOutput latter_level_output;
 
     // Some identified files with old oldest ancester time and the range should be
     // isolated out so that the output file(s) in that range can be merged down
@@ -201,7 +222,8 @@ class CompactionJob {
   const ImmutableDBOptions& db_options_;
   const MutableDBOptions mutable_db_options_copy_;
   LogBuffer* log_buffer_;
-  FSDirectory* output_directory_;
+  FSDirectory* start_level_output_directory_;
+  FSDirectory* latter_level_output_directory_;
   Statistics* stats_;
   // Is this compaction creating a file in the bottom most level?
   bool bottommost_level_;
@@ -298,10 +320,6 @@ class CompactionJob {
   BlobFileCompletionCallback* blob_callback_;
 
   uint64_t GetCompactionId(SubcompactionState* sub_compact);
-
-  // Get table file name in where it's outputting to, which should also be in
-  // `output_directory_`.
-  virtual std::string GetTableFileName(uint64_t file_number);
 };
 
 // CompactionServiceInput is used the pass compaction information between two
@@ -408,7 +426,8 @@ class CompactionServiceCompactionJob : private CompactionJob {
       const MutableDBOptions& mutable_db_options,
       const FileOptions& file_options, VersionSet* versions,
       const std::atomic<bool>* shutting_down, LogBuffer* log_buffer,
-      FSDirectory* output_directory, Statistics* stats,
+      FSDirectory* start_level_output_directory,
+      FSDirectory* latter_level_output_directory, Statistics* stats,
       InstrumentedMutex* db_mutex, ErrorHandler* db_error_handler,
       std::vector<SequenceNumber> existing_snapshots,
       std::shared_ptr<Cache> table_cache, EventLogger* event_logger,
@@ -429,8 +448,6 @@ class CompactionServiceCompactionJob : private CompactionJob {
   void RecordCompactionIOStats() override;
 
  private:
-  // Get table file name in output_path
-  std::string GetTableFileName(uint64_t file_number) override;
   // Specific the compaction output path, otherwise it uses default DB path
   const std::string output_path_;
 

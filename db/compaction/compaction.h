@@ -76,7 +76,8 @@ class Compaction {
              std::vector<CompactionInputFiles> inputs, int output_level,
              InternalKey next_level_smallest, InternalKey next_level_largest,
              uint64_t target_file_size, uint64_t max_compaction_bytes,
-             uint32_t output_path_id, CompressionType compression,
+             uint32_t start_level_output_path_id,
+             uint32_t latter_level_output_path_id, CompressionType compression,
              CompressionOptions compression_opts,
              Temperature output_temperature, uint32_t max_subcompactions,
              std::vector<FileMetaData*> grandparents,
@@ -174,8 +175,8 @@ class Compaction {
     return output_compression_opts_;
   }
 
-  // Whether need to write output file to second DB path.
-  uint32_t output_path_id() const { return output_path_id_; }
+  uint32_t start_level_path_id() const { return start_level_path_id_; }
+  uint32_t latter_level_path_id() const { return later_level_path_id_; }
 
   // Is this a trivial compaction that can be implemented by just
   // moving a single input file to the next level (no merging or splitting)
@@ -367,7 +368,8 @@ class Compaction {
   ColumnFamilyData* cfd_;
   Arena arena_;          // Arena used to allocate space for file_levels_
 
-  const uint32_t output_path_id_;
+  const uint32_t start_level_path_id_;
+  const uint32_t later_level_path_id_;
   CompressionType output_compression_;
   CompressionOptions output_compression_opts_;
   Temperature output_temperature_;
