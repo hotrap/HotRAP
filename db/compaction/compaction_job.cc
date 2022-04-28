@@ -355,65 +355,65 @@ struct CompactionJob::CompactionState {
   explicit CompactionState(Compaction* c) : compaction(c) {}
 
   Slice SmallestUserKey() {
-    Slice current_level_ret, next_level_ret;
+    Slice start_level_ret, later_level_ret;
     for (const auto& sub_compact_state : sub_compact_states) {
-      current_level_ret = sub_compact_state.start_level_output.SmallestUserKey();
-      if (!current_level_ret.empty()) {
+      start_level_ret = sub_compact_state.start_level_output.SmallestUserKey();
+      if (!start_level_ret.empty()) {
         break;
       }
     }
     for (const auto& sub_compact_state : sub_compact_states) {
-      next_level_ret = sub_compact_state.next_level.SmallestUserKey();
-      if (!next_level_ret.empty()) {
+      later_level_ret = sub_compact_state.later_level_output.SmallestUserKey();
+      if (!later_level_ret.empty()) {
         break;
       }
     }
-    if (current_level_ret.empty()) {
-      return next_level_ret;
-    } else if (next_level_ret.empty()) {
-      return current_level_ret;
+    if (start_level_ret.empty()) {
+      return later_level_ret;
+    } else if (later_level_ret.empty()) {
+      return start_level_ret;
     } else {
       auto* c = compaction;
       auto* cfd = c->column_family_data();
       const Comparator* cfd_comparator = cfd->user_comparator();
-      int res = cfd_comparator->Compare(current_level_ret, next_level_ret);
+      int res = cfd_comparator->Compare(start_level_ret, later_level_ret);
       if (res < 0) {
-        return current_level_ret;
+        return start_level_ret;
       } else {
-        return next_level_ret;
+        return later_level_ret;
       }
     }
   }
 
   Slice LargestUserKey() {
-    Slice current_level_ret, next_level_ret;
+    Slice start_level_ret, later_level_ret;
     for (auto it = sub_compact_states.rbegin(); it < sub_compact_states.rend();
          ++it) {
-      current_level_ret = it->start_level_output.LargestUserKey();
-      if (!current_level_ret.empty()) {
+      start_level_ret = it->start_level_output.LargestUserKey();
+      if (!start_level_ret.empty()) {
         break;
       }
     }
     for (auto it = sub_compact_states.rbegin(); it < sub_compact_states.rend();
          ++it) {
-      next_level_ret = it->next_level.LargestUserKey();
-      if (!next_level_ret.empty()) {
+      later_level_ret = it->later_level_output.LargestUserKey();
+      if (!later_level_ret.empty()) {
         break;
       }
     }
-    if (current_level_ret.empty()) {
-      return next_level_ret;
-    } else if (next_level_ret.empty()) {
-      return current_level_ret;
+    if (start_level_ret.empty()) {
+      return later_level_ret;
+    } else if (later_level_ret.empty()) {
+      return start_level_ret;
     } else {
       auto* c = compaction;
       auto* cfd = c->column_family_data();
       const Comparator* cfd_comparator = cfd->user_comparator();
-      int res = cfd_comparator->Compare(current_level_ret, next_level_ret);
+      int res = cfd_comparator->Compare(start_level_ret, later_level_ret);
       if (res > 0) {
-        return current_level_ret;
+        return start_level_ret;
       } else {
-        return next_level_ret;
+        return later_level_ret;
       }
     }
   }
@@ -433,7 +433,7 @@ void CompactionJob::AggregateStatistics() {
     }
 
     {
-      auto& outputs = sc.next_level.outputs;
+      auto& outputs = sc.later_level_output.outputs;
       if (!outputs.empty() && !outputs.back().meta.fd.file_size) {
         // An error occurred, so ignore the last output.
         outputs.pop_back();
@@ -838,7 +838,7 @@ Status CompactionJob::Run() {
       for (const auto& output : state.start_level_output.outputs) {
         files_output.emplace_back(&output);
       }
-      for (const auto& output : state.next_level.outputs) {
+      for (const auto& output : state.later_level_output.outputs) {
         files_output.emplace_back(&output);
       }
     }
@@ -926,7 +926,7 @@ Status CompactionJob::Run() {
                         output.meta.fd.GetNumber(), output.meta.fd.GetPathId());
       tp[fn] = output.table_properties;
     }
-    for (const auto& output : state.next_level.outputs) {
+    for (const auto& output : state.later_level_output.outputs) {
       auto fn =
           TableFileName(state.compaction->immutable_options()->cf_paths,
                         output.meta.fd.GetNumber(), output.meta.fd.GetPathId());
@@ -1497,7 +1497,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       level_output = &sub_compact->start_level_output;
       break;
     case CompactionRouter::Decision::kNextLevel:
-      level_output = &sub_compact->next_level;
+      level_output = &sub_compact->later_level_output;
       break;
     }
     assert(level_output != NULL);
@@ -1637,11 +1637,13 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     status = c_iter->status();
   }
 
-  if (status.ok() && sub_compact->next_level.builder == nullptr &&
-      sub_compact->next_level.outputs.size() == 0 && !range_del_agg.IsEmpty()) {
+  if (status.ok() && sub_compact->later_level_output.builder == nullptr &&
+      sub_compact->later_level_output.outputs.size() == 0 &&
+      !range_del_agg.IsEmpty()) {
     // handle subcompaction containing only range deletions
     // Range deletions are always output to the next level.
-    status = OpenCompactionOutputFile(sub_compact, &sub_compact->next_level);
+    status = OpenCompactionOutputFile(sub_compact,
+        &sub_compact->later_level_output);
   }
 
   // Call FinishCompactionOutputFile() even if status is not ok: it needs to
@@ -1656,10 +1658,10 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     }
     RecordDroppedKeys(range_del_out_stats, &sub_compact->compaction_job_stats);
   }
-  if (sub_compact->next_level.builder != nullptr) {
+  if (sub_compact->later_level_output.builder != nullptr) {
     CompactionIterationStats range_del_out_stats;
     Status s = FinishCompactionOutputFile(status, sub_compact,
-                                          &sub_compact->next_level,
+                                          &sub_compact->later_level_output,
                                           &range_del_agg, &range_del_out_stats);
     if (!s.ok() && status.ok()) {
       status = s;
@@ -2130,7 +2132,7 @@ Status CompactionJob::InstallCompactionResults(
     for (const auto& out : sub_compact.start_level_output.outputs) {
       edit->AddFile(compaction->start_level(), out.meta);
     }
-    for (const auto& out : sub_compact.next_level.outputs) {
+    for (const auto& out : sub_compact.later_level_output.outputs) {
       edit->AddFile(compaction->output_level(), out.meta);
     }
 
@@ -2314,6 +2316,9 @@ Status CompactionJob::OpenCompactionOutputFile(
   level_output->builder.reset(
       NewTableBuilder(tboptions, level_output->outfile.get()));
   LogFlush(db_options_.info_log);
+  if (level_output == &sub_compact->start_level_output) {
+    ROCKS_LOG_INFO(db_options_.info_log, "Compaction output file of start level opened: %s\n", fname.c_str());
+  }
   return s;
 }
 
@@ -2322,7 +2327,7 @@ void CompactionJob::CleanupCompaction() {
     const auto& sub_status = sub_compact.status;
 
     sub_compact.start_level_output.CleanupCompaction(sub_status, table_cache_);
-    sub_compact.next_level.CleanupCompaction(sub_status, table_cache_);
+    sub_compact.later_level_output.CleanupCompaction(sub_status, table_cache_);
     // TODO: sub_compact.io_status is not checked like status. Not sure if thats
     // intentional. So ignoring the io_status as of now.
     sub_compact.io_status.PermitUncheckedError();

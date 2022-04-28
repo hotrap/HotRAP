@@ -146,7 +146,7 @@ class CompactionJob {
     std::vector<BlobFileAddition> blob_file_additions;
     std::unique_ptr<BlobGarbageMeter> blob_garbage_meter;
     LevelOutput start_level_output;
-    LevelOutput next_level;
+    LevelOutput later_level_output;
 
     // Some identified files with old oldest ancester time and the range should be
     // isolated out so that the output file(s) in that range can be merged down
