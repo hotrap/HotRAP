@@ -14,7 +14,6 @@
 #include <functional>
 #include <list>
 #include <memory>
-#include <random>
 #include <set>
 #include <thread>
 #include <utility>
@@ -65,7 +64,6 @@
 #include "util/coding.h"
 #include "util/hash.h"
 #include "util/mutexlock.h"
-#include "util/random.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
 
