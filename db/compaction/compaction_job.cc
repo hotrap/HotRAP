@@ -1495,6 +1495,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       break;
     case CompactionRouter::Decision::kNextLevel:
       level_output = &sub_compact->latter_level_output;
+      c_iter->ZeroOutSequenceIfPossible();
       break;
     }
     assert(level_output != NULL);

@@ -1047,50 +1047,54 @@ void CompactionIterator::PrepareOutput() {
     } else if (ikey_.type == kTypeBlobIndex) {
       GarbageCollectBlobIfNeeded();
     }
+  }
+}
 
-    // Zeroing out the sequence number leads to better compression.
-    // If this is the bottommost level (no files in lower levels)
-    // and the earliest snapshot is larger than this seqno
-    // and the userkey differs from the last userkey in compaction
-    // then we can squash the seqno to zero.
-    //
-    // This is safe for TransactionDB write-conflict checking since transactions
-    // only care about sequence number larger than any active snapshots.
-    //
-    // Can we do the same for levels above bottom level as long as
-    // KeyNotExistsBeyondOutputLevel() return true?
-    if (valid_ && compaction_ != nullptr &&
-        !compaction_->allow_ingest_behind() &&
-        ikeyNotNeededForIncrementalSnapshot() && bottommost_level_ &&
-        DefinitelyInSnapshot(ikey_.sequence, earliest_snapshot_) &&
-        ikey_.type != kTypeMerge) {
-      assert(ikey_.type != kTypeDeletion);
-      assert(ikey_.type != kTypeSingleDeletion ||
-             (timestamp_size_ || full_history_ts_low_));
-      if (ikey_.type == kTypeDeletion ||
-          (ikey_.type == kTypeSingleDeletion &&
-           (!timestamp_size_ || !full_history_ts_low_))) {
-        ROCKS_LOG_FATAL(info_log_,
-                        "Unexpected key type %d for seq-zero optimization",
-                        ikey_.type);
-      }
-      ikey_.sequence = 0;
-      last_key_seq_zeroed_ = true;
-      TEST_SYNC_POINT_CALLBACK("CompactionIterator::PrepareOutput:ZeroingSeq",
-                               &ikey_);
-      if (!timestamp_size_) {
-        current_key_.UpdateInternalKey(0, ikey_.type);
-      } else if (full_history_ts_low_ && cmp_with_history_ts_low_ < 0) {
-        // We can also zero out timestamp for better compression.
-        // For the same user key (excluding timestamp), the timestamp-based
-        // history can be collapsed to save some space if the timestamp is
-        // older than *full_history_ts_low_.
-        const std::string kTsMin(timestamp_size_, static_cast<char>(0));
-        const Slice ts_slice = kTsMin;
-        ikey_.SetTimestamp(ts_slice);
-        current_key_.UpdateInternalKey(0, ikey_.type, &ts_slice);
-      }
-    }
+// Zeroing out the sequence number leads to better compression.
+// If this is the bottommost level (no files in lower levels)
+// and the earliest snapshot is larger than this seqno
+// and the userkey differs from the last userkey in compaction
+// then we can squash the seqno to zero.
+//
+// This is safe for TransactionDB write-conflict checking since transactions
+// only care about sequence number larger than any active snapshots.
+//
+// Can we do the same for levels above bottom level as long as
+// KeyNotExistsBeyondOutputLevel() return true?
+void CompactionIterator::ZeroOutSequenceIfPossible() {
+  assert(valid_);
+  if (compaction_ == nullptr ||
+      compaction_->allow_ingest_behind() ||
+      !ikeyNotNeededForIncrementalSnapshot() || !bottommost_level_ ||
+      !DefinitelyInSnapshot(ikey_.sequence, earliest_snapshot_) ||
+      ikey_.type == kTypeMerge) {
+    return;
+  }
+  assert(ikey_.type != kTypeDeletion);
+  assert(ikey_.type != kTypeSingleDeletion ||
+          (timestamp_size_ || full_history_ts_low_));
+  if (ikey_.type == kTypeDeletion ||
+      (ikey_.type == kTypeSingleDeletion &&
+        (!timestamp_size_ || !full_history_ts_low_))) {
+    ROCKS_LOG_FATAL(info_log_,
+                    "Unexpected key type %d for seq-zero optimization",
+                    ikey_.type);
+  }
+  ikey_.sequence = 0;
+  last_key_seq_zeroed_ = true;
+  TEST_SYNC_POINT_CALLBACK("CompactionIterator::PrepareOutput:ZeroingSeq",
+                            &ikey_);
+  if (!timestamp_size_) {
+    current_key_.UpdateInternalKey(0, ikey_.type);
+  } else if (full_history_ts_low_ && cmp_with_history_ts_low_ < 0) {
+    // We can also zero out timestamp for better compression.
+    // For the same user key (excluding timestamp), the timestamp-based
+    // history can be collapsed to save some space if the timestamp is
+    // older than *full_history_ts_low_.
+    const std::string kTsMin(timestamp_size_, static_cast<char>(0));
+    const Slice ts_slice = kTsMin;
+    ikey_.SetTimestamp(ts_slice);
+    current_key_.UpdateInternalKey(0, ikey_.type, &ts_slice);
   }
 }
 

@@ -232,6 +232,7 @@ class CompactionIterator {
   const Slice& user_key() const { return current_user_key_; }
   const CompactionIterationStats& iter_stats() const { return iter_stats_; }
   uint64_t num_input_entry_scanned() const { return input_.num_itered(); }
+  void ZeroOutSequenceIfPossible();
 
  private:
   // Processes the input stream to find the next output
