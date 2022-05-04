@@ -1458,6 +1458,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
           : sub_compact->compaction->CreateSstPartitioner();
   std::string last_key_for_partitioner;
 
+  std::string previous_user_key;
+  CompactionRouter::Decision output_decision =
+    CompactionRouter::Decision::kUndetermined;
   while (status.ok() && !cfd->IsDropped() && c_iter->Valid()) {
     // Invariant: c_iter.status() is guaranteed to be OK if c_iter->Valid()
     // returns true.
@@ -1474,7 +1477,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       RecordCompactionIOStats();
     }
 
-    CompactionRouter::Decision output_decision;
     if (level == 0 || compaction_router == NULL) {
       output_decision = CompactionRouter::Decision::kNextLevel;
     } else if (
@@ -1486,7 +1488,14 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                 c->next_level_largest()->user_key()) > 0)) {
       output_decision = CompactionRouter::Decision::kCurrentLevel;
     } else {
-      output_decision = compaction_router->Route(level, c_iter->user_key());
+      // Make sure that all versions of the same user key share the same router
+      // decision.
+      if (cfd->user_comparator()->Compare(c_iter->user_key(),
+              Slice(previous_user_key)) != 0) {
+        output_decision = compaction_router->Route(level, c_iter->user_key());
+        // TODO: Avoid the copy like last_key_for_partitioner?
+        previous_user_key = c_iter->user_key().ToString();
+      }
     }
     SubcompactionState::LevelOutput *level_output = NULL;
     switch (output_decision) {
@@ -1496,6 +1505,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     case CompactionRouter::Decision::kNextLevel:
       level_output = &sub_compact->latter_level_output;
       c_iter->ZeroOutSequenceIfPossible();
+      break;
+    case CompactionRouter::Decision::kUndetermined:
+      assert(false);
       break;
     }
     assert(level_output != NULL);

@@ -9,6 +9,7 @@ namespace ROCKSDB_NAMESPACE {
 class CompactionRouter : public Customizable {
 public:
   enum class Decision {
+    kUndetermined,
     kNextLevel,
     kCurrentLevel,
   };
