@@ -130,13 +130,17 @@ class CompactionJob {
     };
     struct LevelOutput {
       uint32_t path_id_;
+      int level_;
       std::vector<Output> outputs;
       std::unique_ptr<WritableFileWriter> outfile;
       std::unique_ptr<TableBuilder> builder;
       uint64_t current_output_file_size = 0;
+      double hot_per_byte_;
 
-      LevelOutput(uint32_t path_id) : path_id_(path_id) {}
+      LevelOutput(uint32_t path_id, int level, double hot_per_byte)
+        : path_id_(path_id), level_(level), hot_per_byte_(hot_per_byte) {}
       uint32_t path_id() const { return path_id_; }
+      int level() const { return level_; }
       const Output* current_output_const() const;
       Output* current_output();
       Status AddToBuilder(const Slice& key, const Slice& value);

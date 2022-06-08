@@ -29,6 +29,7 @@ static TableProperties newTablePropertiesForTest() {
   table_properties.num_deletions = UINT64_MAX;
   table_properties.num_merge_operands = UINT64_MAX;
   table_properties.num_range_deletions = UINT64_MAX;
+  table_properties.estimated_hot_size = UINT64_MAX;
   table_properties.format_version = UINT64_MAX;
   table_properties.fixed_key_len = UINT64_MAX;
   table_properties.column_family_id = UINT64_MAX;

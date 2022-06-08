@@ -31,6 +31,7 @@ namespace {
 uint64_t TotalCompensatedFileSize(const std::vector<FileMetaData*>& files) {
   uint64_t sum = 0;
   for (size_t i = 0; i < files.size() && files[i]; i++) {
+    assert(files[i]->compensated_file_size != UINT64_MAX);
     sum += files[i]->compensated_file_size;
   }
   return sum;
@@ -63,6 +64,7 @@ bool FindIntraL0Compaction(const std::vector<FileMetaData*>& level_files,
     return false;
   }
   size_t compact_bytes = static_cast<size_t>(level_files[start]->fd.file_size);
+  assert(level_files[start]->compensated_file_size != UINT64_MAX);
   uint64_t compensated_compact_bytes =
       level_files[start]->compensated_file_size;
   size_t compact_bytes_per_del_file = port::kMaxSizet;
@@ -73,6 +75,7 @@ bool FindIntraL0Compaction(const std::vector<FileMetaData*>& level_files,
   size_t new_compact_bytes_per_del_file = 0;
   for (limit = start + 1; limit < level_files.size(); ++limit) {
     compact_bytes += static_cast<size_t>(level_files[limit]->fd.file_size);
+    assert(level_files[limit]->compensated_file_size != UINT64_MAX);
     compensated_compact_bytes += level_files[limit]->compensated_file_size;
     new_compact_bytes_per_del_file = compact_bytes / (limit - start);
     if (level_files[limit]->being_compacted ||

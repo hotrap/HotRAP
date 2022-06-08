@@ -203,8 +203,9 @@ CompactionJob::SubcompactionState::SubcompactionState(
     : compaction(c),
       start(_start),
       end(_end),
-      start_level_output(c->start_level_path_id()),
-      latter_level_output(c->latter_level_path_id()),
+      start_level_output(c->start_level_path_id(), c->start_level(), 1),
+      latter_level_output(c->latter_level_path_id(), c->output_level(),
+        c->latter_level_hot_per_byte()),
       approx_size(size),
       sub_job_id(_sub_job_id) {
   assert(compaction != nullptr);
@@ -1964,9 +1965,10 @@ Status CompactionJob::WriteCompactionOutputFile(
 
   uint64_t output_number = meta->fd.GetNumber();
   assert(output_number != 0);
+  int output_level = level_output->level();
 
   if (s.ok()) {
-    s = level_output->builder->Finish();
+    s = level_output->builder->Finish(level_output->hot_per_byte_);
   } else {
     level_output->builder->Abandon();
   }
@@ -2063,9 +2065,9 @@ Status CompactionJob::WriteCompactionOutputFile(
     level_output->current_output()->table_properties =
         std::make_shared<TableProperties>(tp);
     ROCKS_LOG_INFO(db_options_.info_log,
-                   "[%s] [JOB %d] Generated table #%" PRIu64 ": %" PRIu64
+                   "[%s] [JOB %d] Generated table #%" PRIu64 " at L%d: %" PRIu64
                    " keys, %" PRIu64 " bytes%s",
-                   cfd->GetName().c_str(), job_id_, output_number,
+                   cfd->GetName().c_str(), job_id_, output_number, output_level,
                    current_entries, current_bytes,
                    meta->marked_for_compaction ? " (need compaction)" : "");
   }

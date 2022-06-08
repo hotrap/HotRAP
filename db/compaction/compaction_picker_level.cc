@@ -353,6 +353,19 @@ Compaction* LevelCompactionBuilder::PickCompaction() {
 }
 
 Compaction* LevelCompactionBuilder::GetCompaction() {
+  uint64_t estimated_hot_size = 0;
+  uint64_t latter_level_input_size = 0;
+  for (FileMetaData *file : output_level_inputs_.files) {
+    estimated_hot_size += file->estimated_hot_size;
+    latter_level_input_size += file->fd.file_size;
+  }
+  double latter_level_hot_per_byte;
+  if (latter_level_input_size == 0) {
+    latter_level_hot_per_byte = 0;
+  } else {
+    latter_level_hot_per_byte =
+      (double)estimated_hot_size / latter_level_input_size;
+  }
   auto c = new Compaction(
       vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
       std::move(compaction_inputs_), output_level_,
@@ -367,7 +380,8 @@ Compaction* LevelCompactionBuilder::GetCompaction() {
                          output_level_, vstorage_->base_level()),
       GetCompressionOptions(mutable_cf_options_, vstorage_, output_level_),
       Temperature::kUnknown,
-      /* max_subcompactions */ 0, std::move(grandparents_), is_manual_,
+      /* max_subcompactions */ 0, std::move(grandparents_),
+      latter_level_hot_per_byte, is_manual_,
       start_level_score_, false /* deletion_compaction */, compaction_reason_);
 
   // If it's level 0 compaction, make sure we don't execute any other level 0

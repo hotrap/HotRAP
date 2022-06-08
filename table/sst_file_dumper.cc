@@ -219,7 +219,8 @@ Status SstFileDumper::CalculateCompressedTableSize(
   if (!s.ok()) {
     return s;
   }
-  s = table_builder->Finish();
+  // This is a temporary file. Okay to set estimated hot size to 0.
+  s = table_builder->Finish(0);
   if (!s.ok()) {
     return s;
   }

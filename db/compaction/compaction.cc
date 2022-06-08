@@ -214,8 +214,8 @@ Compaction::Compaction(
     uint32_t _start_level_path_id, uint32_t _latter_level_path_id,
     CompressionType _compression, CompressionOptions _compression_opts,
     Temperature _output_temperature, uint32_t _max_subcompactions,
-    std::vector<FileMetaData*> _grandparents, bool _manual_compaction,
-    double _score, bool _deletion_compaction,
+    std::vector<FileMetaData*> _grandparents, double latter_level_hot_per_byte,
+    bool _manual_compaction, double _score, bool _deletion_compaction,
     CompactionReason _compaction_reason)
     : input_vstorage_(vstorage),
       start_level_(_inputs[0].level),
@@ -244,6 +244,7 @@ Compaction::Compaction(
       is_manual_compaction_(_manual_compaction),
       is_trivial_move_(false),
       compaction_reason_(_compaction_reason),
+      latter_level_hot_per_byte_(latter_level_hot_per_byte),
       notify_on_compaction_completion_(false) {
   MarkFilesBeingCompacted(true);
   if (is_manual_compaction_) {

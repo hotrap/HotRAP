@@ -59,6 +59,8 @@ std::string TableProperties::ToString(
                  kv_delim);
   AppendProperty(result, "# range deletions", num_range_deletions, prop_delim,
                  kv_delim);
+  AppendProperty(result, "# hot entries", estimated_hot_size, prop_delim,
+                 kv_delim);
 
   AppendProperty(result, "raw key size", raw_key_size, prop_delim, kv_delim);
   AppendProperty(result, "raw average key size",
@@ -184,6 +186,7 @@ void TableProperties::Add(const TableProperties& tp) {
   num_deletions += tp.num_deletions;
   num_merge_operands += tp.num_merge_operands;
   num_range_deletions += tp.num_range_deletions;
+  estimated_hot_size += tp.estimated_hot_size;
   slow_compression_estimated_data_size +=
       tp.slow_compression_estimated_data_size;
   fast_compression_estimated_data_size +=
@@ -206,6 +209,7 @@ TableProperties::GetAggregatablePropertiesAsMap() const {
   rv["num_deletions"] = num_deletions;
   rv["num_merge_operands"] = num_merge_operands;
   rv["num_range_deletions"] = num_range_deletions;
+  rv["estimated_hot_size"] = estimated_hot_size;
   rv["slow_compression_estimated_data_size"] =
       slow_compression_estimated_data_size;
   rv["fast_compression_estimated_data_size"] =
@@ -249,6 +253,8 @@ const std::string TablePropertiesNames::kMergeOperands =
     "rocksdb.merge.operands";
 const std::string TablePropertiesNames::kNumRangeDeletions =
     "rocksdb.num.range-deletions";
+const std::string TablePropertiesNames::kEstimatedHotSize =
+    "rocksdb.num.estimated-hot-size";
 const std::string TablePropertiesNames::kFilterPolicy =
     "rocksdb.filter.policy";
 const std::string TablePropertiesNames::kFormatVersion =

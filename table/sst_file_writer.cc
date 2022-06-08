@@ -353,7 +353,8 @@ Status SstFileWriter::Finish(ExternalSstFileInfo* file_info) {
     return Status::InvalidArgument("Cannot create sst file with no entries");
   }
 
-  Status s = r->builder->Finish();
+  // TODO: Seems to be called manually? Is this correct?
+  Status s = r->builder->Finish(0);
   r->file_info.file_size = r->builder->FileSize();
 
   if (s.ok()) {

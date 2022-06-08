@@ -250,7 +250,10 @@ Status CuckooTableBuilder::MakeHashTable(std::vector<CuckooBucket>* buckets) {
   return Status::OK();
 }
 
-Status CuckooTableBuilder::Finish() {
+Status CuckooTableBuilder::Finish(double hot_per_byte) {
+  // TODO
+  (void)hot_per_byte;
+  return Status::NotSupported();
   assert(!closed_);
   closed_ = true;
   std::vector<CuckooBucket> buckets;

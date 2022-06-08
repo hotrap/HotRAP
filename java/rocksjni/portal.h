@@ -6290,6 +6290,7 @@ class TablePropertiesJni : public JavaClass {
         static_cast<jlong>(table_properties.num_deletions),
         static_cast<jlong>(table_properties.num_merge_operands),
         static_cast<jlong>(table_properties.num_range_deletions),
+        static_cast<jlong>(table_properties.estimated_hot_size),
         static_cast<jlong>(table_properties.format_version),
         static_cast<jlong>(table_properties.fixed_key_len),
         static_cast<jlong>(table_properties.column_family_id),

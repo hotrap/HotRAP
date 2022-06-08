@@ -126,6 +126,7 @@ void EventHelpers::LogAndNotifyTableFileCreationFinished(
               << "num_deletions" << table_properties.num_deletions
               << "num_merge_operands" << table_properties.num_merge_operands
               << "num_range_deletions" << table_properties.num_range_deletions
+              << "estimated_hot_size" << table_properties.estimated_hot_size
               << "format_version" << table_properties.format_version
               << "fixed_key_len" << table_properties.fixed_key_len
               << "filter_policy" << table_properties.filter_policy_name

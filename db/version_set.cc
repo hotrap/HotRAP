@@ -2420,7 +2420,7 @@ void Version::PrepareApply(
 
 bool Version::MaybeInitializeFileMetaData(FileMetaData* file_meta) {
   if (file_meta->init_stats_from_file ||
-      file_meta->compensated_file_size > 0) {
+      file_meta->compensated_file_size != UINT64_MAX) {
     return false;
   }
   std::shared_ptr<const TableProperties> tp;
@@ -2436,6 +2436,7 @@ bool Version::MaybeInitializeFileMetaData(FileMetaData* file_meta) {
   if (tp.get() == nullptr) return false;
   file_meta->num_entries = tp->num_entries;
   file_meta->num_deletions = tp->num_deletions;
+  file_meta->estimated_hot_size = tp->estimated_hot_size;
   file_meta->raw_value_size = tp->raw_value_size;
   file_meta->raw_key_size = tp->raw_key_size;
 
@@ -2532,11 +2533,16 @@ void VersionStorageInfo::ComputeCompensatedSizes() {
   for (int level = 0; level < num_levels_; level++) {
     for (auto* file_meta : files_[level]) {
       // Here we only compute compensated_file_size for those file_meta
-      // which compensated_file_size is uninitialized (== 0). This is true only
+      // which compensated_file_size is uninitialized (== UINT64_MAX). This is true only
       // for files that have been created right now and no other thread has
       // access to them. That's why we can safely mutate compensated_file_size.
-      if (file_meta->compensated_file_size == 0) {
+      if (file_meta->compensated_file_size == UINT64_MAX) {
         file_meta->compensated_file_size = file_meta->fd.GetFileSize();
+        if (file_meta->compensated_file_size >= file_meta->estimated_hot_size) {
+          file_meta->compensated_file_size -= file_meta->estimated_hot_size;
+        } else {
+          file_meta->compensated_file_size = 0;
+        }
         // Here we only boost the size of deletion entries of a file only
         // when the number of deletion entries is greater than the number of
         // non-deletion entries in the file.  The motivation here is that in
@@ -2700,6 +2706,7 @@ void VersionStorageInfo::ComputeCompactionScore(
       uint64_t total_size = 0;
       for (auto* f : files_[level]) {
         if (!f->being_compacted) {
+          assert(f->compensated_file_size != UINT64_MAX);
           total_size += f->compensated_file_size;
           num_sorted_runs++;
         }
@@ -2769,6 +2776,7 @@ void VersionStorageInfo::ComputeCompactionScore(
       uint64_t level_bytes_no_compacting = 0;
       for (auto f : files_[level]) {
         if (!f->being_compacted) {
+          assert(f->compensated_file_size != UINT64_MAX);
           level_bytes_no_compacting += f->compensated_file_size;
         }
       }
@@ -3031,6 +3039,8 @@ struct Fsize {
 // Comparator that is used to sort files based on their size
 // In normal mode: descending size
 bool CompareCompensatedSizeDescending(const Fsize& first, const Fsize& second) {
+  assert(first.file->compensated_file_size != UINT64_MAX);
+  assert(second.file->compensated_file_size != UINT64_MAX);
   return (first.file->compensated_file_size >
       second.file->compensated_file_size);
 }
@@ -3159,7 +3169,7 @@ void SortFileByOverlappingRatio(
 
     uint64_t ttl_boost_score = (ttl > 0) ? ttl_booster.GetBoostScore(file) : 1;
     assert(ttl_boost_score > 0);
-    assert(file->compensated_file_size != 0);
+    assert(file->compensated_file_size != UINT64_MAX);
     file_to_order[file->fd.GetNumber()] = overlapping_bytes * 1024U /
                                           file->compensated_file_size /
                                           ttl_boost_score;

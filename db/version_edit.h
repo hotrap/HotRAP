@@ -172,14 +172,15 @@ struct FileMetaData {
 
   // Stats for compensating deletion entries during compaction
 
-  // File size compensated by deletion entry.
+  // File size compensated by deletion entry and estimated hot entries.
   // This is updated in Version::UpdateAccumulatedStats() first time when the
-  // file is created or loaded.  After it is updated (!= 0), it is immutable.
-  uint64_t compensated_file_size = 0;
+  // file is created or loaded.  After it is updated (!= UINT64_MAX), it is immutable.
+  uint64_t compensated_file_size = UINT64_MAX;
   // These values can mutate, but they can only be read or written from
   // single-threaded LogAndApply thread
   uint64_t num_entries = 0;     // the number of entries.
   uint64_t num_deletions = 0;   // the number of deletion entries.
+  uint64_t estimated_hot_size = 0; // the estimated size of hot entries.
   uint64_t raw_key_size = 0;    // total uncompressed key size.
   uint64_t raw_value_size = 0;  // total uncompressed value size.
 

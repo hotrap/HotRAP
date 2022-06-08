@@ -53,6 +53,7 @@ struct TablePropertiesNames {
   static const std::string kDeletedKeys;
   static const std::string kMergeOperands;
   static const std::string kNumRangeDeletions;
+  static const std::string kEstimatedHotSize;
   static const std::string kFormatVersion;
   static const std::string kFixedKeyLen;
   static const std::string kFilterPolicy;
@@ -208,6 +209,8 @@ struct TableProperties {
   uint64_t num_merge_operands = 0;
   // the number of range deletions in this table
   uint64_t num_range_deletions = 0;
+  // the estimated size of hot entries
+  uint64_t estimated_hot_size = 0;
   // format version, reserved for backward compatibility
   uint64_t format_version = 0;
   // If 0, key is variable length. Otherwise number of bytes for each key.

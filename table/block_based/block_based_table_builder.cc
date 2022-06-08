@@ -1967,11 +1967,13 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
   }
 }
 
-Status BlockBasedTableBuilder::Finish() {
+Status BlockBasedTableBuilder::Finish(double hot_per_byte) {
   Rep* r = rep_;
   assert(r->state != Rep::State::kClosed);
   bool empty_data_block = r->data_block.empty();
   r->first_key_in_next_block = nullptr;
+  // Invoke FileSize() early to deliberately underestimate the hot size.
+  r->props.estimated_hot_size = FileSize() * hot_per_byte;
   Flush();
   if (r->state == Rep::State::kBuffered) {
     EnterUnbuffered();

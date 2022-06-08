@@ -203,7 +203,10 @@ void PlainTableBuilder::Add(const Slice& key, const Slice& value) {
   status_ = io_status_;
 }
 
-Status PlainTableBuilder::Finish() {
+Status PlainTableBuilder::Finish(double hot_per_byte) {
+  // TODO
+  (void)hot_per_byte;
+  return Status::NotSupported();
   assert(!closed_);
   closed_ = true;
 

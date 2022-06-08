@@ -248,7 +248,8 @@ Status BuildTable(
     if (!s.ok() || empty) {
       builder->Abandon();
     } else {
-      s = builder->Finish();
+      // Not called during compaction. Okay to set estimated hot size to 0.
+      s = builder->Finish(0);
     }
     if (io_status->ok()) {
       *io_status = builder->io_status();

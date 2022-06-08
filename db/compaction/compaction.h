@@ -81,6 +81,7 @@ class Compaction {
              CompressionOptions compression_opts,
              Temperature output_temperature, uint32_t max_subcompactions,
              std::vector<FileMetaData*> grandparents,
+             double latter_level_hot_per_byte,
              bool manual_compaction = false, double score = -1,
              bool deletion_compaction = false,
              CompactionReason compaction_reason = CompactionReason::kUnknown);
@@ -302,6 +303,8 @@ class Compaction {
 
   CompactionReason compaction_reason() { return compaction_reason_; }
 
+  double latter_level_hot_per_byte() { return latter_level_hot_per_byte_; }
+
   const std::vector<FileMetaData*>& grandparents() const {
     return grandparents_;
   }
@@ -413,6 +416,8 @@ class Compaction {
 
   // Reason for compaction
   CompactionReason compaction_reason_;
+
+  double latter_level_hot_per_byte_;
 
   // Notify on compaction completion only if listener was notified on compaction
   // begin.
