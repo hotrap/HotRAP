@@ -1294,6 +1294,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
   const Compaction* c = sub_compact->compaction;
   ColumnFamilyData* cfd = c->column_family_data();
+  const Comparator *ucmp = cfd->user_comparator();
 
   // Create compaction filter and fail the compaction if
   // IgnoreSnapshots() = false because it is not supported anymore
@@ -1331,7 +1332,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
   // Note: if we're going to support subcompactions for user-defined timestamps,
   // the timestamp part will have to be stripped from the bounds here.
-  assert((!start && !end) || cfd->user_comparator()->timestamp_size() == 0);
+  assert((!start && !end) || ucmp->timestamp_size() == 0);
   read_options.iterate_lower_bound = start;
   read_options.iterate_upper_bound = end;
 
@@ -1399,7 +1400,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
 
   MergeHelper merge(
-      env_, cfd->user_comparator(), cfd->ioptions()->merge_operator.get(),
+      env_, ucmp, cfd->ioptions()->merge_operator.get(),
       compaction_filter, db_options_.info_log.get(),
       false /* internal key corruption is expected */,
       existing_snapshots_.empty() ? 0 : existing_snapshots_.back(),
@@ -1432,7 +1433,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   const std::string* const full_history_ts_low =
       full_history_ts_low_.empty() ? nullptr : &full_history_ts_low_;
   sub_compact->c_iter.reset(new CompactionIterator(
-      input, cfd->user_comparator(), &merge, versions_->LastSequence(),
+      input, ucmp, &merge, versions_->LastSequence(),
       &existing_snapshots_, earliest_write_conflict_snapshot_,
       snapshot_checker_, env_, ShouldReportDetailedTime(env_, stats_),
       /*expect_valid_internal_key=*/true, &range_del_agg,
@@ -1459,6 +1460,14 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
           : sub_compact->compaction->CreateSstPartitioner();
   std::string last_key_for_partitioner;
 
+  // TODO: How to handle other cases?
+  assert(c->num_input_levels() <= 2);
+  const CompactionInputFiles& start_level_inputs = (*c->inputs())[0];
+  assert(start_level_inputs.level == c->start_level());
+  Slice start_level_smallest_user_key, start_level_largest_user_key;
+  start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
+    &start_level_largest_user_key);
+
   std::string previous_user_key;
   CompactionRouter::Decision output_decision =
     CompactionRouter::Decision::kUndetermined;
@@ -1468,8 +1477,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     const Slice& key = c_iter->key();
     const Slice& value = c_iter->value();
 
-    assert(!end ||
-           cfd->user_comparator()->Compare(c_iter->user_key(), *end) < 0);
+    assert(!end || ucmp->Compare(c_iter->user_key(), *end) < 0);
 
     if (c_iter_stats.num_input_records % kRecordStatsEvery ==
         kRecordStatsEvery - 1) {
@@ -1478,16 +1486,10 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       RecordCompactionIOStats();
     }
 
-    if (level == 0 || compaction_router == NULL) {
+    if (level == 0 || compaction_router == NULL ||
+        ucmp->Compare(c_iter->user_key(), start_level_smallest_user_key) < 0 ||
+        ucmp->Compare(start_level_largest_user_key, c_iter->user_key()) < 0) {
       output_decision = CompactionRouter::Decision::kNextLevel;
-    } else if (
-        (c->next_level_smallest()->size() &&
-            cfd->user_comparator()->Compare(c_iter->user_key(),
-                c->next_level_smallest()->user_key()) < 0) ||
-        (c->next_level_largest()->size() &&
-            cfd->user_comparator()->Compare(c_iter->user_key(),
-                c->next_level_largest()->user_key()) > 0)) {
-      output_decision = CompactionRouter::Decision::kCurrentLevel;
     } else {
       // Make sure that all versions of the same user key share the same router
       // decision.

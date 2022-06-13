@@ -488,41 +488,6 @@ bool CompactionPicker::SetupOtherInputs(
   return true;
 }
 
-// The keys in the next level might be promoted into the start level.
-// So we have to add the files in the start level that overlap with the range
-// of the next level. It is possible that some keys in the inputs of the start
-// level does not in the range of the next level. Those keys should be kept in
-// the start level in compaction.
-bool CompactionPicker::ExpandStartLevelInputsWithRouter(
-    const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
-    VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
-    CompactionInputFiles* output_level_inputs, InternalKey *next_level_smallest,
-    InternalKey *next_level_largest, int base_index) {
-  if (output_level_inputs->empty()) {
-    return true;
-  }
-  const int input_level = inputs->level;
-  const uint64_t limit = mutable_cf_options.max_compaction_bytes;
-  const uint64_t output_level_inputs_size =
-      TotalCompensatedFileSize(output_level_inputs->files);
-
-  // Get closed interval of output level
-  GetRange(*inputs, *output_level_inputs, next_level_smallest,
-    next_level_largest);
-  vstorage->GetOverlappingInputs(input_level, next_level_smallest,
-                                 next_level_largest, &inputs->files, base_index,
-                                 nullptr);
-  uint64_t inputs_size = TotalCompensatedFileSize(inputs->files);
-  if (!ExpandInputsToCleanCut(cf_name, vstorage, inputs)) {
-    return false;
-  }
-  if (output_level_inputs_size + inputs_size >= limit ||
-      AreFilesInCompaction(inputs->files)) {
-    return false;
-  }
-  return true;
-}
-
 // See if we can further grow the number of inputs in "level" without
 // changing the number of "level+1" files we pick up. We also choose NOT
 // to expand if this would cause "level" to include some entries for some

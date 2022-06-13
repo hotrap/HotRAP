@@ -189,13 +189,6 @@ class CompactionPicker {
                         CompactionInputFiles* output_level_inputs,
                         int* parent_index);
 
-  bool ExpandStartLevelInputsWithRouter(
-      const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
-      VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
-      CompactionInputFiles* output_level_inputs,
-      InternalKey *next_level_smallest, InternalKey *next_level_largest,
-      int base_index);
-
   bool ExpandStartLevelInputs(
       const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
       VersionStorageInfo* vstorage, CompactionInputFiles* inputs,

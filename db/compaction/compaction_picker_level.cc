@@ -120,8 +120,6 @@ class LevelCompactionBuilder {
   CompactionInputFiles start_level_inputs_;
   std::vector<CompactionInputFiles> compaction_inputs_;
   CompactionInputFiles output_level_inputs_;
-  InternalKey next_level_smallest_;
-  InternalKey next_level_largest_;
   std::vector<FileMetaData*> grandparents_;
   CompactionReason compaction_reason_ = CompactionReason::kUnknown;
 
@@ -281,21 +279,10 @@ bool LevelCompactionBuilder::SetupOtherInputsIfNeeded() {
             &parent_index_)) {
       return false;
     }
-    if (mutable_cf_options_.compaction_router &&
-        // Does not route level 0
-        start_level_inputs_.level != 0) {
-      if (!compaction_picker_->ExpandStartLevelInputsWithRouter(
-              cf_name_, mutable_cf_options_, vstorage_, &start_level_inputs_,
-              &output_level_inputs_, &next_level_smallest_,
-              &next_level_largest_, base_index_)) {
-        return false;
-      }
-    } else {
-      if (!compaction_picker_->ExpandStartLevelInputs(
-              cf_name_, mutable_cf_options_, vstorage_, &start_level_inputs_,
-              &output_level_inputs_, &parent_index_, base_index_)) {
-        return false;
-      }
+    if (!compaction_picker_->ExpandStartLevelInputs(
+            cf_name_, mutable_cf_options_, vstorage_, &start_level_inputs_,
+            &output_level_inputs_, &parent_index_, base_index_)) {
+      return false;
     }
 
     compaction_inputs_.push_back(start_level_inputs_);
@@ -369,7 +356,6 @@ Compaction* LevelCompactionBuilder::GetCompaction() {
   auto c = new Compaction(
       vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
       std::move(compaction_inputs_), output_level_,
-      next_level_smallest_, next_level_largest_,
       MaxFileSizeForLevel(mutable_cf_options_, output_level_,
                           ioptions_.compaction_style, vstorage_->base_level(),
                           ioptions_.level_compaction_dynamic_level_bytes),

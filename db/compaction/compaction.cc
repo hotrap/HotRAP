@@ -65,6 +65,31 @@ uint64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
   return sum;
 }
 
+void CompactionInputFiles::GetBoundaryKeys(const Comparator* ucmp,
+    Slice* smallest_user_key, Slice* largest_user_key) const {
+  assert(!files.empty());
+  if (level == 0) {
+    // we need to consider all files on level 0
+    const FileMetaData *f = files[0];
+    *smallest_user_key = f->smallest.user_key();
+    *largest_user_key = f->largest.user_key();
+    for (size_t i = 1; i < files.size(); ++i) {
+      f = files[i];
+      const Slice& start_user_key = f->smallest.user_key();
+      if (ucmp->Compare(start_user_key, *smallest_user_key) < 0) {
+        *smallest_user_key = start_user_key;
+      }
+      const Slice& end_user_key = f->largest.user_key();
+      if (ucmp->Compare(end_user_key, *largest_user_key) > 0) {
+        *largest_user_key = end_user_key;
+      }
+    }
+  } else {
+    *smallest_user_key = files[0]->smallest.user_key();
+    *largest_user_key = files.back()->largest.user_key();
+  }
+}
+
 void Compaction::SetInputVersion(Version* _input_version) {
   input_version_ = _input_version;
   cfd_ = input_version_->cfd();
@@ -209,7 +234,6 @@ Compaction::Compaction(
     const MutableCFOptions& _mutable_cf_options,
     const MutableDBOptions& _mutable_db_options,
     std::vector<CompactionInputFiles> _inputs, int _output_level,
-    InternalKey _next_level_smallest, InternalKey _next_level_largest,
     uint64_t _target_file_size, uint64_t _max_compaction_bytes,
     uint32_t _start_level_path_id, uint32_t _latter_level_path_id,
     CompressionType _compression, CompressionOptions _compression_opts,
@@ -220,8 +244,6 @@ Compaction::Compaction(
     : input_vstorage_(vstorage),
       start_level_(_inputs[0].level),
       output_level_(_output_level),
-      next_level_smallest_(_next_level_smallest),
-      next_level_largest_(_next_level_largest),
       max_output_file_size_(_target_file_size),
       max_compaction_bytes_(_max_compaction_bytes),
       max_subcompactions_(_max_subcompactions),
