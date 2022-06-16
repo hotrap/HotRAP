@@ -341,17 +341,17 @@ Compaction* LevelCompactionBuilder::PickCompaction() {
 
 Compaction* LevelCompactionBuilder::GetCompaction() {
   uint64_t estimated_hot_size = 0;
-  uint64_t latter_level_input_size = 0;
+  uint64_t latter_level_kv_size = 0;
   for (FileMetaData *file : output_level_inputs_.files) {
     estimated_hot_size += file->estimated_hot_size;
-    latter_level_input_size += file->fd.file_size;
+    latter_level_kv_size += file->raw_key_size + file->raw_value_size;
   }
   double latter_level_hot_per_byte;
-  if (latter_level_input_size == 0) {
+  if (latter_level_kv_size == 0) {
     latter_level_hot_per_byte = 0;
   } else {
     latter_level_hot_per_byte =
-      (double)estimated_hot_size / latter_level_input_size;
+      (double)estimated_hot_size / latter_level_kv_size;
   }
   auto c = new Compaction(
       vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,

@@ -3135,7 +3135,7 @@ void SortFileByOverlappingRatio(
     const std::vector<FileMetaData*>& next_level_files, SystemClock* clock,
     int level, int num_non_empty_levels, uint64_t ttl,
     std::vector<Fsize>* temp) {
-  std::unordered_map<uint64_t, uint64_t> file_to_order;
+  std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t> > benifit_cost;
   auto next_level_it = next_level_files.begin();
 
   int64_t curr_time;
@@ -3167,19 +3167,49 @@ void SortFileByOverlappingRatio(
       next_level_it++;
     }
 
-    uint64_t ttl_boost_score = (ttl > 0) ? ttl_booster.GetBoostScore(file) : 1;
-    assert(ttl_boost_score > 0);
-    assert(file->compensated_file_size != UINT64_MAX);
-    file_to_order[file->fd.GetNumber()] =
-      (file->fd.file_size + overlapping_bytes) * 1024U /
-        file->compensated_file_size / ttl_boost_score;
+    // assert(file->compensated_file_size != UINT64_MAX);
+    uint64_t benifit =
+      file->raw_key_size + file->raw_value_size - file->estimated_hot_size;
+    if (file->num_deletions != 0) {
+      static const int kDeletionWeightOnCompaction = 2;
+      uint64_t avg_value_size = file->raw_value_size / file->num_entries;
+      benifit +=
+        file->num_deletions * avg_value_size * kDeletionWeightOnCompaction;
+    }
+    if (ttl > 0) {
+      uint64_t ttl_boost_score = ttl_booster.GetBoostScore(file);
+      assert(ttl_boost_score > 0);
+      // For ttl_boost_score != 1, make sure that benifit is not 0.
+      benifit = (benifit + ttl_boost_score - 1) * ttl_boost_score;
+    }
+    if (benifit != 0) {
+      uint64_t cost = file->fd.file_size + overlapping_bytes;
+      benifit_cost[file->fd.GetNumber()] = std::make_pair(benifit, cost);
+    } else {
+      uint64_t oldest_ancester_time = file->TryGetOldestAncesterTime();
+      uint64_t age;
+      if (static_cast<uint64_t>(curr_time) < oldest_ancester_time) {
+        age = 0;
+      } else {
+        age = static_cast<uint64_t>(curr_time) - oldest_ancester_time;
+      }
+      benifit_cost[file->fd.GetNumber()] = std::make_pair(benifit, age);
+    }
   }
 
   std::sort(temp->begin(), temp->end(),
-            [&](const Fsize& f1, const Fsize& f2) -> bool {
-              return file_to_order[f1.file->fd.GetNumber()] <
-                     file_to_order[f2.file->fd.GetNumber()];
-            });
+    [&](const Fsize& f1, const Fsize& f2) -> bool {
+      uint64_t fd1 = f1.file->fd.GetNumber();
+      uint64_t fd2 = f2.file->fd.GetNumber();
+      if (benifit_cost[fd1].first != 0 && benifit_cost[fd1].second != 0) {
+        return benifit_cost[fd1].first * benifit_cost[fd2].second >
+          benifit_cost[fd2].first * benifit_cost[fd1].second;
+      } else if (benifit_cost[fd1].first != benifit_cost[fd2].first) {
+        return benifit_cost[fd1].first > benifit_cost[fd2].first;
+      } else {
+        return benifit_cost[fd1].second > benifit_cost[fd2].second;
+      }
+    });
 }
 }  // namespace
 

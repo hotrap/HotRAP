@@ -1972,6 +1972,8 @@ Status BlockBasedTableBuilder::Finish(double hot_per_byte) {
   assert(r->state != Rep::State::kClosed);
   bool empty_data_block = r->data_block.empty();
   r->first_key_in_next_block = nullptr;
+  r->props.estimated_hot_size =
+    (r->props.raw_key_size + r->props.raw_value_size) * hot_per_byte;
   Flush();
   if (r->state == Rep::State::kBuffered) {
     EnterUnbuffered();
@@ -2006,8 +2008,6 @@ Status BlockBasedTableBuilder::Finish(double hot_per_byte) {
   WriteIndexBlock(&meta_index_builder, &index_block_handle);
   WriteCompressionDictBlock(&meta_index_builder);
   WriteRangeDelBlock(&meta_index_builder);
-  // TODO: Still underestimated
-  r->props.estimated_hot_size = FileSize() * hot_per_byte;
   WritePropertiesBlock(&meta_index_builder);
   if (ok()) {
     // flush the meta index block
