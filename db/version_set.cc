@@ -3201,7 +3201,7 @@ void SortFileByOverlappingRatio(
     [&](const Fsize& f1, const Fsize& f2) -> bool {
       uint64_t fd1 = f1.file->fd.GetNumber();
       uint64_t fd2 = f2.file->fd.GetNumber();
-      if (benifit_cost[fd1].first != 0 && benifit_cost[fd1].second != 0) {
+      if (benifit_cost[fd1].first != 0 && benifit_cost[fd2].first != 0) {
         return benifit_cost[fd1].first * benifit_cost[fd2].second >
           benifit_cost[fd2].first * benifit_cost[fd1].second;
       } else if (benifit_cost[fd1].first != benifit_cost[fd2].first) {
