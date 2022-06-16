@@ -3186,12 +3186,12 @@ void SortFileByOverlappingRatio(
       uint64_t cost = file->fd.file_size + overlapping_bytes;
       benifit_cost[file->fd.GetNumber()] = std::make_pair(benifit, cost);
     } else {
-      uint64_t oldest_ancester_time = file->TryGetOldestAncesterTime();
+      uint64_t creation_time = file->TryGetFileCreationTime();
       uint64_t age;
-      if (static_cast<uint64_t>(curr_time) < oldest_ancester_time) {
+      if (static_cast<uint64_t>(curr_time) < creation_time) {
         age = 0;
       } else {
-        age = static_cast<uint64_t>(curr_time) - oldest_ancester_time;
+        age = static_cast<uint64_t>(curr_time) - creation_time;
       }
       benifit_cost[file->fd.GetNumber()] = std::make_pair(benifit, age);
     }
