@@ -2049,19 +2049,27 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
         db_statistics_ != nullptr) {
       get_context.ReportCounters();
     }
+    unsigned int hit_level;
+    CompactionRouter *router;
     switch (get_context.State()) {
       case GetContext::kNotFound:
         // Keep searching in other files
         break;
       case GetContext::kMerge:
         // TODO: update per-level perfcontext user_key_return_count for kMerge
+        // TODO: How to update VisCnts?
         break;
       case GetContext::kFound:
-        if (fp.GetHitFileLevel() == 0) {
+        hit_level = fp.GetHitFileLevel();
+        router = mutable_cf_options_.compaction_router;
+        if (value) {
+          router->Access(hit_level, user_key, value->size());
+        }
+        if (hit_level == 0) {
           RecordTick(db_statistics_, GET_HIT_L0);
-        } else if (fp.GetHitFileLevel() == 1) {
+        } else if (hit_level == 1) {
           RecordTick(db_statistics_, GET_HIT_L1);
-        } else if (fp.GetHitFileLevel() >= 2) {
+        } else if (hit_level >= 2) {
           RecordTick(db_statistics_, GET_HIT_L2_AND_UP);
         }
 

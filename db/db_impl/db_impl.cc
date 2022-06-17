@@ -1909,10 +1909,6 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
       }
       RecordTick(stats_, BYTES_READ, size);
       PERF_COUNTER_ADD(get_read_bytes, size);
-      auto router = cfd->GetLatestMutableCFOptions()->compaction_router;
-      if (router) {
-        router->Access(key, size);
-      }
     }
     RecordInHistogram(stats_, BYTES_PER_READ, size);
   }
