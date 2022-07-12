@@ -1468,6 +1468,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
     &start_level_largest_user_key);
 
+  void *compaction_router_iter = compaction_router->NewIter(level);
+
   std::string previous_user_key;
   CompactionRouter::Decision output_decision =
     CompactionRouter::Decision::kUndetermined;
@@ -1495,7 +1497,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       // decision.
       if (cfd->user_comparator()->Compare(c_iter->user_key(),
               Slice(previous_user_key)) != 0) {
-        output_decision = compaction_router->Route(level, c_iter->user_key());
+        output_decision = compaction_router->Route(
+          compaction_router_iter, &c_iter->user_key());
         // TODO: Avoid the copy like last_key_for_partitioner?
         previous_user_key = c_iter->user_key().ToString();
       }
@@ -1595,6 +1598,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                         &sub_compact->compaction_job_stats);
     }
   }
+  compaction_router->DelIter(compaction_router_iter);
 
   sub_compact->compaction_job_stats.num_blobs_read =
       c_iter_stats.num_blobs_read;
