@@ -26,7 +26,8 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
       std::unique_ptr<InternalIteratorBase<IndexValue>>&& index_iter,
       bool check_filter, bool need_upper_bound_check,
       const SliceTransform* prefix_extractor, TableReaderCaller caller,
-      size_t compaction_readahead_size = 0, bool allow_unprepared_value = false)
+      size_t compaction_readahead_size = 0, bool allow_unprepared_value = false,
+      ssize_t id = -1)
       : index_iter_(std::move(index_iter)),
         table_(table),
         read_options_(read_options),
@@ -39,7 +40,8 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
         allow_unprepared_value_(allow_unprepared_value),
         block_iter_points_to_real_block_(false),
         check_filter_(check_filter),
-        need_upper_bound_check_(need_upper_bound_check) {}
+        need_upper_bound_check_(need_upper_bound_check),
+        id_(id) {}
 
   ~BlockBasedTableIterator() {}
 
@@ -55,6 +57,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
            (is_at_first_key_from_index_ ||
             (block_iter_points_to_real_block_ && block_iter_.Valid()));
   }
+  ssize_t id() const override { return id_; }
   Slice key() const override {
     assert(Valid());
     if (is_at_first_key_from_index_) {
@@ -233,6 +236,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   bool check_filter_;
   // TODO(Zhongyi): pick a better name
   bool need_upper_bound_check_;
+  ssize_t id_;
 
   // If `target` is null, seek to first.
   void SeekImpl(const Slice* target);

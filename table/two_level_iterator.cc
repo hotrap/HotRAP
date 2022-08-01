@@ -39,6 +39,10 @@ class TwoLevelIndexIterator : public InternalIteratorBase<IndexValue> {
   void Prev() override;
 
   bool Valid() const override { return second_level_iter_.Valid(); }
+  ssize_t id() const override {
+    assert(Valid());
+    return second_level_iter_.id();
+  }
   Slice key() const override {
     assert(Valid());
     return second_level_iter_.key();

@@ -27,6 +27,7 @@ enum class IterBoundCheck : char {
 
 struct IterateResult {
   Slice key;
+  ssize_t id;
   IterBoundCheck bound_check_result = IterBoundCheck::kUnknown;
   // If false, PrepareValue() needs to be called before value().
   bool value_prepared = true;
@@ -84,6 +85,7 @@ class InternalIteratorBase : public Cleanable {
     bool is_valid = Valid();
     if (is_valid) {
       result->key = key();
+      result->id = id();
       // Default may_be_out_of_upper_bound to true to avoid unnecessary virtual
       // call. If an implementation has non-trivial UpperBoundCheckResult(),
       // it should also override NextAndGetResult().
@@ -98,6 +100,8 @@ class InternalIteratorBase : public Cleanable {
   // true iff the iterator was not positioned at the first entry in source.
   // REQUIRES: Valid()
   virtual void Prev() = 0;
+
+  virtual ssize_t id() const = 0;
 
   // Return the key for the current entry.  The underlying storage for
   // the returned slice is valid only until the next modification of

@@ -142,6 +142,10 @@ class EmptyInternalIterator : public InternalIteratorBase<TValue> {
   void SeekToLast() override {}
   void Next() override { assert(false); }
   void Prev() override { assert(false); }
+  ssize_t id() const override {
+    assert(false);
+    return -1;
+  }
   Slice key() const override {
     assert(false);
     return Slice();

@@ -53,6 +53,7 @@ class SequenceIterWrapper : public InternalIterator {
       }
     }
   }
+  ssize_t id() const override { return inner_iter_->id(); }
   Slice key() const override { return inner_iter_->key(); }
   Slice value() const override { return inner_iter_->value(); }
 
@@ -224,6 +225,7 @@ class CompactionIterator {
   void Next();
 
   // Getters
+  ssize_t id() const { return id_; }
   const Slice& key() const { return key_; }
   const Slice& value() const { return value_; }
   const Status& status() const { return status_; }
@@ -358,6 +360,7 @@ class CompactionIterator {
 
   // State
   //
+  ssize_t id_;
   // Points to a copy of the current compaction iterator output (current_key_)
   // if valid_.
   Slice key_;

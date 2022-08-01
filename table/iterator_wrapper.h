@@ -57,6 +57,10 @@ class IteratorWrapperBase {
 
   // Iterator interface methods
   bool Valid() const { return valid_; }
+  ssize_t id() const {
+    assert(Valid());
+    return result_.id;
+  }
   Slice key() const {
     assert(Valid());
     return result_.key;
@@ -168,6 +172,7 @@ class IteratorWrapperBase {
     if (valid_) {
       assert(iter_->status().ok());
       result_.key = iter_->key();
+      result_.id = iter_->id();
       result_.bound_check_result = IterBoundCheck::kUnknown;
       result_.value_prepared = false;
     }

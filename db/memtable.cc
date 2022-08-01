@@ -391,6 +391,7 @@ class MemTableIterator : public InternalIterator {
     bool is_valid = valid_;
     if (is_valid) {
       result->key = key();
+      result->id = id();
       result->bound_check_result = IterBoundCheck::kUnknown;
       result->value_prepared = true;
     }
@@ -402,6 +403,8 @@ class MemTableIterator : public InternalIterator {
     iter_->Prev();
     valid_ = iter_->Valid();
   }
+  // TODO
+  ssize_t id() const override { return -1; }
   Slice key() const override {
     assert(Valid());
     return GetLengthPrefixedSlice(iter_->key());

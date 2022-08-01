@@ -53,7 +53,8 @@ inline uint32_t GetFixed32Element(const char* base, size_t offset) {
 // Iterator to iterate IndexedTable
 class PlainTableIterator : public InternalIterator {
  public:
-  explicit PlainTableIterator(PlainTableReader* table, bool use_prefix_seek);
+  explicit PlainTableIterator(PlainTableReader* table, bool use_prefix_seek,
+      ssize_t id = -1);
   // No copying allowed
   PlainTableIterator(const PlainTableIterator&) = delete;
   void operator=(const Iterator&) = delete;
@@ -74,6 +75,8 @@ class PlainTableIterator : public InternalIterator {
 
   void Prev() override;
 
+  ssize_t id() const override;
+
   Slice key() const override;
 
   Slice value() const override;
@@ -86,6 +89,7 @@ class PlainTableIterator : public InternalIterator {
   bool use_prefix_seek_;
   uint32_t offset_;
   uint32_t next_offset_;
+  ssize_t id_;
   Slice key_;
   Slice value_;
   Status status_;
@@ -201,7 +205,8 @@ InternalIterator* PlainTableReader::NewIterator(
     const ReadOptions& options, const SliceTransform* /* prefix_extractor */,
     Arena* arena, bool /*skip_filters*/, TableReaderCaller /*caller*/,
     size_t /*compaction_readahead_size*/,
-    bool /* allow_unprepared_value */) {
+    bool /* allow_unprepared_value */,
+    ssize_t id) {
   // Not necessarily used here, but make sure this has been initialized
   assert(table_properties_);
 
@@ -209,10 +214,10 @@ InternalIterator* PlainTableReader::NewIterator(
   bool use_prefix_seek = !IsTotalOrderMode() && !options.total_order_seek &&
                          !options.auto_prefix_mode;
   if (arena == nullptr) {
-    return new PlainTableIterator(this, use_prefix_seek);
+    return new PlainTableIterator(this, use_prefix_seek, id);
   } else {
     auto mem = arena->AllocateAligned(sizeof(PlainTableIterator));
-    return new (mem) PlainTableIterator(this, use_prefix_seek);
+    return new (mem) PlainTableIterator(this, use_prefix_seek, id);
   }
 }
 
@@ -632,11 +637,12 @@ uint64_t PlainTableReader::ApproximateSize(const Slice& /*start*/,
 }
 
 PlainTableIterator::PlainTableIterator(PlainTableReader* table,
-                                       bool use_prefix_seek)
+                                       bool use_prefix_seek, ssize_t id)
     : table_(table),
       decoder_(&table_->file_info_, table_->encoding_type_,
                table_->user_key_len_, table_->prefix_extractor_),
-      use_prefix_seek_(use_prefix_seek) {
+      use_prefix_seek_(use_prefix_seek),
+      id_(id) {
   next_offset_ = offset_ = table_->file_info_.data_end_offset;
 }
 
@@ -756,6 +762,10 @@ void PlainTableIterator::Next() {
 
 void PlainTableIterator::Prev() {
   assert(false);
+}
+
+ssize_t PlainTableIterator::id() const {
+  return id_;
 }
 
 Slice PlainTableIterator::key() const {

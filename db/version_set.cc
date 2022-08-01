@@ -863,7 +863,7 @@ class LevelIterator final : public InternalIterator {
                 bool skip_filters, int level, RangeDelAggregator* range_del_agg,
                 const std::vector<AtomicCompactionUnitBoundary>*
                     compaction_boundaries = nullptr,
-                bool allow_unprepared_value = false)
+                bool allow_unprepared_value = false, ssize_t id = -1)
       : table_cache_(table_cache),
         read_options_(read_options),
         file_options_(file_options),
@@ -881,7 +881,8 @@ class LevelIterator final : public InternalIterator {
         range_del_agg_(range_del_agg),
         pinned_iters_mgr_(nullptr),
         compaction_boundaries_(compaction_boundaries),
-        is_next_read_sequential_(false) {
+        is_next_read_sequential_(false),
+        id_(id) {
     // Empty level is not supported.
     assert(flevel_ != nullptr && flevel_->num_files > 0);
   }
@@ -897,6 +898,14 @@ class LevelIterator final : public InternalIterator {
   void Prev() override;
 
   bool Valid() const override { return file_iter_.Valid(); }
+
+  ssize_t id() const override {
+    if (id_ != -1)
+      return id_;
+    assert(Valid());
+    return file_iter_.id();
+  }
+
   Slice key() const override {
     assert(Valid());
     return file_iter_.key();
@@ -1030,6 +1039,7 @@ class LevelIterator final : public InternalIterator {
   const std::vector<AtomicCompactionUnitBoundary>* compaction_boundaries_;
 
   bool is_next_read_sequential_;
+  ssize_t id_;
 };
 
 void LevelIterator::Seek(const Slice& target) {
@@ -1130,6 +1140,10 @@ void LevelIterator::Next() {
 bool LevelIterator::NextAndGetResult(IterateResult* result) {
   assert(Valid());
   bool is_valid = file_iter_.NextAndGetResult(result);
+  if (id_ != -1) {
+    assert(result->id == -1);
+    result->id = id_;
+  }
   if (!is_valid) {
     is_next_read_sequential_ = true;
     SkipEmptyFileForward();
@@ -1137,6 +1151,7 @@ bool LevelIterator::NextAndGetResult(IterateResult* result) {
     is_valid = Valid();
     if (is_valid) {
       result->key = key();
+      result->id = id();
       result->bound_check_result = file_iter_.UpperBoundCheckResult();
       // Ideally, we should return the real file_iter_.value_prepared but the
       // information is not here. It would casue an extra PrepareValue()
@@ -5778,7 +5793,7 @@ InternalIterator* VersionSet::MakeInputIterator(
       if (c->level(which) == 0) {
         const LevelFilesBrief* flevel = c->input_levels(which);
         for (size_t i = 0; i < flevel->num_files; i++) {
-          list[num++] = cfd->table_cache()->NewIterator(
+          list[num] = cfd->table_cache()->NewIterator(
               read_options, file_options_compactions,
               cfd->internal_comparator(), *flevel->files[i].file_metadata,
               range_del_agg, c->mutable_cf_options()->prefix_extractor.get(),
@@ -5790,11 +5805,13 @@ InternalIterator* VersionSet::MakeInputIterator(
               MaxFileSizeForL0MetaPin(*c->mutable_cf_options()),
               /*smallest_compaction_key=*/nullptr,
               /*largest_compaction_key=*/nullptr,
-              /*allow_unprepared_value=*/false);
+              /*allow_unprepared_value=*/false,
+              /*id*/which);
+          num += 1;
         }
       } else {
         // Create concatenating iterator for the files from this level
-        list[num++] = new LevelIterator(
+        list[num] = new LevelIterator(
             cfd->table_cache(), read_options, file_options_compactions,
             cfd->internal_comparator(), c->input_levels(which),
             c->mutable_cf_options()->prefix_extractor.get(),
@@ -5802,7 +5819,10 @@ InternalIterator* VersionSet::MakeInputIterator(
             /*no per level latency histogram=*/nullptr,
             TableReaderCaller::kCompaction, /*skip_filters=*/false,
             /*level=*/static_cast<int>(c->level(which)), range_del_agg,
-            c->boundaries(which));
+            c->boundaries(which),
+            /*allow_unprepared_value=*/false,
+            /*id=*/which);
+        num += 1;
       }
     }
   }

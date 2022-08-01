@@ -212,7 +212,8 @@ InternalIterator* TableCache::NewIterator(
     TableReaderCaller caller, Arena* arena, bool skip_filters, int level,
     size_t max_file_size_for_l0_meta_pin,
     const InternalKey* smallest_compaction_key,
-    const InternalKey* largest_compaction_key, bool allow_unprepared_value) {
+    const InternalKey* largest_compaction_key, bool allow_unprepared_value,
+    ssize_t id) {
   PERF_TIMER_GUARD(new_table_iterator_nanos);
 
   Status s;
@@ -244,7 +245,7 @@ InternalIterator* TableCache::NewIterator(
       result = table_reader->NewIterator(options, prefix_extractor, arena,
                                    skip_filters, caller,
                                    file_options.compaction_readahead_size,
-                                   allow_unprepared_value);
+                                   allow_unprepared_value, id);
     }
     if (handle != nullptr) {
       result->RegisterCleanup(&UnrefEntry, cache_, handle);

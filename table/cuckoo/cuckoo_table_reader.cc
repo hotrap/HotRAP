@@ -204,7 +204,7 @@ void CuckooTableReader::Prepare(const Slice& key) {
 
 class CuckooTableIterator : public InternalIterator {
  public:
-  explicit CuckooTableIterator(CuckooTableReader* reader);
+  explicit CuckooTableIterator(CuckooTableReader* reader, ssize_t id = -1);
   // No copying allowed
   CuckooTableIterator(const CuckooTableIterator&) = delete;
   void operator=(const Iterator&) = delete;
@@ -216,6 +216,7 @@ class CuckooTableIterator : public InternalIterator {
   void SeekForPrev(const Slice& target) override;
   void Next() override;
   void Prev() override;
+  ssize_t id() const override;
   Slice key() const override;
   Slice value() const override;
   Status status() const override { return Status::OK(); }
@@ -259,14 +260,16 @@ class CuckooTableIterator : public InternalIterator {
   uint32_t curr_key_idx_;
   Slice curr_value_;
   IterKey curr_key_;
+  ssize_t id_;
 };
 
-CuckooTableIterator::CuckooTableIterator(CuckooTableReader* reader)
+CuckooTableIterator::CuckooTableIterator(CuckooTableReader* reader, ssize_t id)
   : bucket_comparator_(reader->file_data_, reader->ucomp_,
                        reader->bucket_length_, reader->user_key_length_),
     reader_(reader),
     initialized_(false),
-    curr_key_idx_(kInvalidIndex) {
+    curr_key_idx_(kInvalidIndex),
+    id_(id) {
   sorted_bucket_ids_.clear();
   curr_value_.clear();
   curr_key_.Clear();
@@ -372,6 +375,10 @@ void CuckooTableIterator::Prev() {
   PrepareKVAtCurrIdx();
 }
 
+ssize_t CuckooTableIterator::id() const {
+  return id_;
+}
+
 Slice CuckooTableIterator::key() const {
   assert(Valid());
   return curr_key_.GetInternalKey();
@@ -387,17 +394,18 @@ InternalIterator* CuckooTableReader::NewIterator(
     const SliceTransform* /* prefix_extractor */, Arena* arena,
     bool /*skip_filters*/, TableReaderCaller /*caller*/,
     size_t /*compaction_readahead_size*/,
-    bool /* allow_unprepared_value */) {
+    bool /* allow_unprepared_value */,
+    ssize_t id) {
   if (!status().ok()) {
     return NewErrorInternalIterator<Slice>(
         Status::Corruption("CuckooTableReader status is not okay."), arena);
   }
   CuckooTableIterator* iter;
   if (arena == nullptr) {
-    iter = new CuckooTableIterator(this);
+    iter = new CuckooTableIterator(this, id);
   } else {
     auto iter_mem = arena->AllocateAligned(sizeof(CuckooTableIterator));
-    iter = new (iter_mem) CuckooTableIterator(this);
+    iter = new (iter_mem) CuckooTableIterator(this, id);
   }
   return iter;
 }

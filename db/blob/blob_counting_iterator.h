@@ -73,6 +73,11 @@ class BlobCountingIterator : public InternalIterator {
     UpdateAndCountBlobIfNeeded();
   }
 
+  ssize_t id() const override {
+    assert(Valid());
+    return iter_->id();
+  }
+
   Slice key() const override {
     assert(Valid());
     return iter_->key();

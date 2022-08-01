@@ -73,6 +73,7 @@ class ForwardIterator : public InternalIterator {
   void SeekToFirst() override;
   virtual void Seek(const Slice& target) override;
   virtual void Next() override;
+  virtual ssize_t id() const override;
   virtual Slice key() const override;
   virtual Slice value() const override;
   virtual Status status() const override;

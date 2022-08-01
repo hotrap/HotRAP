@@ -53,7 +53,8 @@ class TableReader {
       const ReadOptions& read_options, const SliceTransform* prefix_extractor,
       Arena* arena, bool skip_filters, TableReaderCaller caller,
       size_t compaction_readahead_size = 0,
-      bool allow_unprepared_value = false) = 0;
+      bool allow_unprepared_value = false,
+      ssize_t id = -1) = 0;
 
   virtual FragmentedRangeTombstoneIterator* NewRangeTombstoneIterator(
       const ReadOptions& /*read_options*/) {

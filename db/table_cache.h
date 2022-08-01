@@ -77,7 +77,8 @@ class TableCache {
       HistogramImpl* file_read_hist, TableReaderCaller caller, Arena* arena,
       bool skip_filters, int level, size_t max_file_size_for_l0_meta_pin,
       const InternalKey* smallest_compaction_key,
-      const InternalKey* largest_compaction_key, bool allow_unprepared_value);
+      const InternalKey* largest_compaction_key, bool allow_unprepared_value,
+      ssize_t id = -1);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call get_context->SaveValue() repeatedly until

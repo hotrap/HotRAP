@@ -57,6 +57,10 @@ class PartitionedIndexIterator : public InternalIteratorBase<IndexValue> {
   bool Valid() const override {
     return block_iter_points_to_real_block_ && block_iter_.Valid();
   }
+  ssize_t id() const override {
+    assert(Valid());
+    return block_iter_.id();
+  }
   Slice key() const override {
     assert(Valid());
     return block_iter_.key();
