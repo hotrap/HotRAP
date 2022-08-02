@@ -1288,13 +1288,13 @@ public:
     iter->ucmp_ = NULL;
     iter->cur_ = NULL;
   }
-  static void Init(HotRecIter *iter, CompactionRouter* c, int level,
+  static void Init(HotRecIter *iter, CompactionRouter* c, size_t tier,
       const Comparator* ucmp) {
     iter->c_ = c;
-    if (c == NULL || !c->MightRetain(level)) {
+    if (c == NULL) {
       iter->iter_ = NULL;
     } else {
-      iter->iter_ = c->NewIter(level);
+      iter->iter_ = c->NewIter(tier);
     }
     iter->ucmp_ = ucmp;
     iter->cur_ = NULL;
@@ -1512,17 +1512,22 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
     &start_level_largest_user_key);
 
-  HotRecIter start_level_iter;
-  HotRecIter latter_level_iter;
-  if (compaction_router->MightRetain(level)) {
-    HotRecIter::Init(&start_level_iter, compaction_router, level, ucmp);
-    HotRecIter::Init(&latter_level_iter, compaction_router, c->output_level(),
-        ucmp);
-    start_level_iter.Seek(&start_level_smallest_user_key);
-    latter_level_iter.Seek(&start_level_smallest_user_key);
+  size_t start_tier, latter_tier;
+  HotRecIter start_tier_iter;
+  HotRecIter latter_tier_iter;
+  if (compaction_router &&
+      (start_tier = compaction_router->Tier(level)) !=
+        (latter_tier = compaction_router->Tier(c->output_level()))) {
+    assert(start_tier < latter_tier);
+    // TODO: Handle other cases.
+    assert(start_tier + 1 == latter_tier);
+    HotRecIter::Init(&start_tier_iter, compaction_router, start_tier, ucmp);
+    HotRecIter::Init(&latter_tier_iter, compaction_router, latter_tier, ucmp);
+    start_tier_iter.Seek(&start_level_smallest_user_key);
+    latter_tier_iter.Seek(&start_level_smallest_user_key);
   } else {
-    HotRecIter::InitEmpty(&start_level_iter);
-    HotRecIter::InitEmpty(&latter_level_iter);
+    HotRecIter::InitEmpty(&start_tier_iter);
+    HotRecIter::InitEmpty(&latter_tier_iter);
   }
 
   std::string previous_user_key;
@@ -1557,7 +1562,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         if (from == 0) {
           // From current level
           const HotRecInfo *info =
-              start_level_iter.JumpToLowerBound(c_iter->user_key());
+              start_tier_iter.JumpToLowerBound(c_iter->user_key());
           if (info && ucmp->Compare(info->slice, c_iter->user_key()) == 0) {
             output_decision = CompactionRouter::Decision::kCurrentLevel;
           } else {
@@ -1566,7 +1571,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         } else {
           // From latter level
           const HotRecInfo *info =
-              latter_level_iter.JumpToLowerBound(c_iter->user_key());
+              latter_tier_iter.JumpToLowerBound(c_iter->user_key());
           if (info && ucmp->Compare(info->slice, c_iter->user_key()) == 0) {
             compaction_router->AddHotness(level, &info->slice, info->vlen,
                 info->count);

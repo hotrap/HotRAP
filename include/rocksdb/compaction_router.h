@@ -25,16 +25,16 @@ public:
                                  const std::string& name,
                                  const CompactionRouter** result);
   const char* Name() const override = 0;
-  virtual void AddHotness(int level, const rocksdb::Slice *key, size_t vlen,
+  virtual size_t Tier(int level) = 0;
+  virtual void AddHotness(size_t tier, const rocksdb::Slice *key, size_t vlen,
 			double weight) = 0;
   virtual void Access(int level, const Slice *key, size_t vlen) = 0;
-	virtual bool MightRetain(int level) = 0;
-  virtual void *NewIter(int level) = 0;
+  virtual void *NewIter(size_t tier) = 0;
   virtual const rocksdb::HotRecInfo *Seek(void *iter, const rocksdb::Slice *key)
       = 0;
   virtual const HotRecInfo *NextHot(void *iter) = 0;
   virtual void DelIter(void *iter) = 0;
-  virtual void DelRange(int level, const rocksdb::Slice *smallest,
+  virtual void DelRange(size_t tier, const rocksdb::Slice *smallest,
 			const rocksdb::Slice *largest) = 0;
 };
 
