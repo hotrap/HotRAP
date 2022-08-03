@@ -123,9 +123,10 @@ class FilePicker {
   FilePicker(const Slice& user_key, const Slice& ikey,
              autovector<LevelFilesBrief>* file_levels, unsigned int num_levels,
              FileIndexer* file_indexer, const Comparator* user_comparator,
-             const InternalKeyComparator* internal_comparator)
+             const InternalKeyComparator* internal_comparator,
+             unsigned int prev_level = static_cast<unsigned int>(-1))
       : num_levels_(num_levels),
-        curr_level_(static_cast<unsigned int>(-1)),
+        curr_level_(prev_level),
         returned_file_level_(static_cast<unsigned int>(-1)),
         hit_file_level_(static_cast<unsigned int>(-1)),
         search_left_bound_(0),
@@ -1981,7 +1982,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
                   MergeContext* merge_context,
                   SequenceNumber* max_covering_tombstone_seq, bool* value_found,
                   bool* key_exists, SequenceNumber* seq, ReadCallback* callback,
-                  bool* is_blob, bool do_merge) {
+                  bool* is_blob, bool do_merge, unsigned int prev_level) {
   Slice ikey = k.internal_key();
   Slice user_key = k.user_key();
 
@@ -2022,7 +2023,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
   FilePicker fp(user_key, ikey, &storage_info_.level_files_brief_,
                 storage_info_.num_non_empty_levels_,
                 &storage_info_.file_indexer_, user_comparator(),
-                internal_comparator());
+                internal_comparator(), prev_level);
   FdWithKeyRange* f = fp.GetNextFile();
 
   while (f != nullptr) {
@@ -2077,7 +2078,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
       case GetContext::kFound:
         hit_level = fp.GetHitFileLevel();
         router = mutable_cf_options_.compaction_router;
-        if (value) {
+        if (value && prev_level == static_cast<unsigned int>(-1)) {
           router->Access(hit_level, &user_key, value->size());
         }
         if (hit_level == 0) {
