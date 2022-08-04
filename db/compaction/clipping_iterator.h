@@ -130,11 +130,6 @@ class ClippingIterator : public InternalIterator {
     UpdateAndEnforceLowerBound();
   }
 
-  ssize_t id() const override {
-    assert(valid_);
-    return iter_->id();
-  }
-
   Slice key() const override {
     assert(valid_);
     return iter_->key();

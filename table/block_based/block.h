@@ -321,8 +321,6 @@ class BlockIter : public InternalIteratorBase<TValue> {
   }
 
   Status status() const override { return status_; }
-  // TODO
-  ssize_t id() const override { return -1; }
   Slice key() const override {
     assert(Valid());
     return key_;

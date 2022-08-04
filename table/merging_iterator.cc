@@ -188,7 +188,6 @@ class MergingIterator : public InternalIterator {
     bool is_valid = Valid();
     if (is_valid) {
       result->key = key();
-      result->id = id();
       result->bound_check_result = UpperBoundCheckResult();
       result->value_prepared = current_->IsValuePrepared();
     }
@@ -226,10 +225,6 @@ class MergingIterator : public InternalIterator {
     current_ = CurrentReverse();
   }
 
-  ssize_t id() const override {
-    assert(Valid());
-    return current_->id();
-  }
   Slice key() const override {
     assert(Valid());
     return current_->key();

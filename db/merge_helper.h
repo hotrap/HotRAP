@@ -195,8 +195,6 @@ class MergeOutputIterator {
   // Advances to the next record in the output.
   void Next();
 
-  // TODO: Handle the merged results better?
-  ssize_t id() { return -1; }
   Slice key() { return Slice(*it_keys_); }
   Slice value() { return Slice(*it_values_); }
   bool Valid() { return it_keys_ != merge_helper_->keys().rend(); }

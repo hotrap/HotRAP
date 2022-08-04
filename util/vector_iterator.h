@@ -71,8 +71,6 @@ class VectorIterator : public InternalIterator {
   virtual void Next() override { current_++; }
   virtual void Prev() override { current_--; }
 
-  // TODO
-  virtual ssize_t id() const override { return -1; }
   virtual Slice key() const override {
     return Slice(keys_[indices_[current_]]);
   }

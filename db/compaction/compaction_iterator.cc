@@ -155,7 +155,6 @@ void CompactionIterator::Next() {
 
     // Check if we returned all records of the merge output.
     if (merge_out_iter_.Valid()) {
-      id_ = merge_out_iter_.id();
       key_ = merge_out_iter_.key();
       value_ = merge_out_iter_.value();
       Status s = ParseInternalKey(key_, &ikey_, allow_data_in_errors_);
@@ -356,7 +355,6 @@ void CompactionIterator::NextFromInput() {
 
   while (!valid_ && input_.Valid() && !IsPausingManualCompaction() &&
          !IsShuttingDown()) {
-    id_ = input_.id();
     key_ = input_.key();
     value_ = input_.value();
     iter_stats_.num_input_records++;
@@ -858,7 +856,6 @@ void CompactionIterator::NextFromInput() {
       } else if (merge_out_iter_.Valid()) {
         // NOTE: key, value, and ikey_ refer to old entries.
         //       These will be correctly set below.
-        id_ = merge_out_iter_.id();
         key_ = merge_out_iter_.key();
         value_ = merge_out_iter_.value();
         pik_status = ParseInternalKey(key_, &ikey_, allow_data_in_errors_);

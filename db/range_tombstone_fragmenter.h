@@ -141,8 +141,6 @@ class FragmentedRangeTombstoneIterator : public InternalIterator {
   void TopPrev();
 
   bool Valid() const override;
-  // TODO
-  ssize_t id() const override { return -1; }
   Slice key() const override {
     MaybePinKey();
     return current_start_key_.Encode();

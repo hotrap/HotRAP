@@ -42,7 +42,6 @@ class BoundsCheckingVectorIterator : public VectorIterator {
     }
 
     result->key = key();
-    result->id = id();
     result->bound_check_result = UpperBoundCheckResult();
     result->value_prepared = true;
 

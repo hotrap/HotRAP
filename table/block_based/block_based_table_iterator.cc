@@ -189,7 +189,6 @@ bool BlockBasedTableIterator::NextAndGetResult(IterateResult* result) {
   bool is_valid = Valid();
   if (is_valid) {
     result->key = key();
-    result->id = id();
     result->bound_check_result = UpperBoundCheckResult();
     result->value_prepared = !is_at_first_key_from_index_;
   }

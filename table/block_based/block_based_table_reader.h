@@ -127,8 +127,7 @@ class BlockBasedTable : public TableReader {
                                 Arena* arena, bool skip_filters,
                                 TableReaderCaller caller,
                                 size_t compaction_readahead_size = 0,
-                                bool allow_unprepared_value = false,
-                                ssize_t id = -1) override;
+                                bool allow_unprepared_value = false) override;
 
   FragmentedRangeTombstoneIterator* NewRangeTombstoneIterator(
       const ReadOptions& read_options) override;

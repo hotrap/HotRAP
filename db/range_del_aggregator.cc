@@ -425,9 +425,6 @@ class TruncatedRangeDelMergingIter : public InternalIterator {
     }
   }
 
-  // TODO
-  ssize_t id() const override { return -1; }
-
   Slice key() const override {
     auto* top = heap_.top();
     cur_start_key_.Set(top->start_key().user_key, top->seq(),

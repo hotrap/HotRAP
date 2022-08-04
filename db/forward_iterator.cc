@@ -160,10 +160,6 @@ class ForwardLevelIterator : public InternalIterator {
       file_iter_->SeekToFirst();
     }
   }
-  ssize_t id() const override {
-    assert(valid_);
-    return file_iter_->id();
-  }
   Slice key() const override {
     assert(valid_);
     return file_iter_->key();
@@ -566,11 +562,6 @@ void ForwardIterator::Next() {
   }
   UpdateCurrent();
   TEST_SYNC_POINT_CALLBACK("ForwardIterator::Next:Return", this);
-}
-
-ssize_t ForwardIterator::id() const {
-  assert(valid_);
-  return current_->id();
 }
 
 Slice ForwardIterator::key() const {
