@@ -1338,15 +1338,14 @@ public:
     int latter_level = c->output_level();
     ColumnFamilyData* cfd = c->column_family_data();
     ucmp_ = cfd->user_comparator();
-    size_t latter_tier;
     if (router &&
         (start_tier_ = router->Tier(start_level)) !=
-          (latter_tier = router->Tier(c->output_level()))) {
-      assert(start_tier_ < latter_tier);
+          (latter_tier_ = router->Tier(c->output_level()))) {
+      assert(start_tier_ < latter_tier_);
       // TODO: Handle other cases.
-      assert(start_tier_ + 1 == latter_tier);
+      assert(start_tier_ + 1 == latter_tier_);
       HotRecIter::Init(&start_tier_iter_, router, start_tier_, ucmp_);
-      HotRecIter::Init(&latter_tier_iter_, router, latter_tier, ucmp_);
+      HotRecIter::Init(&latter_tier_iter_, router, latter_tier_, ucmp_);
       start_tier_iter_.Seek(start_level_smallest_user_key);
       latter_tier_iter_.Seek(start_level_smallest_user_key);
     } else {
@@ -1354,6 +1353,12 @@ public:
       HotRecIter::InitEmpty(&latter_tier_iter_);
     }
     HandleNext();
+  }
+  ~RouterIterator() {
+    if (router_) {
+      router_->DelRange(latter_tier_, start_level_smallest_user_key_,
+          start_level_largest_user_key_);
+    }
   }
   bool Valid() {
     return decision_ != CompactionRouter::Decision::kUndetermined;
@@ -1485,6 +1490,7 @@ private:
   const Slice* start_level_largest_user_key_;
   CompactionIterator* c_iter_;
   size_t start_tier_;
+  size_t latter_tier_;
   HotRecIter start_tier_iter_;
   HotRecIter latter_tier_iter_;
   InternalKey key_from_below_;
@@ -1813,8 +1819,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                         &sub_compact->compaction_job_stats);
     }
   }
-  compaction_router->DelRange(c->output_level(), &start_level_smallest_user_key,
-      &start_level_largest_user_key);
 
   sub_compact->compaction_job_stats.num_blobs_read =
       c_iter_stats.num_blobs_read;
