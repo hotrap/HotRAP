@@ -1368,7 +1368,14 @@ public:
       c_iter_->Next();
       latter_tier_iter_.Next();
       break;
-    case Source::kLevelBelow:
+    case Source::kLevelBelow1:
+      source_ = Source::kLevelBelow2;
+      decision_ = CompactionRouter::Decision::kNextLevel;
+      ikey_.type = ValueType::kTypeSingleDeletion;
+      internal_key_ = InternalKey(ikey_.user_key, ikey_.sequence, ikey_.type);
+      key_ = internal_key_.Encode();
+      return;
+    case Source::kLevelBelow2:
       value_from_below_.Reset();
       latter_tier_iter_.Next();
       break;
@@ -1401,8 +1408,8 @@ private:
         &status_, &merge_context, &max_covering_tombstone_seq, nullptr, nullptr,
         &seq, nullptr, nullptr, true, c_->output_level());
     if (status_.ok()) {
-      key_from_below_ = InternalKey(user_key, seq, ValueType::kTypeValue);
-      key_ = key_from_below_.Encode();
+      internal_key_ = InternalKey(user_key, seq, ValueType::kTypeValue);
+      key_ = internal_key_.Encode();
       value_ = static_cast<Slice *>(&value_from_below_);
     }
   }
@@ -1430,7 +1437,7 @@ private:
     if (latter_hot != NULL) {
       int res = ucmp_->Compare(latter_hot->slice, c_iter_->user_key());
       if (res < 0) {
-        source_ = Source::kLevelBelow;
+        source_ = Source::kLevelBelow1;
         decision_ = CompactionRouter::Decision::kCurrentLevel;
         GetKeyValueFromLevelsBelow();
         if (!status_.ok()) {
@@ -1487,19 +1494,19 @@ private:
   size_t start_tier_;
   HotRecIter start_tier_iter_;
   HotRecIter latter_tier_iter_;
-  InternalKey key_from_below_;
+  InternalKey internal_key_;
   PinnableSlice value_from_below_;
   enum class Source {
     kCompactionIterator,
     kLatterLevel,
-    kLevelBelow,
+    kLevelBelow1,
+    kLevelBelow2,
   };
   Source source_;
   CompactionRouter::Decision decision_;
   Status status_;
   Slice key_;
   ParsedInternalKey ikey_;
-  Slice user_key_;
   const Slice* value_;
 
   std::string previous_user_key_;
