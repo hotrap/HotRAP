@@ -2,7 +2,6 @@
 
 #include "rocksdb/customizable.h"
 #include "rocksdb/rocksdb_namespace.h"
-#include "rocksdb/types.h"
 
 namespace ROCKSDB_NAMESPACE {
 
