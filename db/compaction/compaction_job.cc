@@ -1355,7 +1355,7 @@ public:
     HandleNext();
   }
   ~RouterIterator() {
-    if (router_) {
+    if (router_ && start_tier_ != latter_tier_) {
       router_->DelRange(latter_tier_, start_level_smallest_user_key_,
           start_level_largest_user_key_);
     }
