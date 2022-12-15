@@ -2064,7 +2064,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
         hit_level = fp.GetHitFileLevel();
         router = mutable_cf_options_.compaction_router;
         if (value && prev_level == static_cast<unsigned int>(-1)) {
-          router->Access(hit_level, &user_key, value->size());
+          router->Access(hit_level, user_key, value->size());
         }
         if (hit_level == 0) {
           RecordTick(db_statistics_, GET_HIT_L0);

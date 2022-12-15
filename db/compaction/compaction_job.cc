@@ -1302,7 +1302,7 @@ public:
   void Seek(const Slice* key) {
     if (iter_ == NULL)
       return;
-    cur_ = c_->Seek(iter_, key);
+    cur_ = c_->Seek(iter_, *key);
   }
   void Next() {
     cur_ = c_->NextHot(iter_);
@@ -1356,8 +1356,8 @@ public:
   }
   ~RouterIterator() {
     if (router_ && start_tier_ != latter_tier_) {
-      router_->DelRange(latter_tier_, start_level_smallest_user_key_,
-          start_level_largest_user_key_);
+      router_->DelRange(latter_tier_, *start_level_smallest_user_key_,
+          *start_level_largest_user_key_);
     }
   }
   bool Valid() {
@@ -1451,7 +1451,7 @@ private:
         return;
       }
       if (res == 0) {
-        router_->AddHotness(start_tier_, &latter_hot->slice, latter_hot->vlen,
+        router_->AddHotness(start_tier_, latter_hot->slice, latter_hot->vlen,
             latter_hot->count);
         source_ = Source::kLatterLevel;
         decision_ = CompactionRouter::Decision::kCurrentLevel;
