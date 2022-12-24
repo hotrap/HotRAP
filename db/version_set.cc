@@ -3144,7 +3144,7 @@ void SortFileByOverlappingRatio(
     const std::vector<FileMetaData*>& next_level_files, SystemClock* clock,
     int level, int num_non_empty_levels, uint64_t ttl,
     std::vector<Fsize>* temp) {
-  std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t> > benifit_cost;
+  std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t> > benefit_cost;
   auto next_level_it = next_level_files.begin();
 
   int64_t curr_time;
@@ -3177,23 +3177,23 @@ void SortFileByOverlappingRatio(
     }
 
     // assert(file->compensated_file_size != UINT64_MAX);
-    uint64_t benifit =
+    uint64_t benefit =
       file->raw_key_size + file->raw_value_size - file->estimated_hot_size;
     if (file->num_deletions != 0) {
       static const int kDeletionWeightOnCompaction = 2;
       uint64_t avg_value_size = file->raw_value_size / file->num_entries;
-      benifit +=
+      benefit +=
         file->num_deletions * avg_value_size * kDeletionWeightOnCompaction;
     }
     if (ttl > 0) {
       uint64_t ttl_boost_score = ttl_booster.GetBoostScore(file);
       assert(ttl_boost_score > 0);
       // For ttl_boost_score != 1, make sure that benifit is not 0.
-      benifit = (benifit + ttl_boost_score - 1) * ttl_boost_score;
+      benefit = (benefit + ttl_boost_score - 1) * ttl_boost_score;
     }
-    if (benifit != 0) {
+    if (benefit != 0) {
       uint64_t cost = file->fd.file_size + overlapping_bytes;
-      benifit_cost[file->fd.GetNumber()] = std::make_pair(benifit, cost);
+      benefit_cost[file->fd.GetNumber()] = std::make_pair(benefit, cost);
     } else {
       uint64_t creation_time = file->TryGetFileCreationTime();
       uint64_t age;
@@ -3202,7 +3202,7 @@ void SortFileByOverlappingRatio(
       } else {
         age = static_cast<uint64_t>(curr_time) - creation_time;
       }
-      benifit_cost[file->fd.GetNumber()] = std::make_pair(benifit, age);
+      benefit_cost[file->fd.GetNumber()] = std::make_pair(benefit, age);
     }
   }
 
@@ -3210,13 +3210,13 @@ void SortFileByOverlappingRatio(
     [&](const Fsize& f1, const Fsize& f2) -> bool {
       uint64_t fd1 = f1.file->fd.GetNumber();
       uint64_t fd2 = f2.file->fd.GetNumber();
-      if (benifit_cost[fd1].first != 0 && benifit_cost[fd2].first != 0) {
-        return benifit_cost[fd1].first * benifit_cost[fd2].second >
-          benifit_cost[fd2].first * benifit_cost[fd1].second;
-      } else if (benifit_cost[fd1].first != benifit_cost[fd2].first) {
-        return benifit_cost[fd1].first > benifit_cost[fd2].first;
+      if (benefit_cost[fd1].first != 0 && benefit_cost[fd2].first != 0) {
+        return benefit_cost[fd1].first * benefit_cost[fd2].second >
+          benefit_cost[fd2].first * benefit_cost[fd1].second;
+      } else if (benefit_cost[fd1].first != benefit_cost[fd2].first) {
+        return benefit_cost[fd1].first > benefit_cost[fd2].first;
       } else {
-        return benifit_cost[fd1].second > benifit_cost[fd2].second;
+        return benefit_cost[fd1].second > benefit_cost[fd2].second;
       }
     });
 }
