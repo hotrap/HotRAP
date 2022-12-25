@@ -3220,6 +3220,96 @@ void SortFileByOverlappingRatio(
       }
     });
 }
+
+void PickSSTAccurateHotSize(CompactionRouter* router,
+    const InternalKeyComparator& icmp, const std::vector<FileMetaData*>& files,
+    const std::vector<FileMetaData*>& next_level_files, SystemClock* clock,
+    int level, int num_non_empty_levels, uint64_t ttl,
+    std::vector<Fsize>* temp) {
+  std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t> > benefit_cost;
+  auto next_level_it = next_level_files.begin();
+
+  int64_t curr_time;
+  Status status = clock->GetCurrentTime(&curr_time);
+  if (!status.ok()) {
+    // If we can't get time, disable TTL.
+    ttl = 0;
+  }
+
+  FileTtlBooster ttl_booster(static_cast<uint64_t>(curr_time), ttl,
+                             num_non_empty_levels, level);
+
+  for (auto& file : files) {
+    uint64_t overlapping_bytes = 0;
+    // Skip files in next level that is smaller than current file
+    while (next_level_it != next_level_files.end() &&
+           icmp.Compare((*next_level_it)->largest, file->smallest) < 0) {
+      next_level_it++;
+    }
+
+    while (next_level_it != next_level_files.end() &&
+           icmp.Compare((*next_level_it)->smallest, file->largest) < 0) {
+      overlapping_bytes += (*next_level_it)->fd.file_size;
+
+      if (icmp.Compare((*next_level_it)->largest, file->largest) > 0) {
+        // next level file cross large boundary of current file.
+        break;
+      }
+      next_level_it++;
+    }
+
+    // assert(file->compensated_file_size != UINT64_MAX);
+    uint64_t benefit = file->raw_key_size + file->raw_value_size;
+    if (router->Tier(level) != router->Tier(level + 1)) {
+      size_t hot_size = router->RangeHotSize(router->Tier(level),
+        file->smallest.user_key(), file->largest.user_key());
+      if (benefit < hot_size) {
+        benefit = 0;
+      } else {
+        benefit -= hot_size;
+      }
+    }
+    if (file->num_deletions != 0) {
+      static const int kDeletionWeightOnCompaction = 2;
+      uint64_t avg_value_size = file->raw_value_size / file->num_entries;
+      benefit +=
+        file->num_deletions * avg_value_size * kDeletionWeightOnCompaction;
+    }
+    if (ttl > 0) {
+      uint64_t ttl_boost_score = ttl_booster.GetBoostScore(file);
+      assert(ttl_boost_score > 0);
+      // For ttl_boost_score != 1, make sure that benifit is not 0.
+      benefit = (benefit + ttl_boost_score - 1) * ttl_boost_score;
+    }
+    if (benefit != 0) {
+      uint64_t cost = file->fd.file_size + overlapping_bytes;
+      benefit_cost[file->fd.GetNumber()] = std::make_pair(benefit, cost);
+    } else {
+      uint64_t creation_time = file->TryGetFileCreationTime();
+      uint64_t age;
+      if (static_cast<uint64_t>(curr_time) < creation_time) {
+        age = 0;
+      } else {
+        age = static_cast<uint64_t>(curr_time) - creation_time;
+      }
+      benefit_cost[file->fd.GetNumber()] = std::make_pair(benefit, age);
+    }
+  }
+
+  std::sort(temp->begin(), temp->end(),
+    [&](const Fsize& f1, const Fsize& f2) -> bool {
+      uint64_t fd1 = f1.file->fd.GetNumber();
+      uint64_t fd2 = f2.file->fd.GetNumber();
+      if (benefit_cost[fd1].first != 0 && benefit_cost[fd2].first != 0) {
+        return benefit_cost[fd1].first * benefit_cost[fd2].second >
+          benefit_cost[fd2].first * benefit_cost[fd1].second;
+      } else if (benefit_cost[fd1].first != benefit_cost[fd2].first) {
+        return benefit_cost[fd1].first > benefit_cost[fd2].first;
+      } else {
+        return benefit_cost[fd1].second > benefit_cost[fd2].second;
+      }
+    });
+}
 }  // namespace
 
 void VersionStorageInfo::UpdateFilesByCompactionPri(
@@ -3271,6 +3361,11 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
         SortFileByOverlappingRatio(*internal_comparator_, files_[level],
                                    files_[level + 1], ioptions.clock, level,
                                    num_non_empty_levels_, options.ttl, &temp);
+        break;
+      case kAccurateHotSize:
+        PickSSTAccurateHotSize(options.compaction_router,
+          *internal_comparator_, files_[level], files_[level + 1],
+          ioptions.clock, level, num_non_empty_levels_, options.ttl, &temp);
         break;
       default:
         assert(false);
