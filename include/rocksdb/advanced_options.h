@@ -54,6 +54,7 @@ enum CompactionPri : char {
   // and its size is the smallest. It in many cases can optimize write
   // amplification.
   kMinOverlappingRatio = 0x3,
+  kStaticEstimatedHotSize = 0x4,
   kAccurateHotSize = 0x5,
 };
 
