@@ -14,4 +14,11 @@ Status CompactionRouter::CreateFromString(const ConfigOptions& config_options,
   }
   return status;
 }
+
+const char* timer_names[] = {
+  "PickSST",
+};
+
+static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
+
 }  // namespace ROCKSDB_NAMESPACE

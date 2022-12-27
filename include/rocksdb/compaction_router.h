@@ -3,12 +3,28 @@
 #include "rocksdb/customizable.h"
 #include "rocksdb/rocksdb_namespace.h"
 
+#include <ostream>
+
 namespace ROCKSDB_NAMESPACE {
 
 struct HotRecInfo {
   rocksdb::Slice slice;
   double count;
   size_t vlen;
+};
+
+enum class TimerType {
+  kPickSST,
+  kEnd,
+};
+constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
+
+extern const char* timer_names[];
+
+struct TimerStatus {
+  const char* name;
+  uint64_t count;
+  uint64_t nsec;
 };
 
 class CompactionRouter : public Customizable {
@@ -31,6 +47,34 @@ class CompactionRouter : public Customizable {
   virtual void DelIter(void *iter) = 0;
   virtual void DelRange(size_t tier, const rocksdb::Slice &smallest, const rocksdb::Slice &largest) = 0;
   virtual size_t RangeHotSize(size_t tier, const rocksdb::Slice &smallest, const rocksdb::Slice &largest) = 0;
+
+  void TimerAdd(TimerType type, uint64_t nsec) {
+    timers_[static_cast<size_t>(type)].add(nsec);
+  }
+  std::vector<TimerStatus> TimerCollect() {
+    std::vector<TimerStatus> timers;
+    for (size_t id = 0; id < timer_num; id += 1) {
+      const auto& timer = timers_[id];
+      timers.push_back(TimerStatus{timer_names[id], timer.count(),
+          timer.nsec()});
+    }
+    return timers;
+  }
+ private:
+  class Timer {
+   public:
+    Timer() : count_(0), nsec_(0) {}
+    uint64_t count() const { return count_.load(); }
+    uint64_t nsec() const { return nsec_.load(); }
+    void add(uint64_t nsec) {
+      count_.fetch_add(1, std::memory_order_relaxed);
+      nsec_.fetch_add(nsec, std::memory_order_relaxed);
+    }
+   private:
+    std::atomic<uint64_t> count_;
+    std::atomic<uint64_t> nsec_;
+  };
+  Timer timers_[static_cast<size_t>(TimerType::kEnd)];
 };
 
 }  // namespace ROCKSDB_NAMESPACE

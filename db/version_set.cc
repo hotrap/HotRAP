@@ -3391,6 +3391,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     if (num > temp.size()) {
       num = temp.size();
     }
+    auto start_time = std::chrono::steady_clock().now();
     switch (ioptions.compaction_pri) {
       case kByCompensatedSize:
         std::partial_sort(temp.begin(), temp.begin() + num, temp.end(),
@@ -3429,6 +3430,10 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
         assert(false);
     }
     assert(temp.size() == files.size());
+    auto end_time = std::chrono::steady_clock().now();
+    auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
+		    end_time - start_time).count();
+    options.compaction_router->TimerAdd(TimerType::kPickSST, nsec);
 
     // initialize files_by_compaction_pri_
     for (size_t i = 0; i < temp.size(); i++) {
