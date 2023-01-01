@@ -3414,7 +3414,7 @@ void PickSSTAccurateHotSizePromotionSize(CompactionRouter* router,
       }
 
       promotion_size =
-        router->RangeHotSize(router->Tier(level + 1), file->largest.user_key(),
+        router->RangeHotSize(router->Tier(level + 1), file->smallest.user_key(),
           file->largest.user_key());
       benefit += promotion_size;
     } else {
