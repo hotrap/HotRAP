@@ -3536,7 +3536,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     auto end_time = std::chrono::steady_clock().now();
     auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
 		    end_time - start_time).count();
-    options.compaction_router->TimerAdd(TimerType::kPickSST, nsec);
+    options.compaction_router->TimerAdd(level, TimerType::kPickSST, nsec);
 
     // initialize files_by_compaction_pri_
     for (size_t i = 0; i < temp.size(); i++) {

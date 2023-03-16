@@ -3,6 +3,7 @@
 #include "rocksdb/customizable.h"
 #include "rocksdb/rocksdb_namespace.h"
 
+#include <algorithm>
 #include <ostream>
 
 namespace ROCKSDB_NAMESPACE {
@@ -34,6 +35,7 @@ class CompactionRouter : public Customizable {
     kNextLevel,
     kCurrentLevel,
   };
+  CompactionRouter() : num_used_levels_(0) {}
   virtual ~CompactionRouter() {}
   static const char *Type() { return "CompactionRouter"; }
   static Status CreateFromString(const ConfigOptions &config_options, const std::string &name, const CompactionRouter **result);
@@ -48,17 +50,28 @@ class CompactionRouter : public Customizable {
   virtual void DelRange(size_t tier, const rocksdb::Slice &smallest, const rocksdb::Slice &largest) = 0;
   virtual size_t RangeHotSize(size_t tier, const rocksdb::Slice &smallest, const rocksdb::Slice &largest) = 0;
 
-  void TimerAdd(TimerType type, uint64_t nsec) {
-    timers_[static_cast<size_t>(type)].add(nsec);
-  }
-  std::vector<TimerStatus> TimerCollect() {
-    std::vector<TimerStatus> timers;
-    for (size_t id = 0; id < timer_num; id += 1) {
-      const auto& timer = timers_[id];
-      timers.push_back(TimerStatus{timer_names[id], timer.count(),
-          timer.nsec()});
+  void TimerAdd(int level, TimerType type, uint64_t nsec) {
+    level = std::min((size_t)level, MAX_LEVEL_NUM - 1);
+    int num_used_levels = num_used_levels_.load(std::memory_order_relaxed);
+    while (num_used_levels <= level) {
+      num_used_levels_.compare_exchange_weak(num_used_levels, level + 1,
+        std::memory_order_relaxed);
     }
-    return timers;
+    timers_[level][static_cast<size_t>(type)].add(nsec);
+  }
+  std::vector<std::vector<TimerStatus>> TimerCollect() {
+    std::vector<std::vector<TimerStatus>> ret;
+    size_t num_used_levels = num_used_levels_.load(std::memory_order_relaxed);
+    for (size_t level = 0; level < num_used_levels; ++level) {
+      std::vector<TimerStatus> timers;
+      for (size_t id = 0; id < timer_num; id += 1) {
+        const auto& timer = timers_[level][id];
+        timers.push_back(TimerStatus{timer_names[id], timer.count(),
+            timer.nsec()});
+      }
+      ret.push_back(std::move(timers));
+    }
+    return ret;
   }
  private:
   class Timer {
@@ -74,7 +87,9 @@ class CompactionRouter : public Customizable {
     std::atomic<uint64_t> count_;
     std::atomic<uint64_t> nsec_;
   };
-  Timer timers_[static_cast<size_t>(TimerType::kEnd)];
+  static constexpr size_t MAX_LEVEL_NUM = 10;
+  Timer timers_[MAX_LEVEL_NUM][static_cast<size_t>(TimerType::kEnd)];
+  std::atomic<int> num_used_levels_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE
