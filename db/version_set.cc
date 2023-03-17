@@ -3471,6 +3471,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     // don't need this
     return;
   }
+  auto start_time = std::chrono::steady_clock().now();
   // No need to sort the highest level because it is never compacted.
   for (int level = 0; level < num_levels() - 1; level++) {
     const std::vector<FileMetaData*>& files = files_[level];
@@ -3489,7 +3490,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     if (num > temp.size()) {
       num = temp.size();
     }
-    auto start_time = std::chrono::steady_clock().now();
+    auto pick_sst_start = std::chrono::steady_clock().now();
     switch (ioptions.compaction_pri) {
       case kByCompensatedSize:
         std::partial_sort(temp.begin(), temp.begin() + num, temp.end(),
@@ -3533,10 +3534,11 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
         assert(false);
     }
     assert(temp.size() == files.size());
-    auto end_time = std::chrono::steady_clock().now();
-    auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
-		    end_time - start_time).count();
-    options.compaction_router->TimerAdd(level, TimerType::kPickSST, nsec);
+    auto pick_sst_end = std::chrono::steady_clock().now();
+    auto pick_sst_nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
+		    pick_sst_end - pick_sst_start).count();
+    options.compaction_router->AddTimerInLevel(level,
+      PerLevelTimerType::kPickSST, pick_sst_nsec);
 
     // initialize files_by_compaction_pri_
     for (size_t i = 0; i < temp.size(); i++) {
@@ -3545,6 +3547,11 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     next_file_to_compact_by_size_[level] = 0;
     assert(files_[level].size() == files_by_compaction_pri_[level].size());
   }
+  auto end_time = std::chrono::steady_clock().now();
+  auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
+		    end_time - start_time).count();
+  options.compaction_router->AddTimer(TimerType::kUpdateFilesByCompactionPri,
+    nsec);
 }
 
 void VersionStorageInfo::GenerateLevel0NonOverlapping() {
