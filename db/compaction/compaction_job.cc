@@ -339,6 +339,7 @@ struct CompactionJob::CompactionState {
 
   size_t num_output_files = 0;
   uint64_t total_bytes = 0;
+  uint64_t retained_or_promoted_bytes = 0;
   size_t num_blob_output_files = 0;
   uint64_t total_blob_bytes = 0;
   uint64_t num_output_records = 0;
@@ -433,6 +434,7 @@ void CompactionJob::AggregateStatistics() {
     }
 
     compact_->total_bytes += sc.total_bytes;
+    compact_->retained_or_promoted_bytes += sc.retained_or_promoted_bytes;
 
     const auto& blobs = sc.blob_file_additions;
 
@@ -2226,6 +2228,9 @@ Status CompactionJob::WriteCompactionOutputFile(
   }
   level_output->current_output()->finished = true;
   sub_compact->total_bytes += current_bytes;
+  if (output_level == sub_compact->start_level_output.level()) {
+    sub_compact->retained_or_promoted_bytes += current_bytes;
+  }
 
   // Finish and check for file errors
   if (s.ok()) {
@@ -2353,10 +2358,12 @@ Status CompactionJob::InstallCompactionResults(
   {
     Compaction::InputLevelSummaryBuffer inputs_summary;
     ROCKS_LOG_INFO(db_options_.info_log,
-                   "[%s] [JOB %d] Compacted %s => %" PRIu64 " bytes",
+                   "[%s] [JOB %d] Compacted %s => %" PRIu64 " bytes, "
+                   "retained or promoted %" PRIu64 " bytes",
                    compaction->column_family_data()->GetName().c_str(), job_id_,
                    compaction->InputLevelSummary(&inputs_summary),
-                   compact_->total_bytes + compact_->total_blob_bytes);
+                   compact_->total_bytes + compact_->total_blob_bytes,
+                   compact_->retained_or_promoted_bytes);
   }
 
   VersionEdit* const edit = compaction->edit();

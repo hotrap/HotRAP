@@ -182,6 +182,7 @@ class CompactionJob {
 
     // State during the subcompaction
     uint64_t total_bytes = 0;
+    uint64_t retained_or_promoted_bytes = 0;
     uint64_t num_output_records = 0;
     CompactionJobStats compaction_job_stats;
     uint64_t approx_size = 0;
