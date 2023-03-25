@@ -4,6 +4,7 @@
 #include "rocksdb/rocksdb_namespace.h"
 
 #include <algorithm>
+#include <chrono>
 #include <ostream>
 
 namespace ROCKSDB_NAMESPACE {
@@ -14,8 +15,8 @@ struct HotRecInfo {
   size_t vlen;
 };
 
-enum class TimerType {
-  kUpdateFilesByCompactionPri,
+enum class TimerType : size_t {
+  kUpdateFilesByCompactionPri = 0,
   kEnd,
 };
 constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
@@ -58,6 +59,15 @@ class CompactionRouter : public Customizable {
   virtual void DelRange(size_t tier, const rocksdb::Slice &smallest, const rocksdb::Slice &largest) = 0;
   virtual size_t RangeHotSize(size_t tier, const rocksdb::Slice &smallest, const rocksdb::Slice &largest) = 0;
 
+	static std::chrono::steady_clock::time_point Start() {
+	    return std::chrono::steady_clock::now();
+	}
+	void Stop(TimerType type, std::chrono::steady_clock::time_point start_time) {
+		auto end_time = std::chrono::steady_clock::now();
+		auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
+				end_time - start_time).count();
+		AddTimer(type, nsec);
+	}
   void AddTimer(TimerType type, uint64_t nsec) {
     timers_[static_cast<size_t>(type)].add(nsec);
   }
@@ -91,6 +101,13 @@ class CompactionRouter : public Customizable {
         std::memory_order_relaxed);
     }
     per_level_timers_[level][static_cast<size_t>(type)].add(nsec);
+  }
+  void Stop(int level, PerLevelTimerType type,
+      std::chrono::steady_clock::time_point start_time) {
+    auto end_time = std::chrono::steady_clock::now();
+		auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
+				end_time - start_time).count();
+		AddTimerInLevel(level, type, nsec);
   }
  private:
   class Timer {
