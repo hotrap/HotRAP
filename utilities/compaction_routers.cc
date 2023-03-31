@@ -17,6 +17,7 @@ Status CompactionRouter::CreateFromString(const ConfigOptions& config_options,
 
 const char* timer_names[] = {
   "UpdateFilesByCompactionPri",
+  "GetKeyValueFromLevelsBelow",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 

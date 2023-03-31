@@ -1399,6 +1399,7 @@ public:
   }
 private:
   void GetKeyValueFromLevelsBelow() {
+    auto start_time = CompactionRouter::Start();
     const Slice& user_key = latter_tier_iter_.Cur()->slice;
     LookupKey lkey(user_key, kMaxSequenceNumber);
     MergeContext merge_context;
@@ -1412,6 +1413,7 @@ private:
       key_ = key_from_below_.Encode();
       value_ = static_cast<Slice *>(&value_from_below_);
     }
+    router_->Stop(TimerType::kGetKeyValueFromLevelsBelow, start_time);
   }
   void _HandleNext() {
     if (!c_iter_->Valid()) {

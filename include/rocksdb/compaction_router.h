@@ -17,6 +17,7 @@ struct HotRecInfo {
 
 enum class TimerType : size_t {
   kUpdateFilesByCompactionPri = 0,
+  kGetKeyValueFromLevelsBelow,
   kEnd,
 };
 constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
