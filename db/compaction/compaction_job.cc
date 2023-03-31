@@ -832,19 +832,20 @@ Status CompactionJob::Run() {
   }
   if (status.ok()) {
     thread_pool.clear();
-    std::vector<const CompactionJob::SubcompactionState::Output*> files_output;
+    Compaction *c = compact_->compaction;
+    std::vector<
+      std::pair<int, const CompactionJob::SubcompactionState::Output*>
+    > files_output;
     for (const auto& state : compact_->sub_compact_states) {
-      // TODO: Is it right?
       for (const auto& output : state.start_level_output.outputs) {
-        files_output.emplace_back(&output);
+        files_output.emplace_back(c->start_level(), &output);
       }
       for (const auto& output : state.latter_level_output.outputs) {
-        files_output.emplace_back(&output);
+        files_output.emplace_back(c->output_level(), &output);
       }
     }
-    ColumnFamilyData* cfd = compact_->compaction->column_family_data();
-    auto prefix_extractor =
-        compact_->compaction->mutable_cf_options()->prefix_extractor.get();
+    ColumnFamilyData* cfd = c->column_family_data();
+    auto prefix_extractor = c->mutable_cf_options()->prefix_extractor.get();
     std::atomic<size_t> next_file_idx(0);
     auto verify_table = [&](Status& output_status) {
       while (true) {
@@ -852,6 +853,8 @@ Status CompactionJob::Run() {
         if (file_idx >= files_output.size()) {
           break;
         }
+        int level = files_output[file_idx].first;
+        auto output = files_output[file_idx].second;
         // Verify that the table is usable
         // We set for_compaction to false and don't OptimizeForCompactionTableRead
         // here because this is a special case after we finish the table building
@@ -861,13 +864,12 @@ Status CompactionJob::Run() {
         ReadOptions read_options;
         InternalIterator* iter = cfd->table_cache()->NewIterator(
             read_options, file_options_, cfd->internal_comparator(),
-            files_output[file_idx]->meta, /*range_del_agg=*/nullptr,
+            output->meta, /*range_del_agg=*/nullptr,
             prefix_extractor,
             /*table_reader_ptr=*/nullptr,
-            cfd->internal_stats()->GetFileReadHist(
-                compact_->compaction->output_level()),
+            cfd->internal_stats()->GetFileReadHist(level),
             TableReaderCaller::kCompactionRefill, /*arena=*/nullptr,
-            /*skip_filters=*/false, compact_->compaction->output_level(),
+            /*skip_filters=*/false, level,
             MaxFileSizeForL0MetaPin(
                 *compact_->compaction->mutable_cf_options()),
             /*smallest_compaction_key=*/nullptr,
@@ -889,7 +891,7 @@ Status CompactionJob::Run() {
             s = iter->status();
           }
           if (s.ok() &&
-              !validator.CompareValidator(files_output[file_idx]->validator)) {
+              !validator.CompareValidator(output->validator)) {
             s = Status::Corruption("Paranoid checksums do not match");
           }
         }
