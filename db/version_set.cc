@@ -143,8 +143,8 @@ class FilePicker {
     search_ended_ = !PrepareNextLevel();
     if (!search_ended_) {
       // Prefetch Level 0 table data to avoid cache miss if possible.
-      for (unsigned int i = 0; i < (*level_files_brief_)[0].num_files; ++i) {
-        auto* r = (*level_files_brief_)[0].files[i].fd.table_reader;
+      for (unsigned int i = 0; i < (*level_files_brief_)[curr_level_].num_files; ++i) {
+        auto* r = (*level_files_brief_)[curr_level_].files[i].fd.table_reader;
         if (r) {
           r->Prepare(ikey);
         }
