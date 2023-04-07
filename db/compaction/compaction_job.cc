@@ -197,15 +197,17 @@ std::string CompactionJob::SubcompactionState::LevelOutput::GetTableFileName(
   return TableFileName(ioptions->cf_paths, file_number, path_id());
 }
 
-CompactionJob::SubcompactionState::SubcompactionState(
-      Compaction* c, Slice* _start, Slice* _end, uint64_t size,
-      uint32_t _sub_job_id)
+CompactionJob::SubcompactionState::SubcompactionState(Compaction* c,
+                                                      Slice* _start,
+                                                      Slice* _end,
+                                                      uint64_t size,
+                                                      uint32_t _sub_job_id)
     : compaction(c),
       start(_start),
       end(_end),
       start_level_output(c->start_level_path_id(), c->start_level(), 1),
       latter_level_output(c->latter_level_path_id(), c->output_level(),
-        c->latter_level_hot_per_byte()),
+                          c->latter_level_hot_per_byte()),
       approx_size(size),
       sub_job_id(_sub_job_id) {
   assert(compaction != nullptr);
@@ -220,23 +222,22 @@ bool CompactionJob::SubcompactionState::ShouldStopBefore(
   bool grandparant_file_switched = false;
   // Scan to find earliest grandparent file that contains key.
   while (grandparent_index < grandparents.size() &&
-        icmp->Compare(internal_key,
-                      grandparents[grandparent_index]->largest.Encode()) >
-            0) {
+         icmp->Compare(internal_key,
+                       grandparents[grandparent_index]->largest.Encode()) > 0) {
     if (seen_key) {
       overlapped_bytes += grandparents[grandparent_index]->fd.GetFileSize();
       grandparant_file_switched = true;
     }
     assert(grandparent_index + 1 >= grandparents.size() ||
-          icmp->Compare(
-              grandparents[grandparent_index]->largest.Encode(),
-              grandparents[grandparent_index + 1]->smallest.Encode()) <= 0);
+           icmp->Compare(
+               grandparents[grandparent_index]->largest.Encode(),
+               grandparents[grandparent_index + 1]->smallest.Encode()) <= 0);
     grandparent_index++;
   }
   seen_key = true;
 
-  if (grandparant_file_switched && overlapped_bytes + curr_file_size >
-                                      compaction->max_compaction_bytes()) {
+  if (grandparant_file_switched &&
+      overlapped_bytes + curr_file_size > compaction->max_compaction_bytes()) {
     // Too much overlap for current output; start new output
     overlapped_bytes = 0;
     return true;
@@ -255,7 +256,7 @@ bool CompactionJob::SubcompactionState::ShouldStopBefore(
     } else {
       // Look for the key position
       while (next_files_to_cut_for_ttl <
-            static_cast<int>(files_to_cut_for_ttl.size())) {
+             static_cast<int>(files_to_cut_for_ttl.size())) {
         if (icmp->Compare(internal_key,
                           files_to_cut_for_ttl[next_files_to_cut_for_ttl]
                               ->smallest.Encode()) >= 0) {
@@ -355,7 +356,8 @@ struct CompactionJob::CompactionState {
       }
     }
     for (const auto& sub_compact_state : sub_compact_states) {
-      latter_level_ret = sub_compact_state.latter_level_output.SmallestUserKey();
+      latter_level_ret =
+          sub_compact_state.latter_level_output.SmallestUserKey();
       if (!latter_level_ret.empty()) {
         break;
       }
@@ -711,10 +713,9 @@ void CompactionJob::GenSubcompactionBoundaries() {
           *(c->mutable_cf_options()), out_lvl,
           c->immutable_options()->compaction_style, base_level,
           c->immutable_options()->level_compaction_dynamic_level_bytes)));
-  uint64_t subcompactions =
-      std::min({static_cast<uint64_t>(ranges.size()),
-                static_cast<uint64_t>(c->max_subcompactions()),
-                max_output_files});
+  uint64_t subcompactions = std::min(
+      {static_cast<uint64_t>(ranges.size()),
+       static_cast<uint64_t>(c->max_subcompactions()), max_output_files});
 
   if (subcompactions > 1) {
     double mean = sum * 1.0 / subcompactions;
@@ -832,10 +833,10 @@ Status CompactionJob::Run() {
   }
   if (status.ok()) {
     thread_pool.clear();
-    Compaction *c = compact_->compaction;
+    Compaction* c = compact_->compaction;
     std::vector<
-      std::pair<int, const CompactionJob::SubcompactionState::Output*>
-    > files_output;
+        std::pair<int, const CompactionJob::SubcompactionState::Output*> >
+        files_output;
     for (const auto& state : compact_->sub_compact_states) {
       for (const auto& output : state.start_level_output.outputs) {
         files_output.emplace_back(c->start_level(), &output);
@@ -856,16 +857,16 @@ Status CompactionJob::Run() {
         int level = files_output[file_idx].first;
         auto output = files_output[file_idx].second;
         // Verify that the table is usable
-        // We set for_compaction to false and don't OptimizeForCompactionTableRead
-        // here because this is a special case after we finish the table building
-        // No matter whether use_direct_io_for_flush_and_compaction is true,
-        // we will regard this verification as user reads since the goal is
-        // to cache it here for further user reads
+        // We set for_compaction to false and don't
+        // OptimizeForCompactionTableRead here because this is a special case
+        // after we finish the table building No matter whether
+        // use_direct_io_for_flush_and_compaction is true, we will regard this
+        // verification as user reads since the goal is to cache it here for
+        // further user reads
         ReadOptions read_options;
         InternalIterator* iter = cfd->table_cache()->NewIterator(
             read_options, file_options_, cfd->internal_comparator(),
-            output->meta, /*range_del_agg=*/nullptr,
-            prefix_extractor,
+            output->meta, /*range_del_agg=*/nullptr, prefix_extractor,
             /*table_reader_ptr=*/nullptr,
             cfd->internal_stats()->GetFileReadHist(level),
             TableReaderCaller::kCompactionRefill, /*arena=*/nullptr,
@@ -890,8 +891,7 @@ Status CompactionJob::Run() {
           if (s.ok()) {
             s = iter->status();
           }
-          if (s.ok() &&
-              !validator.CompareValidator(output->validator)) {
+          if (s.ok() && !validator.CompareValidator(output->validator)) {
             s = Status::Corruption("Paranoid checksums do not match");
           }
         }
@@ -905,8 +905,8 @@ Status CompactionJob::Run() {
       }
     };
     for (size_t i = 1; i < compact_->sub_compact_states.size(); i++) {
-      thread_pool.emplace_back(verify_table,
-                               std::ref(compact_->sub_compact_states[i].status));
+      thread_pool.emplace_back(
+          verify_table, std::ref(compact_->sub_compact_states[i].status));
     }
     verify_table(compact_->sub_compact_states[0].status);
     for (auto& thread : thread_pool) {
@@ -1087,7 +1087,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
 CompactionServiceJobStatus
 CompactionJob::ProcessKeyValueCompactionWithCompactionService(
     SubcompactionState* sub_compact) {
-    (void)sub_compact;
+  (void)sub_compact;
 #if 0
   assert(sub_compact);
   assert(sub_compact->compaction);
@@ -1278,7 +1278,7 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
 #endif  // !ROCKSDB_LITE
 
 class HotRecIter {
-public:
+ public:
   // Just to suppress the uninitialized error of deconstructor.
   HotRecIter() : iter_(NULL) {}
   ~HotRecIter() {
@@ -1286,14 +1286,14 @@ public:
       c_->DelIter(iter_);
     }
   }
-  static void InitEmpty(HotRecIter *iter) {
+  static void InitEmpty(HotRecIter* iter) {
     iter->c_ = NULL;
     iter->iter_ = NULL;
     iter->ucmp_ = NULL;
     iter->cur_ = NULL;
   }
-  static void Init(HotRecIter *iter, CompactionRouter* c, size_t tier,
-      const Comparator* ucmp) {
+  static void Init(HotRecIter* iter, CompactionRouter* c, size_t tier,
+                   const Comparator* ucmp) {
     iter->c_ = c;
     if (c == NULL) {
       iter->iter_ = NULL;
@@ -1304,23 +1304,19 @@ public:
     iter->cur_ = NULL;
   }
   void Seek(const Slice* key) {
-    if (iter_ == NULL)
-      return;
+    if (iter_ == NULL) return;
     cur_ = c_->Seek(iter_, *key);
   }
-  void Next() {
-    cur_ = c_->NextHot(iter_);
-  }
-  const HotRecInfo* Cur() const {
-    return cur_;
-  }
+  void Next() { cur_ = c_->NextHot(iter_); }
+  const HotRecInfo* Cur() const { return cur_; }
   const HotRecInfo* JumpToLowerBound(const Slice& key) {
     while (cur_ && ucmp_->Compare(cur_->slice, key) < 0) {
       Next();
     }
     return cur_;
   }
-private:
+
+ private:
   CompactionRouter* c_;
   void* iter_;
   const Comparator* ucmp_;
@@ -1328,23 +1324,22 @@ private:
 };
 
 class RouterIterator {
-public:
+ public:
   RouterIterator(CompactionRouter* router, const Compaction* c,
-      const Slice* start_level_smallest_user_key,
-      const Slice* start_level_largest_user_key,
-      CompactionIterator* c_iter)
-    : router_(router),
-      c_(c),
-      start_level_smallest_user_key_(start_level_smallest_user_key),
-      start_level_largest_user_key_(start_level_largest_user_key),
-      c_iter_(c_iter) {
+                 const Slice* start_level_smallest_user_key,
+                 const Slice* start_level_largest_user_key,
+                 CompactionIterator* c_iter)
+      : router_(router),
+        c_(c),
+        start_level_smallest_user_key_(start_level_smallest_user_key),
+        start_level_largest_user_key_(start_level_largest_user_key),
+        c_iter_(c_iter) {
     int start_level = c->level();
     int latter_level = c->output_level();
     ColumnFamilyData* cfd = c->column_family_data();
     ucmp_ = cfd->user_comparator();
-    if (router &&
-        (start_tier_ = router->Tier(start_level)) !=
-          (latter_tier_ = router->Tier(c->output_level()))) {
+    if (router && (start_tier_ = router->Tier(start_level)) !=
+                      (latter_tier_ = router->Tier(c->output_level()))) {
       assert(start_tier_ < latter_tier_);
       // TODO: Handle other cases.
       assert(start_tier_ + 1 == latter_tier_);
@@ -1361,7 +1356,7 @@ public:
   ~RouterIterator() {
     if (router_ && start_tier_ != latter_tier_) {
       router_->DelRange(latter_tier_, *start_level_smallest_user_key_,
-          *start_level_largest_user_key_);
+                        *start_level_largest_user_key_);
     }
   }
   bool Valid() {
@@ -1370,36 +1365,27 @@ public:
   void Next() {
     assert(Valid());
     switch (source_) {
-    case Source::kCompactionIterator:
-      c_iter_->Next();
-      break;
-    case Source::kLatterLevel:
-      c_iter_->Next();
-      latter_tier_iter_.Next();
-      break;
-    case Source::kLevelBelow:
-      value_from_below_.Reset();
-      latter_tier_iter_.Next();
-      break;
+      case Source::kCompactionIterator:
+        c_iter_->Next();
+        break;
+      case Source::kLatterLevel:
+        c_iter_->Next();
+        latter_tier_iter_.Next();
+        break;
+      case Source::kLevelBelow:
+        value_from_below_.Reset();
+        latter_tier_iter_.Next();
+        break;
     }
     HandleNext();
   }
-  CompactionRouter::Decision decision() {
-    return decision_;
-  }
-  const Slice& key() const {
-    return key_;
-  }
-  const ParsedInternalKey& ikey() const {
-    return ikey_;
-  }
-  const Slice& user_key() const {
-    return ikey_.user_key;
-  }
-  const Slice& value() const {
-    return *value_;
-  }
-private:
+  CompactionRouter::Decision decision() { return decision_; }
+  const Slice& key() const { return key_; }
+  const ParsedInternalKey& ikey() const { return ikey_; }
+  const Slice& user_key() const { return ikey_.user_key; }
+  const Slice& value() const { return *value_; }
+
+ private:
   void GetKeyValueFromLevelsBelow() {
     auto start_time = CompactionRouter::Start();
     const Slice& user_key = latter_tier_iter_.Cur()->slice;
@@ -1408,12 +1394,13 @@ private:
     SequenceNumber max_covering_tombstone_seq = 0;
     SequenceNumber seq;
     c_->input_version()->Get(ReadOptions(), lkey, &value_from_below_, nullptr,
-        &status_, &merge_context, &max_covering_tombstone_seq, nullptr, nullptr,
-        &seq, nullptr, nullptr, true, c_->output_level());
+                             &status_, &merge_context,
+                             &max_covering_tombstone_seq, nullptr, nullptr,
+                             &seq, nullptr, nullptr, true, c_->output_level());
     if (status_.ok()) {
       key_from_below_ = InternalKey(user_key, seq, ValueType::kTypeValue);
       key_ = key_from_below_.Encode();
-      value_ = static_cast<Slice *>(&value_from_below_);
+      value_ = static_cast<Slice*>(&value_from_below_);
     }
     router_->Stop(TimerType::kGetKeyValueFromLevelsBelow, start_time);
   }
@@ -1424,10 +1411,10 @@ private:
     }
     // Invariant: c_iter.status() is guaranteed to be OK if c_iter->Valid()
     // returns true.
-    if (ucmp_->Compare(c_iter_->user_key(),
-            *start_level_smallest_user_key_) < 0 ||
-        ucmp_->Compare(*start_level_largest_user_key_,
-            c_iter_->user_key()) < 0 ||
+    if (ucmp_->Compare(c_iter_->user_key(), *start_level_smallest_user_key_) <
+            0 ||
+        ucmp_->Compare(*start_level_largest_user_key_, c_iter_->user_key()) <
+            0 ||
         // Make sure that all versions of the same user key share the same
         // decision.
         ucmp_->Compare(c_iter_->user_key(), Slice(previous_user_key_)) == 0) {
@@ -1458,7 +1445,7 @@ private:
       }
       if (res == 0) {
         router_->AddHotness(start_tier_, latter_hot->slice, latter_hot->vlen,
-            latter_hot->count);
+                            latter_hot->count);
         source_ = Source::kLatterLevel;
         decision_ = CompactionRouter::Decision::kCurrentLevel;
         key_ = c_iter_->key();
@@ -1468,9 +1455,10 @@ private:
       }
     }
     source_ = Source::kCompactionIterator;
-    const HotRecInfo *start_hot =
+    const HotRecInfo* start_hot =
         start_tier_iter_.JumpToLowerBound(c_iter_->user_key());
-    if (start_hot && ucmp_->Compare(start_hot->slice, c_iter_->user_key()) == 0) {
+    if (start_hot &&
+        ucmp_->Compare(start_hot->slice, c_iter_->user_key()) == 0) {
       decision_ = CompactionRouter::Decision::kCurrentLevel;
     } else {
       decision_ = CompactionRouter::Decision::kNextLevel;
@@ -1538,7 +1526,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
   const Compaction* c = sub_compact->compaction;
   ColumnFamilyData* cfd = c->column_family_data();
-  const Comparator *ucmp = cfd->user_comparator();
+  const Comparator* ucmp = cfd->user_comparator();
 
   // Create compaction filter and fail the compaction if
   // IgnoreSnapshots() = false because it is not supported anymore
@@ -1644,8 +1632,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
 
   MergeHelper merge(
-      env_, ucmp, cfd->ioptions()->merge_operator.get(),
-      compaction_filter, db_options_.info_log.get(),
+      env_, ucmp, cfd->ioptions()->merge_operator.get(), compaction_filter,
+      db_options_.info_log.get(),
       false /* internal key corruption is expected */,
       existing_snapshots_.empty() ? 0 : existing_snapshots_.back(),
       snapshot_checker_, compact_->compaction->level(), db_options_.stats);
@@ -1677,9 +1665,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   const std::string* const full_history_ts_low =
       full_history_ts_low_.empty() ? nullptr : &full_history_ts_low_;
   sub_compact->c_iter.reset(new CompactionIterator(
-      input, ucmp, &merge, versions_->LastSequence(),
-      &existing_snapshots_, earliest_write_conflict_snapshot_,
-      snapshot_checker_, env_, ShouldReportDetailedTime(env_, stats_),
+      input, ucmp, &merge, versions_->LastSequence(), &existing_snapshots_,
+      earliest_write_conflict_snapshot_, snapshot_checker_, env_,
+      ShouldReportDetailedTime(env_, stats_),
       /*expect_valid_internal_key=*/true, &range_del_agg,
       blob_file_builder.get(), db_options_.allow_data_in_errors,
       sub_compact->compaction, compaction_filter, shutting_down_,
@@ -1694,7 +1682,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     // first key. So we do that here.
     sub_compact->ShouldStopBefore(c_iter->key(),
                                   // sub_compact->current_output_file_size);
-                                  0); // TODO: Is this correct?
+                                  0);  // TODO: Is this correct?
   }
   const auto& c_iter_stats = c_iter->iter_stats();
 
@@ -1710,10 +1698,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   assert(start_level_inputs.level == c->start_level());
   Slice start_level_smallest_user_key, start_level_largest_user_key;
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
-    &start_level_largest_user_key);
+                                     &start_level_largest_user_key);
 
   RouterIterator router_iter(compaction_router, c,
-      &start_level_smallest_user_key, &start_level_largest_user_key, c_iter);
+                             &start_level_smallest_user_key,
+                             &start_level_largest_user_key, c_iter);
 
   std::string previous_user_key;
   while (status.ok() && !cfd->IsDropped() && router_iter.Valid()) {
@@ -1731,17 +1720,17 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       RecordCompactionIOStats();
     }
 
-    SubcompactionState::LevelOutput *level_output = NULL;
+    SubcompactionState::LevelOutput* level_output = NULL;
     switch (router_iter.decision()) {
-    case CompactionRouter::Decision::kCurrentLevel:
-      level_output = &sub_compact->start_level_output;
-      break;
-    case CompactionRouter::Decision::kNextLevel:
-      level_output = &sub_compact->latter_level_output;
-      break;
-    case CompactionRouter::Decision::kUndetermined:
-      assert(false);
-      break;
+      case CompactionRouter::Decision::kCurrentLevel:
+        level_output = &sub_compact->start_level_output;
+        break;
+      case CompactionRouter::Decision::kNextLevel:
+        level_output = &sub_compact->latter_level_output;
+        break;
+      case CompactionRouter::Decision::kUndetermined:
+        assert(false);
+        break;
     }
     assert(level_output != NULL);
 
@@ -1886,7 +1875,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     // handle subcompaction containing only range deletions
     // Range deletions are always output to the next level.
     status = OpenCompactionOutputFile(sub_compact,
-        &sub_compact->latter_level_output);
+                                      &sub_compact->latter_level_output);
   }
 
   // Call FinishCompactionOutputFile() even if status is not ok: it needs to
@@ -2075,9 +2064,8 @@ Status CompactionJob::FinishCompactionOutputFile(
     // bound. If the end of subcompaction is null or the upper bound is null,
     // it means that this file is the last file in the compaction. So there
     // will be no overlapping between this file and others.
-    assert(sub_compact->end == nullptr ||
-           upper_bound == nullptr ||
-           ucmp->Compare(*upper_bound , *sub_compact->end) <= 0);
+    assert(sub_compact->end == nullptr || upper_bound == nullptr ||
+           ucmp->Compare(*upper_bound, *sub_compact->end) <= 0);
     auto it = range_del_agg->NewIterator(lower_bound, upper_bound,
                                          has_overlapping_endpoints);
     // Position the range tombstone output iterator. There may be tombstone
@@ -2186,8 +2174,8 @@ Status CompactionJob::FinishCompactionOutputFile(
 }
 
 Status CompactionJob::WriteCompactionOutputFile(
-  const Status& input_status, SubcompactionState* sub_compact,
-  SubcompactionState::LevelOutput* level_output) {
+    const Status& input_status, SubcompactionState* sub_compact,
+    SubcompactionState::LevelOutput* level_output) {
   Status s = input_status;
   auto meta = &level_output->current_output()->meta;
   std::string file_checksum = kUnknownFileChecksum;
@@ -2362,7 +2350,8 @@ Status CompactionJob::InstallCompactionResults(
   {
     Compaction::InputLevelSummaryBuffer inputs_summary;
     ROCKS_LOG_INFO(db_options_.info_log,
-                   "[%s] [JOB %d] Compacted %s => %" PRIu64 " bytes, "
+                   "[%s] [JOB %d] Compacted %s => %" PRIu64
+                   " bytes, "
                    "retained or promoted %" PRIu64 " bytes",
                    compaction->column_family_data()->GetName().c_str(), job_id_,
                    compaction->InputLevelSummary(&inputs_summary),
@@ -2567,7 +2556,8 @@ Status CompactionJob::OpenCompactionOutputFile(
       NewTableBuilder(tboptions, level_output->outfile.get()));
   LogFlush(db_options_.info_log);
   // if (level_output == &sub_compact->start_level_output) {
-  //   ROCKS_LOG_INFO(db_options_.info_log, "Compaction output file of start level opened: %s\n", fname.c_str());
+  //   ROCKS_LOG_INFO(db_options_.info_log, "Compaction output file of start
+  //   level opened: %s\n", fname.c_str());
   // }
   return s;
 }
@@ -2742,8 +2732,8 @@ CompactionServiceCompactionJob::CompactionServiceCompactionJob(
     : CompactionJob(
           job_id, compaction, db_options, mutable_db_options, file_options,
           versions, shutting_down, 0, log_buffer, nullptr,
-          start_level_output_directory, latter_level_output_directory,
-          nullptr, stats, db_mutex, db_error_handler, existing_snapshots,
+          start_level_output_directory, latter_level_output_directory, nullptr,
+          stats, db_mutex, db_error_handler, existing_snapshots,
           kMaxSequenceNumber, nullptr, table_cache, event_logger,
           compaction->mutable_cf_options()->paranoid_file_checks,
           compaction->mutable_cf_options()->report_bg_io_stats, dbname,
@@ -2842,7 +2832,7 @@ Status CompactionServiceCompactionJob::Run() {
 
   return status;
 #endif
-  return Status::NotSupported(); // TODO
+  return Status::NotSupported();  // TODO
 }
 
 void CompactionServiceCompactionJob::CleanupCompaction() {
