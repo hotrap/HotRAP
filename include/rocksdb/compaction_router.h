@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <ostream>
 
 #include "rocksdb/customizable.h"
@@ -38,8 +39,50 @@ struct TimerStatus {
   uint64_t nsec;
 };
 
+template <typename T>
+class PointerIter {
+ public:
+  using value_type = T;
+  PointerIter() {}
+  PointerIter(const PointerIter &) = delete;
+  PointerIter &operator=(const PointerIter &) = delete;
+  virtual ~PointerIter() = default;
+  // The returned reference should stay valid until the next call to it.
+  virtual T *next() = 0;
+};
+
+template <typename Iter>
+class PeekablePointerIter {
+ public:
+  using value_type = typename Iter::value_type;
+  PeekablePointerIter() : cur_(NULL) {}
+  PeekablePointerIter(std::unique_ptr<PointerIter<value_type>> &&iter)
+      : iter_(std::move(iter)), cur_(iter_->next()) {}
+  PeekablePointerIter(const PeekablePointerIter &) = delete;
+  PeekablePointerIter &operator=(const PeekablePointerIter &) = delete;
+  PeekablePointerIter(PeekablePointerIter &&rhs)
+      : iter_(std::move(rhs.iter_)), cur_(rhs.cur_) {}
+  PeekablePointerIter &operator=(PeekablePointerIter &&rhs) {
+    iter_ = std::move(rhs.iter_);
+    cur_ = rhs.cur_;
+    return *this;
+  }
+  bool has_iter() const { return iter_ != nullptr; }
+  const value_type *peek() const { return cur_; }
+  value_type *next() {
+    value_type *ret = cur_;
+    cur_ = iter_->next();
+    return ret;
+  }
+
+ private:
+  std::unique_ptr<PointerIter<value_type>> iter_;
+  value_type *cur_;
+};
+
 class CompactionRouter : public Customizable {
  public:
+  using Iter = PointerIter<const HotRecInfo>;
   enum class Decision {
     kUndetermined,
     kNextLevel,
@@ -56,11 +99,8 @@ class CompactionRouter : public Customizable {
   virtual void AddHotness(size_t tier, const rocksdb::Slice &key, size_t vlen,
                           double weight) = 0;
   virtual void Access(int level, const Slice &key, size_t vlen) = 0;
-  virtual void *NewIter(size_t tier) = 0;
-  virtual const rocksdb::HotRecInfo *Seek(void *iter,
-                                          const rocksdb::Slice &key) = 0;
-  virtual const HotRecInfo *NextHot(void *iter) = 0;
-  virtual void DelIter(void *iter) = 0;
+  virtual std::unique_ptr<Iter> LowerBound(size_t tier,
+                                           const rocksdb::Slice &key) = 0;
   virtual void DelRange(size_t tier, const rocksdb::Slice &smallest,
                         const rocksdb::Slice &largest) = 0;
   virtual size_t RangeHotSize(size_t tier, const rocksdb::Slice &smallest,

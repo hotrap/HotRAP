@@ -14,6 +14,7 @@
 #include <functional>
 #include <list>
 #include <memory>
+#include <optional>
 #include <set>
 #include <thread>
 #include <utility>
@@ -49,6 +50,7 @@
 #include "options/configurable_helper.h"
 #include "options/options_helper.h"
 #include "port/port.h"
+#include "rocksdb/compaction_router.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/sst_partitioner.h"
@@ -835,7 +837,7 @@ Status CompactionJob::Run() {
     thread_pool.clear();
     Compaction* c = compact_->compaction;
     std::vector<
-        std::pair<int, const CompactionJob::SubcompactionState::Output*> >
+        std::pair<int, const CompactionJob::SubcompactionState::Output*>>
         files_output;
     for (const auto& state : compact_->sub_compact_states) {
       for (const auto& output : state.start_level_output.outputs) {
@@ -1277,52 +1279,6 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
 }
 #endif  // !ROCKSDB_LITE
 
-class HotRecIter {
- public:
-  // Just to suppress the uninitialized error of deconstructor.
-  HotRecIter() : iter_(NULL) {}
-  ~HotRecIter() {
-    if (iter_) {
-      c_->DelIter(iter_);
-    }
-  }
-  static void InitEmpty(HotRecIter* iter) {
-    iter->c_ = NULL;
-    iter->iter_ = NULL;
-    iter->ucmp_ = NULL;
-    iter->cur_ = NULL;
-  }
-  static void Init(HotRecIter* iter, CompactionRouter* c, size_t tier,
-                   const Comparator* ucmp) {
-    iter->c_ = c;
-    if (c == NULL) {
-      iter->iter_ = NULL;
-    } else {
-      iter->iter_ = c->NewIter(tier);
-    }
-    iter->ucmp_ = ucmp;
-    iter->cur_ = NULL;
-  }
-  void Seek(const Slice* key) {
-    if (iter_ == NULL) return;
-    cur_ = c_->Seek(iter_, *key);
-  }
-  void Next() { cur_ = c_->NextHot(iter_); }
-  const HotRecInfo* Cur() const { return cur_; }
-  const HotRecInfo* JumpToLowerBound(const Slice& key) {
-    while (cur_ && ucmp_->Compare(cur_->slice, key) < 0) {
-      Next();
-    }
-    return cur_;
-  }
-
- private:
-  CompactionRouter* c_;
-  void* iter_;
-  const Comparator* ucmp_;
-  const HotRecInfo* cur_;
-};
-
 class RouterIterator {
  public:
   RouterIterator(CompactionRouter* router, const Compaction* c,
@@ -1343,13 +1299,10 @@ class RouterIterator {
       assert(start_tier_ < latter_tier_);
       // TODO: Handle other cases.
       assert(start_tier_ + 1 == latter_tier_);
-      HotRecIter::Init(&start_tier_iter_, router, start_tier_, ucmp_);
-      HotRecIter::Init(&latter_tier_iter_, router, latter_tier_, ucmp_);
-      start_tier_iter_.Seek(start_level_smallest_user_key);
-      latter_tier_iter_.Seek(start_level_smallest_user_key);
-    } else {
-      HotRecIter::InitEmpty(&start_tier_iter_);
-      HotRecIter::InitEmpty(&latter_tier_iter_);
+      start_tier_iter_ = PeekablePointerIter<CompactionRouter::Iter>(
+          router->LowerBound(start_tier_, *start_level_smallest_user_key));
+      latter_tier_iter_ = PeekablePointerIter<CompactionRouter::Iter>(
+          router->LowerBound(latter_tier_, *start_level_smallest_user_key));
     }
     HandleNext();
   }
@@ -1370,11 +1323,13 @@ class RouterIterator {
         break;
       case Source::kLatterLevel:
         c_iter_->Next();
-        latter_tier_iter_.Next();
+        assert(latter_tier_iter_.has_iter());
+        latter_tier_iter_.next();
         break;
       case Source::kLevelBelow:
         value_from_below_.Reset();
-        latter_tier_iter_.Next();
+        assert(latter_tier_iter_.has_iter());
+        latter_tier_iter_.next();
         break;
     }
     HandleNext();
@@ -1388,7 +1343,8 @@ class RouterIterator {
  private:
   void GetKeyValueFromLevelsBelow() {
     auto start_time = CompactionRouter::Start();
-    const Slice& user_key = latter_tier_iter_.Cur()->slice;
+    assert(latter_tier_iter_.has_iter());
+    const Slice& user_key = latter_tier_iter_.peek()->slice;
     LookupKey lkey(user_key, kMaxSequenceNumber);
     MergeContext merge_context;
     SequenceNumber max_covering_tombstone_seq = 0;
@@ -1424,7 +1380,11 @@ class RouterIterator {
       value_ = &c_iter_->value();
       return;
     }
-    const HotRecInfo* latter_hot = latter_tier_iter_.Cur();
+    const HotRecInfo* latter_hot;
+    if (latter_tier_iter_.has_iter())
+      latter_hot = latter_tier_iter_.peek();
+    else
+      latter_hot = NULL;
     if (latter_hot != NULL) {
       int res = ucmp_->Compare(latter_hot->slice, c_iter_->user_key());
       if (res < 0) {
@@ -1433,7 +1393,8 @@ class RouterIterator {
         GetKeyValueFromLevelsBelow();
         if (!status_.ok()) {
           if (status_.IsNotFound()) {
-            latter_tier_iter_.Next();
+            assert(latter_tier_iter_.has_iter());
+            latter_tier_iter_.next();
             // Expect the compiler to optimize the tail recursion.
             HandleNext();
           } else {
@@ -1444,8 +1405,6 @@ class RouterIterator {
         return;
       }
       if (res == 0) {
-        router_->AddHotness(start_tier_, latter_hot->slice, latter_hot->vlen,
-                            latter_hot->count);
         source_ = Source::kLatterLevel;
         decision_ = CompactionRouter::Decision::kCurrentLevel;
         key_ = c_iter_->key();
@@ -1455,8 +1414,18 @@ class RouterIterator {
       }
     }
     source_ = Source::kCompactionIterator;
-    const HotRecInfo* start_hot =
-        start_tier_iter_.JumpToLowerBound(c_iter_->user_key());
+    const HotRecInfo* start_hot;
+    if (!start_tier_iter_.has_iter()) {
+      start_hot = NULL;
+    } else {
+      start_hot = start_tier_iter_.peek();
+      for (;;) {
+        if (start_hot == NULL ||
+            ucmp_->Compare(start_hot->slice, c_iter_->user_key()) >= 0)
+          break;
+        start_hot = start_tier_iter_.next();
+      }
+    }
     if (start_hot &&
         ucmp_->Compare(start_hot->slice, c_iter_->user_key()) == 0) {
       decision_ = CompactionRouter::Decision::kCurrentLevel;
@@ -1485,8 +1454,8 @@ class RouterIterator {
   CompactionIterator* c_iter_;
   size_t start_tier_;
   size_t latter_tier_;
-  HotRecIter start_tier_iter_;
-  HotRecIter latter_tier_iter_;
+  PeekablePointerIter<CompactionRouter::Iter> start_tier_iter_;
+  PeekablePointerIter<CompactionRouter::Iter> latter_tier_iter_;
   InternalKey key_from_below_;
   PinnableSlice value_from_below_;
   enum class Source {
@@ -1562,8 +1531,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   // (b) CompactionFilter::Decision::kRemoveAndSkipUntil.
   read_options.total_order_seek = true;
 
-  // Note: if we're going to support subcompactions for user-defined timestamps,
-  // the timestamp part will have to be stripped from the bounds here.
+  // Note: if we're going to support subcompactions for user-defined
+  // timestamps, the timestamp part will have to be stripped from the bounds
+  // here.
   assert((!start && !end) || ucmp->timestamp_size() == 0);
   read_options.iterate_lower_bound = start;
   read_options.iterate_upper_bound = end;
@@ -1678,8 +1648,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   if (c_iter->Valid() && sub_compact->compaction->output_level() != 0) {
     sub_compact->FillFilesToCutForTtl();
     // ShouldStopBefore() maintains state based on keys processed so far. The
-    // compaction loop always calls it on the "next" key, thus won't tell it the
-    // first key. So we do that here.
+    // compaction loop always calls it on the "next" key, thus won't tell it
+    // the first key. So we do that here.
     sub_compact->ShouldStopBefore(c_iter->key(),
                                   // sub_compact->current_output_file_size);
                                   0);  // TODO: Is this correct?
@@ -1759,8 +1729,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     sub_compact->num_output_records++;
 
     // Close output file if it is big enough. Two possibilities determine it's
-    // time to close it: (1) the current key should be this file's last key, (2)
-    // the next key should not be in this file.
+    // time to close it: (1) the current key should be this file's last key,
+    // (2) the next key should not be in this file.
     //
     // TODO(aekmekji): determine if file should be closed earlier than this
     // during subcompactions (i.e. if output size, estimated by input size, is
@@ -1770,8 +1740,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     if (sub_compact->compaction->output_level() != 0 &&
         level_output->current_output_file_size >=
             sub_compact->compaction->max_output_file_size()) {
-      // (1) this key terminates the file. For historical reasons, the iterator
-      // status before advancing will be given to FinishCompactionOutputFile().
+      // (1) this key terminates the file. For historical reasons, the
+      // iterator status before advancing will be given to
+      // FinishCompactionOutputFile().
       output_file_ended = true;
     }
     TEST_SYNC_POINT_CALLBACK(
@@ -2015,8 +1986,8 @@ Status CompactionJob::FinishCompactionOutputFile(
     const Slice *lower_bound, *upper_bound;
     bool lower_bound_from_sub_compact = false;
     if (level_output->outputs.size() == 1) {
-      // For the first output table, include range tombstones before the min key
-      // but after the subcompaction boundary.
+      // For the first output table, include range tombstones before the min
+      // key but after the subcompaction boundary.
       lower_bound = sub_compact->start;
       lower_bound_from_sub_compact = true;
     } else if (meta->smallest.size() > 0) {
@@ -2086,16 +2057,17 @@ Status CompactionJob::FinishCompactionOutputFile(
           // Tombstones starting after upper_bound only need to be included in
           // the next table. If the current SST ends before upper_bound, i.e.,
           // `has_overlapping_endpoints == false`, we can also skip over range
-          // tombstones that start exactly at upper_bound. Such range tombstones
-          // will be included in the next file and are not relevant to the point
-          // keys or endpoints of the current file.
+          // tombstones that start exactly at upper_bound. Such range
+          // tombstones will be included in the next file and are not relevant
+          // to the point keys or endpoints of the current file.
           break;
         }
       }
 
       if (bottommost_level_ && tombstone.seq_ <= earliest_snapshot) {
         // TODO(andrewkr): tombstones that span multiple output files are
-        // counted for each compaction output file, so lots of double counting.
+        // counted for each compaction output file, so lots of double
+        // counting.
         range_del_out_stats->num_range_del_drop_obsolete++;
         range_del_out_stats->num_record_drop_obsolete++;
         continue;
@@ -2115,19 +2087,19 @@ Status CompactionJob::FinishCompactionOutputFile(
         //
         // When lower_bound is chosen by a subcompaction, we know that
         // subcompactions over smaller keys cannot contain any keys at
-        // lower_bound. We also know that smaller subcompactions exist, because
-        // otherwise the subcompaction woud be unbounded on the left. As a
-        // result, we know that no other files on the output level will contain
-        // actual keys at lower_bound (an output file may have a largest key of
-        // lower_bound@kMaxSequenceNumber, but this only indicates a large range
-        // tombstone was truncated). Therefore, it is safe to use the
-        // tombstone's sequence number, to ensure that keys at lower_bound at
-        // lower levels are covered by truncated tombstones.
+        // lower_bound. We also know that smaller subcompactions exist,
+        // because otherwise the subcompaction woud be unbounded on the left.
+        // As a result, we know that no other files on the output level will
+        // contain actual keys at lower_bound (an output file may have a
+        // largest key of lower_bound@kMaxSequenceNumber, but this only
+        // indicates a large range tombstone was truncated). Therefore, it is
+        // safe to use the tombstone's sequence number, to ensure that keys at
+        // lower_bound at lower levels are covered by truncated tombstones.
         //
         // If lower_bound was chosen by the smallest data key in the file,
-        // choose lowest seqnum so this file's smallest internal key comes after
-        // the previous file's largest. The fake seqnum is OK because the read
-        // path's file-picking code only considers user key.
+        // choose lowest seqnum so this file's smallest internal key comes
+        // after the previous file's largest. The fake seqnum is OK because
+        // the read path's file-picking code only considers user key.
         smallest_candidate = InternalKey(
             *lower_bound, lower_bound_from_sub_compact ? tombstone.seq_ : 0,
             kTypeRangeDeletion);
@@ -2141,8 +2113,8 @@ Status CompactionJob::FinishCompactionOutputFile(
         //
         // Choose highest seqnum so this file's largest internal key comes
         // before the next file's/subcompaction's smallest. The fake seqnum is
-        // OK because the read path's file-picking code only considers the user
-        // key portion.
+        // OK because the read path's file-picking code only considers the
+        // user key portion.
         //
         // Note Seek() also creates InternalKey with (user_key,
         // kMaxSequenceNumber), but with kTypeDeletion (0x7) instead of
@@ -2321,8 +2293,9 @@ Status CompactionJob::WriteCompactionOutputFile(
       s = add_s;
     }
     if (sfm->IsMaxAllowedSpaceReached()) {
-      // TODO(ajkr): should we return OK() if max space was reached by the final
-      // compaction output file (similarly to how flush works when full)?
+      // TODO(ajkr): should we return OK() if max space was reached by the
+      // final compaction output file (similarly to how flush works when
+      // full)?
       s = Status::SpaceLimit("Max allowed space was reached");
       TEST_SYNC_POINT(
           "CompactionJob::FinishCompactionOutputFile:"
@@ -2469,8 +2442,8 @@ Status CompactionJob::OpenCompactionOutputFile(
   s = io_s;
   if (sub_compact->io_status.ok()) {
     sub_compact->io_status = io_s;
-    // Since this error is really a copy of the io_s that is checked below as s,
-    // it does not also need to be checked.
+    // Since this error is really a copy of the io_s that is checked below as
+    // s, it does not also need to be checked.
     sub_compact->io_status.PermitUncheckedError();
   }
   if (!s.ok()) {
@@ -2514,7 +2487,8 @@ Status CompactionJob::OpenCompactionOutputFile(
     oldest_ancester_time = current_time;
   }
 
-  // Initialize a SubcompactionState::Output and add it to sub_compact->outputs
+  // Initialize a SubcompactionState::Output and add it to
+  // sub_compact->outputs
   {
     FileMetaData meta;
     meta.fd = FileDescriptor(file_number, level_output->path_id(), 0);
@@ -2568,8 +2542,8 @@ void CompactionJob::CleanupCompaction() {
 
     sub_compact.start_level_output.CleanupCompaction(sub_status, table_cache_);
     sub_compact.latter_level_output.CleanupCompaction(sub_status, table_cache_);
-    // TODO: sub_compact.io_status is not checked like status. Not sure if thats
-    // intentional. So ignoring the io_status as of now.
+    // TODO: sub_compact.io_status is not checked like status. Not sure if
+    // thats intentional. So ignoring the io_status as of now.
     sub_compact.io_status.PermitUncheckedError();
   }
   delete compact_;
@@ -2848,9 +2822,8 @@ enum BinaryFormatVersion : uint32_t {
 // ex: offset_of(&ColumnFamilyDescriptor::options)
 // This call will return the offset of options in ColumnFamilyDescriptor class
 //
-// This is the same as offsetof() but allow us to work with non standard-layout
-// classes and structures
-// refs:
+// This is the same as offsetof() but allow us to work with non
+// standard-layout classes and structures refs:
 // http://en.cppreference.com/w/cpp/concept/StandardLayoutType
 // https://gist.github.com/graphitemaster/494f21190bb2c63c5516
 static ColumnFamilyDescriptor dummy_cfd("", ColumnFamilyOptions());
