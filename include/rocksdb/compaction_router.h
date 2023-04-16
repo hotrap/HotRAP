@@ -10,12 +10,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-struct HotRecInfo {
-  rocksdb::Slice slice;
-  double count;
-  size_t vlen;
-};
-
 enum class TimerType : size_t {
   kUpdateFilesByCompactionPri = 0,
   kGetKeyValueFromLevelsBelow,
@@ -82,7 +76,7 @@ class PeekablePointerIter {
 
 class CompactionRouter : public Customizable {
  public:
-  using Iter = PointerIter<const HotRecInfo>;
+  using Iter = PointerIter<const rocksdb::Slice>;
   enum class Decision {
     kUndetermined,
     kNextLevel,

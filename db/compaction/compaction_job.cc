@@ -1344,7 +1344,7 @@ class RouterIterator {
   void GetKeyValueFromLevelsBelow() {
     auto start_time = CompactionRouter::Start();
     assert(latter_tier_iter_.has_iter());
-    const Slice& user_key = latter_tier_iter_.peek()->slice;
+    const Slice& user_key = *latter_tier_iter_.peek();
     LookupKey lkey(user_key, kMaxSequenceNumber);
     MergeContext merge_context;
     SequenceNumber max_covering_tombstone_seq = 0;
@@ -1380,13 +1380,13 @@ class RouterIterator {
       value_ = &c_iter_->value();
       return;
     }
-    const HotRecInfo* latter_hot;
+    const rocksdb::Slice* latter_hot;
     if (latter_tier_iter_.has_iter())
       latter_hot = latter_tier_iter_.peek();
     else
       latter_hot = NULL;
     if (latter_hot != NULL) {
-      int res = ucmp_->Compare(latter_hot->slice, c_iter_->user_key());
+      int res = ucmp_->Compare(*latter_hot, c_iter_->user_key());
       if (res < 0) {
         source_ = Source::kLevelBelow;
         decision_ = CompactionRouter::Decision::kCurrentLevel;
@@ -1414,20 +1414,19 @@ class RouterIterator {
       }
     }
     source_ = Source::kCompactionIterator;
-    const HotRecInfo* start_hot;
+    const rocksdb::Slice* start_hot;
     if (!start_tier_iter_.has_iter()) {
       start_hot = NULL;
     } else {
       start_hot = start_tier_iter_.peek();
       for (;;) {
         if (start_hot == NULL ||
-            ucmp_->Compare(start_hot->slice, c_iter_->user_key()) >= 0)
+            ucmp_->Compare(*start_hot, c_iter_->user_key()) >= 0)
           break;
         start_hot = start_tier_iter_.next();
       }
     }
-    if (start_hot &&
-        ucmp_->Compare(start_hot->slice, c_iter_->user_key()) == 0) {
+    if (start_hot && ucmp_->Compare(*start_hot, c_iter_->user_key()) == 0) {
       decision_ = CompactionRouter::Decision::kCurrentLevel;
     } else {
       decision_ = CompactionRouter::Decision::kNextLevel;
