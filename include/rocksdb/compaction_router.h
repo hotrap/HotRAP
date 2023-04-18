@@ -51,7 +51,7 @@ class PeekablePointerIter {
   using value_type = typename Iter::value_type;
   PeekablePointerIter() : cur_(NULL) {}
   PeekablePointerIter(std::unique_ptr<PointerIter<value_type>> &&iter)
-      : iter_(std::move(iter)), cur_(iter_->next()) {}
+      : iter_(std::move(iter)), cur_(iter_ == nullptr ? NULL : iter_->next()) {}
   PeekablePointerIter(const PeekablePointerIter &) = delete;
   PeekablePointerIter &operator=(const PeekablePointerIter &) = delete;
   PeekablePointerIter(PeekablePointerIter &&rhs)
