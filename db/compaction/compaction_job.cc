@@ -1308,8 +1308,9 @@ class RouterIterator {
   }
   ~RouterIterator() {
     if (router_ && start_tier_ != latter_tier_) {
-      router_->DelRange(latter_tier_, *start_level_smallest_user_key_,
-                        *start_level_largest_user_key_);
+      router_->TransferRange(start_tier_, latter_tier_,
+                             *start_level_smallest_user_key_,
+                             *start_level_largest_user_key_);
     }
   }
   bool Valid() {
