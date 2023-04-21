@@ -53,6 +53,7 @@
 #include "rocksdb/compaction_router.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
+#include "rocksdb/slice.h"
 #include "rocksdb/sst_partitioner.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
@@ -1298,6 +1299,19 @@ struct Elem {
         .value = c_iter.value(),
     };
   }
+  static Elem from(CompactionRouter::Decision decision,
+                   const InternalKey& internal_key,
+                   const PinnableSlice& value) {
+    Slice key = internal_key.Encode();
+    ParsedInternalKey ikey;
+    ParseInternalKey(key, &ikey, true);
+    return Elem{
+        .decision = decision,
+        .key = key,
+        .ikey = ikey,
+        .value = static_cast<Slice>(value),
+    };
+  }
 };
 
 class IteratorWithoutRouter : public TraitIterator<Elem> {
@@ -1319,6 +1333,112 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
  private:
   bool first_;
   CompactionIterator& c_iter_;
+};
+
+// Return successful or not
+static bool GetKeyValueFromLevelsBelow(CompactionRouter& router,
+                                       const Compaction& c,
+                                       Peekable<CompactionRouter::Iter>& iter,
+                                       InternalKey& key_from_below,
+                                       PinnableSlice& value_from_below) {
+  auto start_time = CompactionRouter::Start();
+  assert(iter.has_iter());
+  const Slice& user_key = *iter.peek();
+  LookupKey lkey(user_key, kMaxSequenceNumber);
+  MergeContext merge_context;
+  SequenceNumber max_covering_tombstone_seq = 0;
+  SequenceNumber seq;
+  Status status;
+  c.input_version()->Get(ReadOptions(), lkey, &value_from_below, nullptr,
+                         &status, &merge_context, &max_covering_tombstone_seq,
+                         nullptr, nullptr, &seq, nullptr, nullptr, true,
+                         c.output_level());
+  router.Stop(TimerType::kGetKeyValueFromLevelsBelow, start_time);
+
+  if (status.ok()) {
+    key_from_below = InternalKey(user_key, seq, ValueType::kTypeValue);
+    return true;
+  } else {
+    if (status.IsNotFound()) {
+      assert(iter.has_iter());
+      iter.next();
+      return false;
+    } else {
+      // TODO: Handle the error gracefully
+      std::string err = status.ToString();
+      ROCKS_LOG_FATAL(c.immutable_options()->logger, "WTF? %s", err.c_str());
+      return false;
+    }
+  }
+}
+
+class RouterIterator2SDLastTier : public TraitIterator<Elem> {
+ public:
+  RouterIterator2SDLastTier(CompactionRouter& router, const Compaction& c,
+                            CompactionIterator& c_iter)
+      : router_(router),
+        c_(c),
+        c_iter_(c_iter),
+        ucmp_(c.column_family_data()->user_comparator()),
+        source_(Source::kUndetermined),
+        latter_tier_iter_(router.LowerBound(router.Tier(c.output_level() + 1),
+                                            c.GetSmallestUserKey())) {}
+  ~RouterIterator2SDLastTier() override {}
+  std::unique_ptr<Elem> next() override {
+    switch (source_) {
+      case Source::kUndetermined:
+        break;
+      case Source::kCompactionIterator:
+        c_iter_.Next();
+        break;
+      case Source::kLevelBelow:
+        value_from_below_.Reset();
+        assert(latter_tier_iter_.has_iter());
+        latter_tier_iter_.next();
+        break;
+    }
+    return __next();
+  }
+
+ private:
+  std::unique_ptr<Elem> __next() {
+    if (!c_iter_.Valid()) {
+      return nullptr;
+    }
+    const rocksdb::Slice* latter_hot;
+    if (latter_tier_iter_.has_iter() && latter_tier_iter_.peek() != NULL) {
+      int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
+      if (res < 0) {
+        bool is_successful = GetKeyValueFromLevelsBelow(
+            router_, c_, latter_tier_iter_, key_from_below_, value_from_below_);
+        if (!is_successful) {
+          // Expect the compiler to optimize the tail recursion.
+          return __next();
+        }
+        source_ = Source::kLevelBelow;
+        return std::unique_ptr<Elem>(
+            new Elem(Elem::from(CompactionRouter::Decision::kNextLevel,
+                                key_from_below_, value_from_below_)));
+      }
+    }
+    source_ = Source::kCompactionIterator;
+    return std::unique_ptr<Elem>(new Elem(Elem::from_compaction_iter(
+        CompactionRouter::Decision::kNextLevel, c_iter_)));
+  }
+  enum class Source {
+    kUndetermined,
+    kCompactionIterator,
+    kLevelBelow,
+  };
+  CompactionRouter& router_;
+  const Compaction& c_;
+  CompactionIterator& c_iter_;
+
+  const Comparator* ucmp_;
+  Source source_;
+  Peekable<CompactionRouter::Iter> latter_tier_iter_;
+  InternalKey key_from_below_;
+  PinnableSlice value_from_below_;
 };
 class RouterIteratorSD2CD : public TraitIterator<Elem> {
  public:
@@ -1398,7 +1518,16 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     if (latter_tier_iter_.has_iter() && latter_tier_iter_.peek() != NULL) {
       int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
       if (res < 0) {
-        return GetKeyValueFromLevelsBelow();
+        bool is_successful = GetKeyValueFromLevelsBelow(
+            router_, c_, latter_tier_iter_, key_from_below_, value_from_below_);
+        if (!is_successful) {
+          // Expect the compiler to optimize the tail recursion.
+          return __next();
+        }
+        source_ = Source::kLevelBelow;
+        return std::unique_ptr<Elem>(
+            new Elem(Elem::from(CompactionRouter::Decision::kCurrentLevel,
+                                key_from_below_, value_from_below_)));
       }
       if (res == 0) {
         source_ = Source::kLatterLevel;
@@ -1430,47 +1559,6 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     previous_user_key_ = c_iter_.user_key().ToString();
     return std::unique_ptr<Elem>(
         new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
-  }
-  std::unique_ptr<Elem> GetKeyValueFromLevelsBelow() {
-    auto start_time = CompactionRouter::Start();
-    source_ = Source::kLevelBelow;
-    assert(latter_tier_iter_.has_iter());
-    const Slice& user_key = *latter_tier_iter_.peek();
-    LookupKey lkey(user_key, kMaxSequenceNumber);
-    MergeContext merge_context;
-    SequenceNumber max_covering_tombstone_seq = 0;
-    SequenceNumber seq;
-    Status status;
-    c_.input_version()->Get(ReadOptions(), lkey, &value_from_below_, nullptr,
-                            &status, &merge_context,
-                            &max_covering_tombstone_seq, nullptr, nullptr, &seq,
-                            nullptr, nullptr, true, c_.output_level());
-    router_.Stop(TimerType::kGetKeyValueFromLevelsBelow, start_time);
-
-    if (status.ok()) {
-      key_from_below_ = InternalKey(user_key, seq, ValueType::kTypeValue);
-      Slice key = key_from_below_.Encode();
-      ParsedInternalKey ikey;
-      ParseInternalKey(key, &ikey, true);
-      return std::unique_ptr<Elem>(new Elem{
-          .decision = CompactionRouter::Decision::kCurrentLevel,
-          .key = key,
-          .ikey = ikey,
-          .value = static_cast<Slice>(value_from_below_),
-      });
-    } else {
-      if (status.IsNotFound()) {
-        assert(latter_tier_iter_.has_iter());
-        latter_tier_iter_.next();
-        // Expect the compiler to optimize the tail recursion.
-        return __next();
-      } else {
-        // TODO: Handle the error gracefully
-        std::string err = status.ToString();
-        ROCKS_LOG_FATAL(c_.immutable_options()->logger, "WTF? %s", err.c_str());
-        return nullptr;
-      }
-    }
   }
 
   CompactionRouter& router_;
@@ -1515,6 +1603,9 @@ class RouterIterator {
         iter_ = std::unique_ptr<RouterIteratorSD2CD>(
             new RouterIteratorSD2CD(*router, c, start_level_smallest_user_key,
                                     start_level_largest_user_key, c_iter));
+      } else if (router->Tier(latter_level + 1) != latter_tier) {
+        iter_ = std::unique_ptr<RouterIterator2SDLastTier>(
+            new RouterIterator2SDLastTier(*router, c, c_iter));
       } else {
         iter_ = std::unique_ptr<IteratorWithoutRouter>(
             new IteratorWithoutRouter(c_iter));
