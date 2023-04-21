@@ -1299,9 +1299,9 @@ class RouterIterator {
       assert(start_tier_ < latter_tier_);
       // TODO: Handle other cases.
       assert(start_tier_ + 1 == latter_tier_);
-      start_tier_iter_ = PeekablePointerIter<CompactionRouter::Iter>(
+      start_tier_iter_ = Peekable<CompactionRouter::Iter>(
           router->LowerBound(start_tier_, *start_level_smallest_user_key));
-      latter_tier_iter_ = PeekablePointerIter<CompactionRouter::Iter>(
+      latter_tier_iter_ = Peekable<CompactionRouter::Iter>(
           router->LowerBound(latter_tier_, *start_level_smallest_user_key));
     }
     HandleNext();
@@ -1424,7 +1424,8 @@ class RouterIterator {
         if (start_hot == NULL ||
             ucmp_->Compare(*start_hot, c_iter_->user_key()) >= 0)
           break;
-        start_hot = start_tier_iter_.next();
+        start_tier_iter_.next();
+        start_hot = start_tier_iter_.peek();
       }
     }
     if (start_hot && ucmp_->Compare(*start_hot, c_iter_->user_key()) == 0) {
@@ -1454,8 +1455,8 @@ class RouterIterator {
   CompactionIterator* c_iter_;
   size_t start_tier_;
   size_t latter_tier_;
-  PeekablePointerIter<CompactionRouter::Iter> start_tier_iter_;
-  PeekablePointerIter<CompactionRouter::Iter> latter_tier_iter_;
+  Peekable<CompactionRouter::Iter> start_tier_iter_;
+  Peekable<CompactionRouter::Iter> latter_tier_iter_;
   InternalKey key_from_below_;
   PinnableSlice value_from_below_;
   enum class Source {

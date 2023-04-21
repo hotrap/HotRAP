@@ -34,49 +34,49 @@ struct TimerStatus {
 };
 
 template <typename T>
-class PointerIter {
+class TraitIterator {
  public:
-  using value_type = T;
-  PointerIter() {}
-  PointerIter(const PointerIter &) = delete;
-  PointerIter &operator=(const PointerIter &) = delete;
-  virtual ~PointerIter() = default;
-  // The returned reference should stay valid until the next call to it.
-  virtual T *next() = 0;
+  using Item = T;
+  TraitIterator() {}
+  TraitIterator(const TraitIterator &) = delete;
+  TraitIterator &operator=(const TraitIterator &) = delete;
+  virtual ~TraitIterator() = default;
+  // TODO: Return std::optional<T> if upgrade to C++17
+  virtual std::unique_ptr<T> next() = 0;
 };
 
 template <typename Iter>
-class PeekablePointerIter {
+class Peekable : TraitIterator<typename Iter::Item> {
  public:
-  using value_type = typename Iter::value_type;
-  PeekablePointerIter() : cur_(NULL) {}
-  PeekablePointerIter(std::unique_ptr<PointerIter<value_type>> &&iter)
+  using Item = typename Iter::Item;
+  Peekable() : cur_(nullptr) {}
+  Peekable(std::unique_ptr<TraitIterator<Item>> &&iter)
       : iter_(std::move(iter)), cur_(iter_ == nullptr ? NULL : iter_->next()) {}
-  PeekablePointerIter(const PeekablePointerIter &) = delete;
-  PeekablePointerIter &operator=(const PeekablePointerIter &) = delete;
-  PeekablePointerIter(PeekablePointerIter &&rhs)
-      : iter_(std::move(rhs.iter_)), cur_(rhs.cur_) {}
-  PeekablePointerIter &operator=(PeekablePointerIter &&rhs) {
+  Peekable(const Peekable &) = delete;
+  Peekable &operator=(const Peekable &) = delete;
+  Peekable(Peekable &&rhs) : iter_(std::move(rhs.iter_)), cur_(rhs.cur_) {}
+  Peekable &operator=(Peekable &&rhs) {
     iter_ = std::move(rhs.iter_);
-    cur_ = rhs.cur_;
+    cur_ = std::move(rhs.cur_);
     return *this;
   }
+  ~Peekable() override = default;
   bool has_iter() const { return iter_ != nullptr; }
-  const value_type *peek() const { return cur_; }
-  value_type *next() {
-    value_type *ret = cur_;
+  const Item *peek() const { return cur_.get(); }
+  std::unique_ptr<Item> next() override {
+    std::unique_ptr<Item> ret = std::move(cur_);
     cur_ = iter_->next();
     return ret;
   }
 
  private:
-  std::unique_ptr<PointerIter<value_type>> iter_;
-  value_type *cur_;
+  std::unique_ptr<TraitIterator<Item>> iter_;
+  std::unique_ptr<Item> cur_;
 };
 
 class CompactionRouter : public Customizable {
  public:
-  using Iter = PointerIter<const rocksdb::Slice>;
+  using Iter = TraitIterator<rocksdb::Slice>;
   enum class Decision {
     kUndetermined,
     kNextLevel,
