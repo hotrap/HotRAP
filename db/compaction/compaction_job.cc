@@ -1395,13 +1395,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       return std::unique_ptr<Elem>(
           new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
     }
-    const rocksdb::Slice* latter_hot;
-    if (latter_tier_iter_.has_iter())
-      latter_hot = latter_tier_iter_.peek();
-    else
-      latter_hot = NULL;
-    if (latter_hot != NULL) {
-      int res = ucmp_->Compare(*latter_hot, c_iter_.user_key());
+    if (latter_tier_iter_.has_iter() && latter_tier_iter_.peek() != NULL) {
+      int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
       if (res < 0) {
         return GetKeyValueFromLevelsBelow();
       }
