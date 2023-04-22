@@ -13,6 +13,7 @@ namespace ROCKSDB_NAMESPACE {
 enum class TimerType : size_t {
   kUpdateFilesByCompactionPri = 0,
   kGetKeyValueFromLevelsBelow,
+  kProcessKeyValueCompaction,
   kEnd,
 };
 constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
@@ -31,6 +32,38 @@ struct TimerStatus {
   const char *name;
   uint64_t count;
   uint64_t nsec;
+};
+
+class SingleTimer {
+ public:
+  SingleTimer() : count_(0), nsec_(0) {}
+  uint64_t count() const { return count_.load(); }
+  uint64_t nsec() const { return nsec_.load(); }
+  void add(uint64_t nsec) {
+    count_.fetch_add(1, std::memory_order_relaxed);
+    nsec_.fetch_add(nsec, std::memory_order_relaxed);
+  }
+
+ private:
+  std::atomic<uint64_t> count_;
+  std::atomic<uint64_t> nsec_;
+};
+
+class TimerGuard {
+ public:
+  TimerGuard(SingleTimer &timer)
+      : timer_(timer), start_time_(std::chrono::steady_clock::now()) {}
+  ~TimerGuard() {
+    auto end_time = std::chrono::steady_clock::now();
+    auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    end_time - start_time_)
+                    .count();
+    timer_.add(nsec);
+  }
+
+ private:
+  SingleTimer &timer_;
+  std::chrono::steady_clock::time_point start_time_;
 };
 
 template <typename T>
@@ -146,25 +179,14 @@ class CompactionRouter : public Customizable {
                     .count();
     AddTimerInLevel(level, type, nsec);
   }
+  TimerGuard GetTimerGuard(TimerType type) {
+    return TimerGuard(timers_[static_cast<size_t>(type)]);
+  }
 
  private:
-  class Timer {
-   public:
-    Timer() : count_(0), nsec_(0) {}
-    uint64_t count() const { return count_.load(); }
-    uint64_t nsec() const { return nsec_.load(); }
-    void add(uint64_t nsec) {
-      count_.fetch_add(1, std::memory_order_relaxed);
-      nsec_.fetch_add(nsec, std::memory_order_relaxed);
-    }
-
-   private:
-    std::atomic<uint64_t> count_;
-    std::atomic<uint64_t> nsec_;
-  };
-  Timer timers_[timer_num];
+  SingleTimer timers_[timer_num];
   static constexpr size_t MAX_LEVEL_NUM = 10;
-  Timer per_level_timers_[MAX_LEVEL_NUM][per_level_timer_num];
+  SingleTimer per_level_timers_[MAX_LEVEL_NUM][per_level_timer_num];
   std::atomic<int> num_used_levels_;
 };
 
