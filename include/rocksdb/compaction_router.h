@@ -77,11 +77,6 @@ class Peekable : TraitIterator<typename Iter::Item> {
 class CompactionRouter : public Customizable {
  public:
   using Iter = TraitIterator<rocksdb::Slice>;
-  enum class Decision {
-    kUndetermined,
-    kNextLevel,
-    kCurrentLevel,
-  };
   CompactionRouter() : num_used_levels_(0) {}
   virtual ~CompactionRouter() {}
   static const char *Type() { return "CompactionRouter"; }

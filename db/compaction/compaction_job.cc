@@ -1280,16 +1280,22 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
 }
 #endif  // !ROCKSDB_LITE
 
+enum class Decision {
+  kUndetermined,
+  kNextLevel,
+  kStartLevel,
+};
+
 struct Elem {
-  CompactionRouter::Decision decision;
+  Decision decision;
   Slice key;
   ParsedInternalKey ikey;
   Slice value;
   Elem(const Elem&) = default;
 
-  static Elem from_compaction_iter(CompactionRouter::Decision decision,
+  static Elem from_compaction_iter(Decision decision,
                                    CompactionIterator& c_iter) {
-    if (decision == CompactionRouter::Decision::kNextLevel) {
+    if (decision == Decision::kNextLevel) {
       c_iter.ZeroOutSequenceIfPossible();
     }
     return Elem{
@@ -1299,8 +1305,7 @@ struct Elem {
         .value = c_iter.value(),
     };
   }
-  static Elem from(CompactionRouter::Decision decision,
-                   const InternalKey& internal_key,
+  static Elem from(Decision decision, const InternalKey& internal_key,
                    const PinnableSlice& value) {
     Slice key = internal_key.Encode();
     ParsedInternalKey ikey;
@@ -1326,8 +1331,8 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
       c_iter_.Next();
     }
     if (!c_iter_.Valid()) return nullptr;
-    return std::unique_ptr<Elem>(new Elem(Elem::from_compaction_iter(
-        CompactionRouter::Decision::kNextLevel, c_iter_)));
+    return std::unique_ptr<Elem>(
+        new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
   }
 
  private:
@@ -1416,16 +1421,15 @@ class RouterIterator2SDLastTier : public TraitIterator<Elem> {
           return __next();
         }
         source_ = Source::kLevelBelow;
-        return std::unique_ptr<Elem>(
-            new Elem(Elem::from(CompactionRouter::Decision::kNextLevel,
-                                key_from_below_, value_from_below_)));
+        return std::unique_ptr<Elem>(new Elem(Elem::from(
+            Decision::kNextLevel, key_from_below_, value_from_below_)));
       } else if (res == 0) {
         latter_tier_iter_.next();
       }
     }
     source_ = Source::kCompactionIterator;
-    return std::unique_ptr<Elem>(new Elem(Elem::from_compaction_iter(
-        CompactionRouter::Decision::kNextLevel, c_iter_)));
+    return std::unique_ptr<Elem>(
+        new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
   }
   enum class Source {
     kUndetermined,
@@ -1454,7 +1458,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         start_level_largest_user_key_(start_level_largest_user_key),
         c_iter_(c_iter),
         source_(Source::kUndetermined),
-        previous_decision_(CompactionRouter::Decision::kUndetermined) {
+        previous_decision_(Decision::kUndetermined) {
     ColumnFamilyData* cfd = c.column_family_data();
     ucmp_ = cfd->user_comparator();
 
@@ -1507,11 +1511,11 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
             0 ||
         ucmp_->Compare(start_level_largest_user_key_, c_iter_.user_key()) < 0) {
       source_ = Source::kCompactionIterator;
-      return std::unique_ptr<Elem>(new Elem(Elem::from_compaction_iter(
-          CompactionRouter::Decision::kNextLevel, c_iter_)));
+      return std::unique_ptr<Elem>(
+          new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
     }
     // Make sure that all versions of the same user key share the same decision.
-    if (previous_decision_ != CompactionRouter::Decision::kUndetermined &&
+    if (previous_decision_ != Decision::kUndetermined &&
         ucmp_->Compare(c_iter_.user_key(), Slice(previous_user_key_)) == 0) {
       source_ = Source::kCompactionIterator;
       return std::unique_ptr<Elem>(
@@ -1527,13 +1531,12 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
           return __next();
         }
         source_ = Source::kLevelBelow;
-        return std::unique_ptr<Elem>(
-            new Elem(Elem::from(CompactionRouter::Decision::kCurrentLevel,
-                                key_from_below_, value_from_below_)));
+        return std::unique_ptr<Elem>(new Elem(Elem::from(
+            Decision::kStartLevel, key_from_below_, value_from_below_)));
       }
       if (res == 0) {
         source_ = Source::kLatterLevel;
-        previous_decision_ = CompactionRouter::Decision::kCurrentLevel;
+        previous_decision_ = Decision::kStartLevel;
         previous_user_key_ = c_iter_.user_key().ToString();
         return std::unique_ptr<Elem>(
             new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
@@ -1554,9 +1557,9 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       }
     }
     if (start_hot && ucmp_->Compare(*start_hot, c_iter_.user_key()) == 0) {
-      previous_decision_ = CompactionRouter::Decision::kCurrentLevel;
+      previous_decision_ = Decision::kStartLevel;
     } else {
-      previous_decision_ = CompactionRouter::Decision::kNextLevel;
+      previous_decision_ = Decision::kNextLevel;
     }
     previous_user_key_ = c_iter_.user_key().ToString();
     return std::unique_ptr<Elem>(
@@ -1582,7 +1585,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     kLevelBelow,
   };
   Source source_;
-  CompactionRouter::Decision previous_decision_;
+  Decision previous_decision_;
   std::string previous_user_key_;
   InternalKey key_from_below_;
   PinnableSlice value_from_below_;
@@ -1620,7 +1623,7 @@ class RouterIterator {
     assert(Valid());
     cur_ = iter_->next();
   }
-  CompactionRouter::Decision decision() { return cur_->decision; }
+  Decision decision() { return cur_->decision; }
   const Slice& key() const { return cur_->key; }
   const ParsedInternalKey& ikey() const { return cur_->ikey; }
   const Slice& user_key() const { return cur_->ikey.user_key; }
@@ -1849,13 +1852,13 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
     SubcompactionState::LevelOutput* level_output = NULL;
     switch (router_iter.decision()) {
-      case CompactionRouter::Decision::kCurrentLevel:
+      case Decision::kStartLevel:
         level_output = &sub_compact->start_level_output;
         break;
-      case CompactionRouter::Decision::kNextLevel:
+      case Decision::kNextLevel:
         level_output = &sub_compact->latter_level_output;
         break;
-      case CompactionRouter::Decision::kUndetermined:
+      case Decision::kUndetermined:
         assert(false);
         break;
     }
