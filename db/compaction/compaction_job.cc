@@ -1419,6 +1419,8 @@ class RouterIterator2SDLastTier : public TraitIterator<Elem> {
         return std::unique_ptr<Elem>(
             new Elem(Elem::from(CompactionRouter::Decision::kNextLevel,
                                 key_from_below_, value_from_below_)));
+      } else if (res == 0) {
+        latter_tier_iter_.next();
       }
     }
     source_ = Source::kCompactionIterator;
