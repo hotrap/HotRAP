@@ -109,7 +109,7 @@ class Peekable : TraitIterator<typename Iter::Item> {
 
 class CompactionRouter : public Customizable {
  public:
-  using Iter = TraitIterator<rocksdb::Slice>;
+  using Iter = TraitIterator<Slice>;
   CompactionRouter() : num_used_levels_(0) {}
   virtual ~CompactionRouter() {}
   static const char *Type() { return "CompactionRouter"; }
@@ -118,14 +118,11 @@ class CompactionRouter : public Customizable {
                                  const CompactionRouter **result);
   const char *Name() const override = 0;
   virtual size_t Tier(int level) = 0;
-  virtual void Access(int level, const Slice &key, size_t vlen) = 0;
-  virtual std::unique_ptr<Iter> LowerBound(size_t tier,
-                                           const rocksdb::Slice &key) = 0;
+  virtual void Access(int level, Slice key, size_t vlen) = 0;
+  virtual std::unique_ptr<Iter> LowerBound(size_t tier, Slice key) = 0;
   virtual void TransferRange(size_t target_tier, size_t source_tier,
-                             const rocksdb::Slice &smallest,
-                             const rocksdb::Slice &largest) = 0;
-  virtual size_t RangeHotSize(size_t tier, const rocksdb::Slice &smallest,
-                              const rocksdb::Slice &largest) = 0;
+                             Slice smallest, Slice largest) = 0;
+  virtual size_t RangeHotSize(size_t tier, Slice smallest, Slice largest) = 0;
 
   static std::chrono::steady_clock::time_point Start() {
     return std::chrono::steady_clock::now();
