@@ -1385,10 +1385,15 @@ class RouterIterator2SDLastTier : public TraitIterator<Elem> {
         c_(c),
         c_iter_(c_iter),
         ucmp_(c.column_family_data()->user_comparator()),
+        start_tier_(router.Tier(c.start_level())),
+        latter_tier_(router.Tier(c.output_level() + 1)),
         source_(Source::kUndetermined),
-        latter_tier_iter_(router.LowerBound(router.Tier(c.output_level() + 1),
-                                            c.GetSmallestUserKey())) {}
-  ~RouterIterator2SDLastTier() override {}
+        latter_tier_iter_(
+            router.LowerBound(latter_tier_, c.GetSmallestUserKey())) {}
+  ~RouterIterator2SDLastTier() override {
+    router_.TransferRange(start_tier_, latter_tier_, c_.GetSmallestUserKey(),
+                          c_.GetLargestUserKey());
+  }
   std::unique_ptr<Elem> next() override {
     switch (source_) {
       case Source::kUndetermined:
@@ -1441,6 +1446,8 @@ class RouterIterator2SDLastTier : public TraitIterator<Elem> {
   CompactionIterator& c_iter_;
 
   const Comparator* ucmp_;
+  const size_t start_tier_;
+  const size_t latter_tier_;
   Source source_;
   Peekable<CompactionRouter::Iter> latter_tier_iter_;
   InternalKey key_from_below_;
