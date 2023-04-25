@@ -1377,10 +1377,10 @@ static bool GetKeyValueFromLevelsBelow(CompactionRouter& router,
   }
 }
 
-class RouterIterator2SDLastTier : public TraitIterator<Elem> {
+class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
  public:
-  RouterIterator2SDLastTier(CompactionRouter& router, const Compaction& c,
-                            CompactionIterator& c_iter)
+  RouterIterator2SDLastLevel(CompactionRouter& router, const Compaction& c,
+                             CompactionIterator& c_iter)
       : router_(router),
         c_(c),
         c_iter_(c_iter),
@@ -1390,7 +1390,7 @@ class RouterIterator2SDLastTier : public TraitIterator<Elem> {
         source_(Source::kUndetermined),
         latter_tier_iter_(
             router.LowerBound(latter_tier_, c.GetSmallestUserKey())) {}
-  ~RouterIterator2SDLastTier() override {
+  ~RouterIterator2SDLastLevel() override {
     router_.TransferRange(start_tier_, latter_tier_, c_.GetSmallestUserKey(),
                           c_.GetLargestUserKey());
   }
@@ -1616,8 +1616,8 @@ class RouterIterator {
             new RouterIteratorSD2CD(*router, c, start_level_smallest_user_key,
                                     start_level_largest_user_key, c_iter));
       } else if (router->Tier(latter_level + 1) != latter_tier) {
-        iter_ = std::unique_ptr<RouterIterator2SDLastTier>(
-            new RouterIterator2SDLastTier(*router, c, c_iter));
+        iter_ = std::unique_ptr<RouterIterator2SDLastLevel>(
+            new RouterIterator2SDLastLevel(*router, c, c_iter));
       } else {
         iter_ = std::unique_ptr<IteratorWithoutRouter>(
             new IteratorWithoutRouter(c_iter));
