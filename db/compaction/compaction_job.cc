@@ -1380,19 +1380,27 @@ static bool GetKeyValueFromLevelsBelow(CompactionRouter& router,
 class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
  public:
   RouterIterator2SDLastLevel(CompactionRouter& router, const Compaction& c,
-                             CompactionIterator& c_iter)
+                             CompactionIterator& c_iter, Slice start, Bound end)
       : router_(router),
         c_(c),
         c_iter_(c_iter),
+        start_(start),
+        end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
         start_tier_(router.Tier(c.start_level())),
         latter_tier_(router.Tier(c.output_level() + 1)),
         source_(Source::kUndetermined),
-        latter_tier_iter_(
-            router.LowerBound(latter_tier_, c.GetSmallestUserKey())) {}
+        latter_tier_iter_(router.LowerBound(latter_tier_, start_)) {}
   ~RouterIterator2SDLastLevel() override {
-    router_.TransferRange(start_tier_, latter_tier_, c_.GetSmallestUserKey(),
-                          c_.GetLargestUserKey());
+    RangeBounds range{
+        .start =
+            Bound{
+                .user_key = start_,
+                .excluded = false,
+            },
+        .end = end_,
+    };
+    router_.TransferRange(start_tier_, latter_tier_, range);
   }
   std::unique_ptr<Elem> next() override {
     switch (source_) {
@@ -1444,6 +1452,8 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
   CompactionRouter& router_;
   const Compaction& c_;
   CompactionIterator& c_iter_;
+  const Slice start_;
+  const Bound end_;
 
   const Comparator* ucmp_;
   const size_t start_tier_;
@@ -1456,14 +1466,12 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
 class RouterIteratorSD2CD : public TraitIterator<Elem> {
  public:
   RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
-                      Slice start_level_smallest_user_key,
-                      Slice start_level_largest_user_key,
-                      CompactionIterator& c_iter)
+                      CompactionIterator& c_iter, Slice start, Bound end)
       : router_(router),
         c_(c),
-        start_level_smallest_user_key_(start_level_smallest_user_key),
-        start_level_largest_user_key_(start_level_largest_user_key),
         c_iter_(c_iter),
+        start_(start),
+        end_(end),
         source_(Source::kUndetermined),
         previous_decision_(Decision::kUndetermined) {
     ColumnFamilyData* cfd = c.column_family_data();
@@ -1477,14 +1485,20 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     // TODO: Handle other cases.
     assert(start_tier_ + 1 == latter_tier_);
     start_tier_iter_ = Peekable<CompactionRouter::Iter>(
-        router.LowerBound(start_tier_, start_level_smallest_user_key));
+        router.LowerBound(start_tier_, start_));
     latter_tier_iter_ = Peekable<CompactionRouter::Iter>(
-        router.LowerBound(latter_tier_, start_level_smallest_user_key));
+        router.LowerBound(latter_tier_, start_));
   }
   ~RouterIteratorSD2CD() {
-    router_.TransferRange(start_tier_, latter_tier_,
-                          start_level_smallest_user_key_,
-                          start_level_largest_user_key_);
+    RangeBounds range{
+        .start =
+            Bound{
+                .user_key = start_,
+                .excluded = false,
+            },
+        .end = end_,
+    };
+    router_.TransferRange(start_tier_, latter_tier_, range);
   }
   std::unique_ptr<Elem> next() override {
     switch (source_) {
@@ -1514,9 +1528,15 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     }
     // Invariant: c_iter.status() is guaranteed to be OK if c_iter->Valid()
     // returns true.
-    if (ucmp_->Compare(c_iter_.user_key(), start_level_smallest_user_key_) <
-            0 ||
-        ucmp_->Compare(start_level_largest_user_key_, c_iter_.user_key()) < 0) {
+    RangeBounds range{
+        .start =
+            Bound{
+                .user_key = start_,
+                .excluded = false,
+            },
+        .end = end_,
+    };
+    if (!range.contains(c_iter_.user_key(), ucmp_)) {
       source_ = Source::kCompactionIterator;
       return std::unique_ptr<Elem>(
           new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
@@ -1575,9 +1595,9 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
 
   CompactionRouter& router_;
   const Compaction& c_;
-  Slice start_level_smallest_user_key_;
-  Slice start_level_largest_user_key_;
   CompactionIterator& c_iter_;
+  const Slice start_;
+  const Bound end_;
 
   const Comparator* ucmp_;
   size_t start_tier_;
@@ -1600,9 +1620,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
 class RouterIterator {
  public:
   RouterIterator(CompactionRouter* router, const Compaction& c,
-                 Slice start_level_smallest_user_key,
-                 Slice start_level_largest_user_key,
-                 CompactionIterator& c_iter) {
+                 CompactionIterator& c_iter, Slice start, Bound end) {
     int start_level = c.level();
     int latter_level = c.output_level();
     if (router == NULL) {
@@ -1613,11 +1631,10 @@ class RouterIterator {
       size_t latter_tier = router->Tier(latter_level);
       if (start_tier != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorSD2CD>(
-            new RouterIteratorSD2CD(*router, c, start_level_smallest_user_key,
-                                    start_level_largest_user_key, c_iter));
+            new RouterIteratorSD2CD(*router, c, c_iter, start, end));
       } else if (router->Tier(latter_level + 1) != latter_tier) {
         iter_ = std::unique_ptr<RouterIterator2SDLastLevel>(
-            new RouterIterator2SDLastLevel(*router, c, c_iter));
+            new RouterIterator2SDLastLevel(*router, c, c_iter, start, end));
       } else {
         iter_ = std::unique_ptr<IteratorWithoutRouter>(
             new IteratorWithoutRouter(c_iter));
@@ -1838,10 +1855,22 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   Slice start_level_smallest_user_key, start_level_largest_user_key;
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
                                      &start_level_largest_user_key);
-
-  RouterIterator router_iter(compaction_router, *c,
-                             start_level_smallest_user_key,
-                             start_level_largest_user_key, *c_iter);
+  Slice promotable_start =
+      start == NULL ? start_level_smallest_user_key
+                    : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
+                           ? start_level_smallest_user_key
+                           : *start);
+  Bound promotable_end =
+      end == NULL
+          ? Bound{.user_key = start_level_largest_user_key, .excluded = false}
+          : (ucmp->Compare(*end, start_level_largest_user_key) <= 0
+                 ? Bound{.user_key = *end, .excluded = true}
+                 : Bound{
+                       .user_key = start_level_largest_user_key,
+                       .excluded = false,
+                   });
+  RouterIterator router_iter(compaction_router, *c, *c_iter, promotable_start,
+                             promotable_end);
 
   std::string previous_user_key;
   while (status.ok() && !cfd->IsDropped() && router_iter.Valid()) {

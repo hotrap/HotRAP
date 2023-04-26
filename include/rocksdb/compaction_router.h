@@ -5,6 +5,7 @@
 #include <memory>
 #include <ostream>
 
+#include "rocksdb/comparator.h"
 #include "rocksdb/customizable.h"
 #include "rocksdb/rocksdb_namespace.h"
 
@@ -107,6 +108,30 @@ class Peekable : TraitIterator<typename Iter::Item> {
   std::unique_ptr<Item> cur_;
 };
 
+struct Bound {
+  Slice user_key;
+  bool excluded;
+};
+
+struct RangeBounds {
+  Bound start, end;
+  bool contains(Slice user_key, const Comparator *ucmp) {
+    int res = ucmp->Compare(user_key, start.user_key);
+    if (start.excluded) {
+      if (res <= 0) return false;
+    } else {
+      if (res < 0) return false;
+    }
+    res = ucmp->Compare(user_key, end.user_key);
+    if (end.excluded) {
+      if (res >= 0) return false;
+    } else {
+      if (res > 0) return false;
+    }
+    return true;
+  }
+};
+
 class CompactionRouter : public Customizable {
  public:
   using Iter = TraitIterator<Slice>;
@@ -121,7 +146,7 @@ class CompactionRouter : public Customizable {
   virtual void Access(int level, Slice key, size_t vlen) = 0;
   virtual std::unique_ptr<Iter> LowerBound(size_t tier, Slice key) = 0;
   virtual void TransferRange(size_t target_tier, size_t source_tier,
-                             Slice smallest, Slice largest) = 0;
+                             RangeBounds range) = 0;
   virtual size_t RangeHotSize(size_t tier, Slice smallest, Slice largest) = 0;
 
   static std::chrono::steady_clock::time_point Start() {
