@@ -1377,92 +1377,6 @@ static bool GetKeyValueFromLevelsBelow(CompactionRouter& router,
   }
 }
 
-class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
- public:
-  RouterIterator2SDLastLevel(CompactionRouter& router, const Compaction& c,
-                             CompactionIterator& c_iter, Slice start, Bound end)
-      : router_(router),
-        c_(c),
-        c_iter_(c_iter),
-        start_(start),
-        end_(end),
-        ucmp_(c.column_family_data()->user_comparator()),
-        start_tier_(router.Tier(c.start_level())),
-        latter_tier_(router.Tier(c.output_level() + 1)),
-        source_(Source::kUndetermined),
-        latter_tier_iter_(router.LowerBound(latter_tier_, start_)) {}
-  ~RouterIterator2SDLastLevel() override {
-    RangeBounds range{
-        .start =
-            Bound{
-                .user_key = start_,
-                .excluded = false,
-            },
-        .end = end_,
-    };
-    router_.TransferRange(start_tier_, latter_tier_, range);
-  }
-  std::unique_ptr<Elem> next() override {
-    switch (source_) {
-      case Source::kUndetermined:
-        break;
-      case Source::kCompactionIterator:
-        c_iter_.Next();
-        break;
-      case Source::kLevelBelow:
-        value_from_below_.Reset();
-        assert(latter_tier_iter_.has_iter());
-        latter_tier_iter_.next();
-        break;
-    }
-    return __next();
-  }
-
- private:
-  std::unique_ptr<Elem> __next() {
-    if (!c_iter_.Valid()) {
-      return nullptr;
-    }
-    const rocksdb::Slice* latter_hot;
-    if (latter_tier_iter_.has_iter() && latter_tier_iter_.peek() != NULL) {
-      int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
-      if (res < 0) {
-        bool is_successful = GetKeyValueFromLevelsBelow(
-            router_, c_, latter_tier_iter_, key_from_below_, value_from_below_);
-        if (!is_successful) {
-          // Expect the compiler to optimize the tail recursion.
-          return __next();
-        }
-        source_ = Source::kLevelBelow;
-        return std::unique_ptr<Elem>(new Elem(Elem::from(
-            Decision::kNextLevel, key_from_below_, value_from_below_)));
-      } else if (res == 0) {
-        latter_tier_iter_.next();
-      }
-    }
-    source_ = Source::kCompactionIterator;
-    return std::unique_ptr<Elem>(
-        new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
-  }
-  enum class Source {
-    kUndetermined,
-    kCompactionIterator,
-    kLevelBelow,
-  };
-  CompactionRouter& router_;
-  const Compaction& c_;
-  CompactionIterator& c_iter_;
-  const Slice start_;
-  const Bound end_;
-
-  const Comparator* ucmp_;
-  const size_t start_tier_;
-  const size_t latter_tier_;
-  Source source_;
-  Peekable<CompactionRouter::Iter> latter_tier_iter_;
-  InternalKey key_from_below_;
-  PinnableSlice value_from_below_;
-};
 class RouterIteratorSD2CD : public TraitIterator<Elem> {
  public:
   RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
@@ -1632,9 +1546,6 @@ class RouterIterator {
       if (start_tier != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorSD2CD>(
             new RouterIteratorSD2CD(*router, c, c_iter, start, end));
-      } else if (router->Tier(latter_level + 1) != latter_tier) {
-        iter_ = std::unique_ptr<RouterIterator2SDLastLevel>(
-            new RouterIterator2SDLastLevel(*router, c, c_iter, start, end));
       } else {
         iter_ = std::unique_ptr<IteratorWithoutRouter>(
             new IteratorWithoutRouter(c_iter));
