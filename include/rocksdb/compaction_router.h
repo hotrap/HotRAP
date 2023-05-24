@@ -14,7 +14,6 @@ namespace ROCKSDB_NAMESPACE {
 enum class TimerType : size_t {
   kUpdateFilesByCompactionPri = 0,
   kGetKeyValueFromLevelsBelow,
-  kProcessKeyValueCompaction,
   kEnd,
 };
 constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
@@ -23,6 +22,7 @@ extern const char *timer_names[];
 
 enum class PerLevelTimerType {
   kPickSST,
+  kProcessKeyValueCompaction,  // start_level
   kEnd,
 };
 constexpr size_t per_level_timer_num =
@@ -186,11 +186,7 @@ class CompactionRouter : public Customizable {
   }
   void AddTimerInLevel(int level, PerLevelTimerType type, uint64_t nsec) {
     level = std::min((size_t)level, MAX_LEVEL_NUM - 1);
-    int num_used_levels = num_used_levels_.load(std::memory_order_relaxed);
-    while (num_used_levels <= level) {
-      num_used_levels_.compare_exchange_weak(num_used_levels, level + 1,
-                                             std::memory_order_relaxed);
-    }
+    MarkLevelUsed(level);
     per_level_timers_[level][static_cast<size_t>(type)].add(nsec);
   }
   void Stop(int level, PerLevelTimerType type,
@@ -204,8 +200,20 @@ class CompactionRouter : public Customizable {
   TimerGuard GetTimerGuard(TimerType type) {
     return TimerGuard(timers_[static_cast<size_t>(type)]);
   }
+  TimerGuard GetTimerGuard(int level, PerLevelTimerType type) {
+    level = std::min((size_t)level, MAX_LEVEL_NUM - 1);
+    MarkLevelUsed(level);
+    return TimerGuard(per_level_timers_[level][static_cast<size_t>(type)]);
+  }
 
  private:
+  void MarkLevelUsed(int level) {
+    int num_used_levels = num_used_levels_.load(std::memory_order_relaxed);
+    while (num_used_levels <= level) {
+      num_used_levels_.compare_exchange_weak(num_used_levels, level + 1,
+                                             std::memory_order_relaxed);
+    }
+  }
   SingleTimer timers_[timer_num];
   static constexpr size_t MAX_LEVEL_NUM = 10;
   SingleTimer per_level_timers_[MAX_LEVEL_NUM][per_level_timer_num];

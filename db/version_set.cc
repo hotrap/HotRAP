@@ -3532,8 +3532,10 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
         assert(false);
     }
     assert(temp.size() == files.size());
-    options.compaction_router->Stop(level, PerLevelTimerType::kPickSST,
-                                    pick_sst_start);
+    if (!files.empty()) {
+      options.compaction_router->Stop(level, PerLevelTimerType::kPickSST,
+                                      pick_sst_start);
+    }
 
     // initialize files_by_compaction_pri_
     for (size_t i = 0; i < temp.size(); i++) {
