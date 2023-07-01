@@ -425,6 +425,9 @@ enum Tickers : uint32_t {
   WARM_FILE_READ_COUNT,
   COLD_FILE_READ_COUNT,
 
+  // HOTRAP
+  PROMOTED_BYTES,
+
   TICKER_ENUM_MAX
 };
 

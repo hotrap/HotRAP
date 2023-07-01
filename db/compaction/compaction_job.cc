@@ -46,6 +46,7 @@
 #include "logging/logging.h"
 #include "monitoring/iostats_context_imp.h"
 #include "monitoring/perf_context_imp.h"
+#include "monitoring/statistics.h"
 #include "monitoring/thread_status_util.h"
 #include "options/configurable_helper.h"
 #include "options/options_helper.h"
@@ -1462,6 +1463,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       return std::unique_ptr<Elem>(
           new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
     }
+    auto stats = c_.immutable_options()->stats;
     if (latter_tier_iter_.has_iter() && latter_tier_iter_.peek() != NULL) {
       int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
       if (res < 0) {
@@ -1472,15 +1474,21 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
           return __next();
         }
         source_ = Source::kLevelBelow;
-        return std::unique_ptr<Elem>(new Elem(Elem::from(
+        auto ret = std::unique_ptr<Elem>(new Elem(Elem::from(
             Decision::kStartLevel, key_from_below_, value_from_below_)));
+        RecordTick(stats, Tickers::PROMOTED_BYTES,
+                   ret->key.size() + ret->value.size());
+        return ret;
       }
       if (res == 0) {
         source_ = Source::kLatterLevel;
         previous_decision_ = Decision::kStartLevel;
         previous_user_key_ = c_iter_.user_key().ToString();
-        return std::unique_ptr<Elem>(
+        auto ret = std::unique_ptr<Elem>(
             new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
+        RecordTick(stats, Tickers::PROMOTED_BYTES,
+                   ret->key.size() + ret->value.size());
+        return ret;
       }
     }
     source_ = Source::kCompactionIterator;
