@@ -1476,7 +1476,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         source_ = Source::kLevelBelow;
         auto ret = std::unique_ptr<Elem>(new Elem(Elem::from(
             Decision::kStartLevel, key_from_below_, value_from_below_)));
-        RecordTick(stats, Tickers::PROMOTED_BYTES,
+        RecordTick(stats, Tickers::PROMOTED_GET_BYTES,
                    ret->key.size() + ret->value.size());
         return ret;
       }
@@ -1486,7 +1486,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         previous_user_key_ = c_iter_.user_key().ToString();
         auto ret = std::unique_ptr<Elem>(
             new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
-        RecordTick(stats, Tickers::PROMOTED_BYTES,
+        RecordTick(stats, Tickers::PROMOTED_ITER_BYTES,
                    ret->key.size() + ret->value.size());
         return ret;
       }
