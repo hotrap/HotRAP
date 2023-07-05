@@ -1387,12 +1387,10 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         ucmp_(c.column_family_data()->user_comparator()),
         start_tier_(router.Tier(c.level())),
         latter_tier_(router.Tier(c.output_level())),
-        start_tier_iter_(
-            Peekable<TraitObjIterator<CompactionRouter::Iter::Item>>(
-                router.LowerBound(start_tier_, start_))),
-        latter_tier_iter_(
-            Peekable<TraitObjIterator<CompactionRouter::Iter::Item>>(
-                router.LowerBound(latter_tier_, start_))),
+        start_tier_iter_(Peekable<CompactionRouter::Iter>(
+            router.LowerBound(start_tier_, start_))),
+        latter_tier_iter_(Peekable<CompactionRouter::Iter>(
+            router.LowerBound(latter_tier_, start_))),
         source_(Source::kUndetermined),
         previous_decision_(Decision::kUndetermined) {
     assert(start_tier_ < latter_tier_);
@@ -1512,8 +1510,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   const Comparator* ucmp_;
   size_t start_tier_;
   size_t latter_tier_;
-  Peekable<TraitObjIterator<CompactionRouter::Iter::Item>> start_tier_iter_;
-  Peekable<TraitObjIterator<CompactionRouter::Iter::Item>> latter_tier_iter_;
+  Peekable<CompactionRouter::Iter> start_tier_iter_;
+  Peekable<CompactionRouter::Iter> latter_tier_iter_;
 
   enum class Source {
     kUndetermined,

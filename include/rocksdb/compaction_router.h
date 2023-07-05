@@ -79,7 +79,7 @@ class TraitIterator {
   virtual std::unique_ptr<T> next() = 0;
 };
 template <typename T>
-class TraitObjIterator : TraitIterator<T> {
+class TraitObjIterator : public TraitIterator<T> {
  public:
   using Item = T;
   TraitObjIterator(const TraitObjIterator<T> &) = delete;
@@ -150,7 +150,7 @@ struct RangeBounds {
 
 class CompactionRouter : public Customizable {
  public:
-  using Iter = TraitIterator<Slice>;
+  using Iter = TraitObjIterator<Slice>;
   CompactionRouter() : num_used_levels_(0) {}
   virtual ~CompactionRouter() {}
   static const char *Type() { return "CompactionRouter"; }
@@ -160,7 +160,7 @@ class CompactionRouter : public Customizable {
   const char *Name() const override = 0;
   virtual size_t Tier(int level) = 0;
   virtual void Access(int level, Slice key, size_t vlen) = 0;
-  virtual std::unique_ptr<Iter> LowerBound(size_t tier, Slice key) = 0;
+  virtual Iter LowerBound(size_t tier, Slice key) = 0;
   virtual void TransferRange(size_t target_tier, size_t source_tier,
                              RangeBounds range) = 0;
   virtual size_t RangeHotSize(size_t tier, Slice smallest, Slice largest) = 0;
