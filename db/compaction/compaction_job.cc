@@ -1409,7 +1409,6 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
         break;
       case Source::kLevelBelow:
         value_from_below_.Reset();
-        assert(latter_tier_iter_.has_iter());
         latter_tier_iter_.next();
         break;
     }
@@ -1422,7 +1421,7 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
       return nullptr;
     }
     const rocksdb::Slice* latter_hot;
-    if (latter_tier_iter_.has_iter() && latter_tier_iter_.peek() != NULL) {
+    if (latter_tier_iter_.peek() != NULL) {
       int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
       if (res < 0) {
         bool is_successful = GetKeyValueFromLevelsBelow(
@@ -1461,7 +1460,7 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
   const size_t start_tier_;
   const size_t latter_tier_;
   Source source_;
-  Peekable<CompactionRouter::Iter> latter_tier_iter_;
+  Peekable<TraitObjIterator<CompactionRouter::Iter::Item>> latter_tier_iter_;
   InternalKey key_from_below_;
   PinnableSlice value_from_below_;
 };
