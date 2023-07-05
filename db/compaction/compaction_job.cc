@@ -1342,13 +1342,11 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
 };
 
 // Return successful or not
-static bool GetKeyValueFromLevelsBelow(CompactionRouter& router,
-                                       const Compaction& c,
-                                       Peekable<CompactionRouter::Iter>& iter,
-                                       InternalKey& key_from_below,
-                                       PinnableSlice& value_from_below) {
+static bool GetKeyValueFromLevelsBelow(
+    CompactionRouter& router, const Compaction& c,
+    Peekable<TraitObjIterator<CompactionRouter::Iter::Item>>& iter,
+    InternalKey& key_from_below, PinnableSlice& value_from_below) {
   auto start_time = CompactionRouter::Start();
-  assert(iter.has_iter());
   const Slice& user_key = *iter.peek();
   LookupKey lkey(user_key, kMaxSequenceNumber);
   MergeContext merge_context;
@@ -1366,7 +1364,6 @@ static bool GetKeyValueFromLevelsBelow(CompactionRouter& router,
     return true;
   } else {
     if (status.IsNotFound()) {
-      assert(iter.has_iter());
       iter.next();
       return false;
     } else {
@@ -1387,22 +1384,20 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         c_iter_(c_iter),
         start_(start),
         end_(end),
+        ucmp_(c.column_family_data()->user_comparator()),
+        start_tier_(router.Tier(c.level())),
+        latter_tier_(router.Tier(c.output_level())),
+        start_tier_iter_(
+            Peekable<TraitObjIterator<CompactionRouter::Iter::Item>>(
+                router.LowerBound(start_tier_, start_))),
+        latter_tier_iter_(
+            Peekable<TraitObjIterator<CompactionRouter::Iter::Item>>(
+                router.LowerBound(latter_tier_, start_))),
         source_(Source::kUndetermined),
         previous_decision_(Decision::kUndetermined) {
-    ColumnFamilyData* cfd = c.column_family_data();
-    ucmp_ = cfd->user_comparator();
-
-    int start_level = c.level();
-    int latter_level = c.output_level();
-    start_tier_ = router.Tier(start_level);
-    latter_tier_ = router.Tier(latter_level);
     assert(start_tier_ < latter_tier_);
     // TODO: Handle other cases.
     assert(start_tier_ + 1 == latter_tier_);
-    start_tier_iter_ = Peekable<CompactionRouter::Iter>(
-        router.LowerBound(start_tier_, start_));
-    latter_tier_iter_ = Peekable<CompactionRouter::Iter>(
-        router.LowerBound(latter_tier_, start_));
   }
   ~RouterIteratorSD2CD() {
     RangeBounds range{
@@ -1424,12 +1419,10 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         break;
       case Source::kLatterLevel:
         c_iter_.Next();
-        assert(latter_tier_iter_.has_iter());
         latter_tier_iter_.next();
         break;
       case Source::kLevelBelow:
         value_from_below_.Reset();
-        assert(latter_tier_iter_.has_iter());
         latter_tier_iter_.next();
         break;
     }
@@ -1464,7 +1457,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
           new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
     }
     auto stats = c_.immutable_options()->stats;
-    if (latter_tier_iter_.has_iter() && latter_tier_iter_.peek() != NULL) {
+    if (latter_tier_iter_.peek() != NULL) {
       int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
       if (res < 0) {
         bool is_successful = GetKeyValueFromLevelsBelow(
@@ -1492,18 +1485,13 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       }
     }
     source_ = Source::kCompactionIterator;
-    const rocksdb::Slice* start_hot;
-    if (!start_tier_iter_.has_iter()) {
-      start_hot = NULL;
-    } else {
+    const rocksdb::Slice* start_hot = start_tier_iter_.peek();
+    for (;;) {
+      if (start_hot == NULL ||
+          ucmp_->Compare(*start_hot, c_iter_.user_key()) >= 0)
+        break;
+      start_tier_iter_.next();
       start_hot = start_tier_iter_.peek();
-      for (;;) {
-        if (start_hot == NULL ||
-            ucmp_->Compare(*start_hot, c_iter_.user_key()) >= 0)
-          break;
-        start_tier_iter_.next();
-        start_hot = start_tier_iter_.peek();
-      }
     }
     if (start_hot && ucmp_->Compare(*start_hot, c_iter_.user_key()) == 0) {
       previous_decision_ = Decision::kStartLevel;
@@ -1524,8 +1512,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   const Comparator* ucmp_;
   size_t start_tier_;
   size_t latter_tier_;
-  Peekable<CompactionRouter::Iter> start_tier_iter_;
-  Peekable<CompactionRouter::Iter> latter_tier_iter_;
+  Peekable<TraitObjIterator<CompactionRouter::Iter::Item>> start_tier_iter_;
+  Peekable<TraitObjIterator<CompactionRouter::Iter::Item>> latter_tier_iter_;
 
   enum class Source {
     kUndetermined,

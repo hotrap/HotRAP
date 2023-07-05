@@ -78,33 +78,49 @@ class TraitIterator {
   // TODO: Return std::optional<T> if upgrade to C++17
   virtual std::unique_ptr<T> next() = 0;
 };
+template <typename T>
+class TraitObjIterator : TraitIterator<T> {
+ public:
+  using Item = T;
+  TraitObjIterator(const TraitObjIterator<T> &) = delete;
+  TraitObjIterator<T> &operator=(const TraitObjIterator<T> &) = delete;
+  TraitObjIterator(TraitObjIterator<T> &&rhs) : iter_(std::move(rhs.iter_)) {}
+  TraitObjIterator<T> &operator=(TraitObjIterator<T> &&rhs) {
+    iter_ = std::move(rhs.iter_);
+    return *this;
+  }
+  TraitObjIterator(std::unique_ptr<TraitIterator<Item>> &&iter)
+      : iter_(std::move(iter)) {}
+  std::unique_ptr<T> next() override { return iter_->next(); }
+
+ private:
+  std::unique_ptr<TraitIterator<Item>> iter_;
+};
 
 template <typename Iter>
 class Peekable : TraitIterator<typename Iter::Item> {
  public:
   using Item = typename Iter::Item;
-  Peekable() : cur_(nullptr) {}
-  Peekable(std::unique_ptr<TraitIterator<Item>> &&iter)
-      : iter_(std::move(iter)), cur_(iter_ == nullptr ? NULL : iter_->next()) {}
+  Peekable(Iter &&iter) : iter_(std::move(iter)), cur_(iter_.next()) {}
   Peekable(const Peekable &) = delete;
   Peekable &operator=(const Peekable &) = delete;
-  Peekable(Peekable &&rhs) : iter_(std::move(rhs.iter_)), cur_(rhs.cur_) {}
+  Peekable(Peekable &&rhs)
+      : iter_(std::move(rhs.iter_)), cur_(std::move(rhs.cur_)) {}
   Peekable &operator=(Peekable &&rhs) {
     iter_ = std::move(rhs.iter_);
     cur_ = std::move(rhs.cur_);
     return *this;
   }
   ~Peekable() override = default;
-  bool has_iter() const { return iter_ != nullptr; }
   const Item *peek() const { return cur_.get(); }
   std::unique_ptr<Item> next() override {
     std::unique_ptr<Item> ret = std::move(cur_);
-    cur_ = iter_->next();
+    cur_ = iter_.next();
     return ret;
   }
 
  private:
-  std::unique_ptr<TraitIterator<Item>> iter_;
+  Iter iter_;
   std::unique_ptr<Item> cur_;
 };
 
