@@ -150,9 +150,14 @@ struct RangeBounds {
   }
 };
 
+struct HotRecInfo {
+  Slice key;
+  bool stable;
+};
+
 class CompactionRouter : public Customizable {
  public:
-  using Iter = TraitObjIterator<Slice>;
+  using Iter = TraitObjIterator<HotRecInfo>;
   CompactionRouter() : num_used_levels_(0) {}
   virtual ~CompactionRouter() {}
   static const char *Type() { return "CompactionRouter"; }

@@ -1342,12 +1342,14 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
 };
 
 // Return successful or not
-static bool GetKeyValueFromLevelsBelow(
-    CompactionRouter& router, const Compaction& c,
-    Peekable<TraitObjIterator<CompactionRouter::Iter::Item>>& iter,
-    InternalKey& key_from_below, PinnableSlice& value_from_below) {
+template <typename Iter>
+static bool GetKeyValueFromLevelsBelow(CompactionRouter& router,
+                                       const Compaction& c,
+                                       Peekable<Iter>& iter,
+                                       InternalKey& key_from_below,
+                                       PinnableSlice& value_from_below) {
   auto start_time = CompactionRouter::Start();
-  const Slice& user_key = *iter.peek();
+  const Slice& user_key = iter.peek()->key;
   LookupKey lkey(user_key, kMaxSequenceNumber);
   MergeContext merge_context;
   SequenceNumber max_covering_tombstone_seq = 0;
@@ -1375,6 +1377,24 @@ static bool GetKeyValueFromLevelsBelow(
   }
 }
 
+template <typename Iter>
+class StableHotIterator : public TraitIterator<HotRecInfo> {
+ public:
+  StableHotIterator(Iter&& iter) : iter_(std::move(iter)) {}
+  StableHotIterator(StableHotIterator<Iter>&& iter)
+      : iter_(std::move(iter.iter_)) {}
+  std::unique_ptr<HotRecInfo> next() override {
+    for (;;) {
+      std::unique_ptr<HotRecInfo> ret = iter_.next();
+      if (ret == nullptr || ret->stable) {
+        return ret;
+      }
+    }
+  }
+
+ private:
+  Iter iter_;
+};
 class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
  public:
   RouterIterator2SDLastLevel(CompactionRouter& router, const Compaction& c,
@@ -1422,7 +1442,8 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
     }
     const rocksdb::Slice* latter_hot;
     if (latter_tier_iter_.peek() != NULL) {
-      int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
+      int res =
+          ucmp_->Compare(latter_tier_iter_.peek()->key, c_iter_.user_key());
       if (res < 0) {
         bool is_successful = GetKeyValueFromLevelsBelow(
             router_, c_, latter_tier_iter_, key_from_below_, value_from_below_);
@@ -1460,7 +1481,7 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
   const size_t start_tier_;
   const size_t latter_tier_;
   Source source_;
-  Peekable<TraitObjIterator<CompactionRouter::Iter::Item>> latter_tier_iter_;
+  Peekable<StableHotIterator<CompactionRouter::Iter>> latter_tier_iter_;
   InternalKey key_from_below_;
   PinnableSlice value_from_below_;
 };
@@ -1537,7 +1558,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       return std::unique_ptr<Elem>(
           new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
     }
-    // Make sure that all versions of the same user key share the same decision.
+    // Make sure that all versions of the same user key share the same
+    // decision.
     if (previous_decision_ != Decision::kUndetermined &&
         ucmp_->Compare(c_iter_.user_key(), Slice(previous_user_key_)) == 0) {
       source_ = Source::kCompactionIterator;
@@ -1546,7 +1568,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     }
     auto stats = c_.immutable_options()->stats;
     if (latter_tier_iter_.peek() != NULL) {
-      int res = ucmp_->Compare(*latter_tier_iter_.peek(), c_iter_.user_key());
+      int res =
+          ucmp_->Compare(latter_tier_iter_.peek()->key, c_iter_.user_key());
       if (res < 0) {
         bool is_successful = GetKeyValueFromLevelsBelow(
             router_, c_, latter_tier_iter_, key_from_below_, value_from_below_);
@@ -1573,13 +1596,13 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       }
     }
     source_ = Source::kCompactionIterator;
-    const rocksdb::Slice* start_hot = start_tier_iter_.peek();
+    const rocksdb::Slice* start_hot = &start_tier_iter_.peek()->key;
     for (;;) {
       if (start_hot == NULL ||
           ucmp_->Compare(*start_hot, c_iter_.user_key()) >= 0)
         break;
       start_tier_iter_.next();
-      start_hot = start_tier_iter_.peek();
+      start_hot = &start_tier_iter_.peek()->key;
     }
     if (start_hot && ucmp_->Compare(*start_hot, c_iter_.user_key()) == 0) {
       previous_decision_ = Decision::kStartLevel;
