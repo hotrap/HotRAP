@@ -6,13 +6,8 @@ namespace ROCKSDB_NAMESPACE {
 Status CompactionRouter::CreateFromString(const ConfigOptions &config_options,
                                           const std::string &value,
                                           const CompactionRouter **result) {
-  CompactionRouter *router = const_cast<CompactionRouter *>(*result);
-  Status status = LoadStaticObject<CompactionRouter>(config_options, value,
-                                                     nullptr, &router);
-  if (status.ok()) {
-    *result = const_cast<CompactionRouter *>(router);
-  }
-  return status;
+  *result = (const CompactionRouter *)std::stoul(value, nullptr, 16);
+  return Status::OK();
 }
 
 const char *timer_names[] = {

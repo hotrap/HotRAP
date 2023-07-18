@@ -269,6 +269,7 @@ void UpdateColumnFamilyOptions(const MutableCFOptions& moptions,
   cf_opts->bottommost_compression = moptions.bottommost_compression;
   cf_opts->bottommost_compression_opts = moptions.bottommost_compression_opts;
   cf_opts->sample_for_compression = moptions.sample_for_compression;
+  cf_opts->compaction_router = moptions.compaction_router;
 }
 
 void UpdateColumnFamilyOptions(const ImmutableCFOptions& ioptions,

@@ -1066,6 +1066,7 @@ void MutableCFOptions::Dump(Logger* log) const {
                  blob_garbage_collection_force_threshold);
   ROCKS_LOG_INFO(log, "           blob_compaction_readahead_size: %" PRIu64,
                  blob_compaction_readahead_size);
+  ROCKS_LOG_INFO(log, "compaction_router: %p", compaction_router);
 }
 
 MutableCFOptions::MutableCFOptions(const Options& options)
