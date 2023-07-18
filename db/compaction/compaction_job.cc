@@ -1601,10 +1601,13 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "anymore.");
     return;
   }
-  CompactionRouter* compaction_router =
+  CompactionRouter* router =
       cfd->GetCurrentMutableCFOptions()->compaction_router;
-  auto timer_guard = compaction_router->GetTimerGuard(
-      c->start_level(), PerLevelTimerType::kProcessKeyValueCompaction);
+  TimerGuard timer_guard =
+      router
+          ? router->GetTimerGuard(c->start_level(),
+                                  PerLevelTimerType::kProcessKeyValueCompaction)
+          : TimerGuard();
   const int level = c->level();
 
   CompactionRangeDelAggregator range_del_agg(&cfd->internal_comparator(),
@@ -1774,7 +1777,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                        .user_key = start_level_largest_user_key,
                        .excluded = false,
                    });
-  RouterIterator router_iter(compaction_router, *c, *c_iter, promotable_start,
+  RouterIterator router_iter(router, *c, *c_iter, promotable_start,
                              promotable_end);
 
   std::string previous_user_key;

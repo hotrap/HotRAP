@@ -52,18 +52,20 @@ class SingleTimer {
 
 class TimerGuard {
  public:
+  TimerGuard() : timer_(nullptr) {}
   TimerGuard(SingleTimer &timer)
-      : timer_(timer), start_time_(std::chrono::steady_clock::now()) {}
+      : timer_(&timer), start_time_(std::chrono::steady_clock::now()) {}
   ~TimerGuard() {
+    if (timer_ == nullptr) return;
     auto end_time = std::chrono::steady_clock::now();
     auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
                     end_time - start_time_)
                     .count();
-    timer_.add(nsec);
+    timer_->add(nsec);
   }
 
  private:
-  SingleTimer &timer_;
+  SingleTimer *timer_;
   std::chrono::steady_clock::time_point start_time_;
 };
 

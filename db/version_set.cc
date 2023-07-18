@@ -2051,7 +2051,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
       case GetContext::kFound:
         hit_level = fp.GetHitFileLevel();
         router = mutable_cf_options_.compaction_router;
-        if (value && prev_level == static_cast<unsigned int>(-1)) {
+        if (router && value && prev_level == static_cast<unsigned int>(-1)) {
           router->Access(hit_level, user_key, value->size());
         }
         if (hit_level == 0) {
@@ -3304,7 +3304,7 @@ void PickSSTAccurateHotSize(CompactionRouter* router,
 
     // assert(file->compensated_file_size != UINT64_MAX);
     uint64_t benefit = file->raw_key_size + file->raw_value_size;
-    if (router->Tier(level) != router->Tier(level + 1)) {
+    if (router && router->Tier(level) != router->Tier(level + 1)) {
       size_t hot_size =
           router->RangeHotSize(router->Tier(level), file->smallest.user_key(),
                                file->largest.user_key());
@@ -3398,7 +3398,7 @@ void PickSSTAccurateHotSizePromotionSize(
     // assert(file->compensated_file_size != UINT64_MAX);
     uint64_t benefit = file->raw_key_size + file->raw_value_size;
     size_t promotion_size;
-    if (router->Tier(level) != router->Tier(level + 1)) {
+    if (router && router->Tier(level) != router->Tier(level + 1)) {
       size_t hot_size =
           router->RangeHotSize(router->Tier(level), file->smallest.user_key(),
                                file->largest.user_key());
@@ -3467,6 +3467,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     // don't need this
     return;
   }
+  auto router = options.compaction_router;
   auto start_time = CompactionRouter::Start();
   // No need to sort the highest level because it is never compacted.
   for (int level = 0; level < num_levels() - 1; level++) {
@@ -3517,24 +3518,21 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
             ioptions.clock, level, num_non_empty_levels_, options.ttl, &temp);
         break;
       case kAccurateHotSize:
-        PickSSTAccurateHotSize(options.compaction_router, *internal_comparator_,
-                               files_[level], files_[level + 1], ioptions.clock,
-                               level, num_non_empty_levels_, options.ttl,
-                               &temp);
+        PickSSTAccurateHotSize(router, *internal_comparator_, files_[level],
+                               files_[level + 1], ioptions.clock, level,
+                               num_non_empty_levels_, options.ttl, &temp);
         break;
       case kAccurateHotSizePromotionSize:
         PickSSTAccurateHotSizePromotionSize(
-            options.compaction_router, *internal_comparator_, files_[level],
-            files_[level + 1], ioptions.clock, level, num_non_empty_levels_,
-            options.ttl, &temp);
+            router, *internal_comparator_, files_[level], files_[level + 1],
+            ioptions.clock, level, num_non_empty_levels_, options.ttl, &temp);
         break;
       default:
         assert(false);
     }
     assert(temp.size() == files.size());
-    if (!files.empty()) {
-      options.compaction_router->Stop(level, PerLevelTimerType::kPickSST,
-                                      pick_sst_start);
+    if (!files.empty() && router) {
+      router->Stop(level, PerLevelTimerType::kPickSST, pick_sst_start);
     }
 
     // initialize files_by_compaction_pri_
@@ -3544,8 +3542,9 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     next_file_to_compact_by_size_[level] = 0;
     assert(files_[level].size() == files_by_compaction_pri_[level].size());
   }
-  options.compaction_router->Stop(TimerType::kUpdateFilesByCompactionPri,
-                                  start_time);
+  if (router) {
+    router->Stop(TimerType::kUpdateFilesByCompactionPri, start_time);
+  }
 }
 
 void VersionStorageInfo::GenerateLevel0NonOverlapping() {
