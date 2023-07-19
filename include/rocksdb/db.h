@@ -10,11 +10,13 @@
 
 #include <stdint.h>
 #include <stdio.h>
+
 #include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
 #include "rocksdb/iterator.h"
 #include "rocksdb/listener.h"
 #include "rocksdb/metadata.h"
@@ -676,6 +678,16 @@ class DB {
       values->PinSelf(value);
       values++;
     }
+  }
+
+  virtual Status Promote(ColumnFamilyHandle* column_family, const Slice& key) {
+    // Default to no operation
+    (void)column_family;
+    (void)key;
+    return Status::OK();
+  }
+  virtual Status Promote(const Slice& key) {
+    return Promote(DefaultColumnFamily(), key);
   }
 
   // If the key definitely does not exist in the database, then this method

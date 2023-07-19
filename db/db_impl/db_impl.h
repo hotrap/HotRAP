@@ -237,6 +237,16 @@ class DBImpl : public DB {
       ReadCallback* callback,
       autovector<KeyContext*, MultiGetContext::MAX_BATCH_SIZE>* sorted_keys);
 
+  virtual Status Promote(ColumnFamilyHandle* column_family,
+                         const Slice& key) override {
+    PinnableSlice value;
+    Status s = Get(ReadOptions(), column_family, key, &value);
+    return Put(WriteOptions(), column_family, key, value);
+  }
+  virtual Status Promote(const Slice& key) override {
+    return Promote(DefaultColumnFamily(), key);
+  }
+
   virtual Status CreateColumnFamily(const ColumnFamilyOptions& cf_options,
                                     const std::string& column_family,
                                     ColumnFamilyHandle** handle) override;
@@ -387,8 +397,7 @@ class DBImpl : public DB {
   virtual Status GetSortedWalFiles(VectorLogPtr& files) override;
   virtual Status GetCurrentWalFile(
       std::unique_ptr<LogFile>* current_log_file) override;
-  virtual Status GetCreationTimeOfOldestFile(
-      uint64_t* creation_time) override;
+  virtual Status GetCreationTimeOfOldestFile(uint64_t* creation_time) override;
 
   virtual Status GetUpdatesSince(
       SequenceNumber seq_number, std::unique_ptr<TransactionLogIterator>* iter,

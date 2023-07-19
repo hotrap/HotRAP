@@ -1341,10 +1341,50 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
   CompactionIterator& c_iter_;
 };
 
+template <typename Iter>
+class IgnoreStableHot : public TraitIterator<Slice> {
+ public:
+  IgnoreStableHot(Iter&& iter) : iter_(std::move(iter)) {}
+  IgnoreStableHot(IgnoreStableHot<Iter>&& iter)
+      : iter_(std::move(iter.iter_)) {}
+  std::unique_ptr<Slice> next() override {
+    for (;;) {
+      std::unique_ptr<HotRecInfo> ret = iter_.next();
+      if (ret == nullptr) {
+        return nullptr;
+      } else {
+        return std::unique_ptr<Slice>(new Slice(ret->key));
+      }
+    }
+  }
+
+ private:
+  Iter iter_;
+};
+template <typename Iter>
+class SkipStableHot : public TraitIterator<Slice> {
+ public:
+  SkipStableHot(Iter&& iter) : iter_(std::move(iter)) {}
+  SkipStableHot(SkipStableHot<Iter>&& iter) : iter_(std::move(iter.iter_)) {}
+  std::unique_ptr<Slice> next() override {
+    for (;;) {
+      std::unique_ptr<HotRecInfo> ret = iter_.next();
+      if (ret == nullptr) {
+        return nullptr;
+      } else if (!ret->stable) {
+        return std::unique_ptr<Slice>(new Slice(ret->key));
+      }
+    }
+  }
+
+ private:
+  Iter iter_;
+};
+
 // Return successful or not
 static bool GetKeyValueFromLevelsBelow(
     CompactionRouter& router, const Compaction& c,
-    Peekable<TraitObjIterator<CompactionRouter::Iter::Item>>& iter,
+    Peekable<SkipStableHot<CompactionRouter::Iter>>& iter,
     InternalKey& key_from_below, PinnableSlice& value_from_below) {
   auto start_time = CompactionRouter::Start();
   const Slice& user_key = *iter.peek();
@@ -1387,9 +1427,9 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         ucmp_(c.column_family_data()->user_comparator()),
         start_tier_(router.Tier(c.level())),
         latter_tier_(router.Tier(c.output_level())),
-        start_tier_iter_(Peekable<CompactionRouter::Iter>(
+        start_tier_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
             router.LowerBound(start_tier_, start_))),
-        latter_tier_iter_(Peekable<CompactionRouter::Iter>(
+        latter_tier_iter_(Peekable<SkipStableHot<CompactionRouter::Iter>>(
             router.LowerBound(latter_tier_, start_))),
         source_(Source::kUndetermined),
         previous_decision_(Decision::kUndetermined) {
@@ -1510,8 +1550,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   const Comparator* ucmp_;
   size_t start_tier_;
   size_t latter_tier_;
-  Peekable<CompactionRouter::Iter> start_tier_iter_;
-  Peekable<CompactionRouter::Iter> latter_tier_iter_;
+  Peekable<IgnoreStableHot<CompactionRouter::Iter>> start_tier_iter_;
+  Peekable<SkipStableHot<CompactionRouter::Iter>> latter_tier_iter_;
 
   enum class Source {
     kUndetermined,
