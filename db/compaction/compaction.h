@@ -60,7 +60,7 @@ struct CompactionInputFiles {
   inline void clear() { files.clear(); }
   inline FileMetaData* operator[](size_t i) const { return files[i]; }
   void GetBoundaryKeys(const Comparator* ucmp, Slice* smallest_user_key,
-      Slice* largest_user_key) const;
+                       Slice* largest_user_key) const;
 };
 
 class Version;
@@ -82,9 +82,8 @@ class Compaction {
              CompressionOptions compression_opts,
              Temperature output_temperature, uint32_t max_subcompactions,
              std::vector<FileMetaData*> grandparents,
-             double latter_level_hot_per_byte,
-             bool manual_compaction = false, double score = -1,
-             bool deletion_compaction = false,
+             double latter_level_hot_per_byte, bool manual_compaction = false,
+             double score = -1, bool deletion_compaction = false,
              CompactionReason compaction_reason = CompactionReason::kUnknown);
 
   // No copying allowed
@@ -336,8 +335,9 @@ class Compaction {
 
   // Get the atomic file boundaries for all files in the compaction. Necessary
   // in order to avoid the scenario described in
-  // https://github.com/facebook/rocksdb/pull/4432#discussion_r221072219 and plumb
-  // down appropriate key boundaries to RangeDelAggregator during compaction.
+  // https://github.com/facebook/rocksdb/pull/4432#discussion_r221072219 and
+  // plumb down appropriate key boundaries to RangeDelAggregator during
+  // compaction.
   static std::vector<CompactionInputFiles> PopulateWithAtomicBoundaries(
       VersionStorageInfo* vstorage, std::vector<CompactionInputFiles> inputs);
 
@@ -352,7 +352,7 @@ class Compaction {
 
   VersionStorageInfo* input_vstorage_;
 
-  const int start_level_;    // the lowest level to be compacted
+  const int start_level_;   // the lowest level to be compacted
   const int output_level_;  // levels to which output files are stored
   uint64_t max_output_file_size_;
   uint64_t max_compaction_bytes_;
@@ -363,7 +363,7 @@ class Compaction {
   VersionEdit edit_;
   const int number_levels_;
   ColumnFamilyData* cfd_;
-  Arena arena_;          // Arena used to allocate space for file_levels_
+  Arena arena_;  // Arena used to allocate space for file_levels_
 
   const uint32_t start_level_path_id_;
   const uint32_t later_level_path_id_;
@@ -382,7 +382,7 @@ class Compaction {
   // State used to check for number of overlapping grandparent files
   // (grandparent == "output_level_ + 1")
   std::vector<FileMetaData*> grandparents_;
-  const double score_;         // score that was used to pick this compaction.
+  const double score_;  // score that was used to pick this compaction.
 
   // Is this compaction creating a file in the bottom most level?
   const bool bottommost_level_;
