@@ -9,7 +9,8 @@
 namespace ROCKSDB_NAMESPACE {
 class PromotionCache {
  public:
-  PromotionCache(const Comparator *ucmp) : ucmp_(ucmp), cache_(Compare(ucmp)) {}
+  PromotionCache(const Comparator *ucmp)
+      : ucmp_(ucmp), cache_(Compare(ucmp)), size_(0), max_size_(0) {}
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
   bool Get(Slice key, PinnableSlice *value) const {
@@ -28,6 +29,8 @@ class PromotionCache {
     auto ret = cache_.insert(std::make_pair(std::move(key), value.ToString()));
     (void)ret;
     assert(ret.second == true);
+    size_ += key.size() + value.size();
+    if (size_ > max_size_) max_size_ = size_;
   }
   // [begin, end)
   std::vector<std::pair<std::string, std::string>> TakeRange(Slice smallest,
@@ -39,11 +42,13 @@ class PromotionCache {
     while (it != cache_.end() && ucmp_->Compare(it->first, largest) < 0) {
       // TODO: Is it possible to avoid copying here?
       ret.emplace_back(it->first, it->second);
+      size_ -= it->first.size() + it->second.size();
       ++it;
     }
     cache_.erase(begin_it, it);
     return ret;
   }
+  size_t max_size() const { return max_size_; }
 
  private:
   class Compare {
@@ -59,5 +64,8 @@ class PromotionCache {
   const Comparator *ucmp_;
   port::RWMutex lock_;
   std::map<std::string, std::string, Compare> cache_;
+  size_t size_;
+
+  size_t max_size_;
 };
 }  // namespace ROCKSDB_NAMESPACE
