@@ -28,6 +28,7 @@
 #include "db/blob/blob_file_reader.h"
 #include "db/blob/blob_index.h"
 #include "db/blob/blob_log_format.h"
+#include "db/column_family.h"
 #include "db/compaction/compaction.h"
 #include "db/compaction/file_pri.h"
 #include "db/internal_stats.h"
@@ -1955,35 +1956,46 @@ void Version::MultiGetBlob(
   }
 }
 
+// Return the final level of the record
+static int TryPromote(ColumnFamilyData* cfd, CompactionRouter* router,
+                      FileMetaData* f, int hit_level, Slice user_key,
+                      PinnableSlice* value, unsigned int prev_level) {
+  if (router->Tier(hit_level) == 0) return hit_level;
+  assert(hit_level > 0);
+  int target_level = hit_level - 1;
+  while (router->Tier(target_level) == 1) {
+    target_level -= 1;
+  }
+  auto caches_guard = cfd->promotion_caches().Write();
+  if (f->being_or_has_been_compacted) return hit_level;
+  auto& caches = caches_guard.deref_mut();
+  // The first whose level <= target_level
+  auto it = caches.find(target_level);
+  if (it == caches.end()) {
+    auto ret = caches.emplace(target_level, cfd->user_comparator());
+    it = ret.first;
+    assert(ret.second);
+  }
+  assert(it->first == target_level);
+  auto& cache = it->second;
+  cache.Promote(user_key.ToString(), *value);
+  return target_level;
+}
+static void Access(ColumnFamilyData* cfd, CompactionRouter* router,
+                   FileMetaData* f, int hit_level, Slice user_key,
+                   PinnableSlice* value, unsigned int prev_level) {
+  if (!router || !value || prev_level != static_cast<unsigned int>(-1)) return;
+  int level =
+      TryPromote(cfd, router, f, hit_level, user_key, value, prev_level);
+  router->Access(level, user_key, value->size());
+}
 void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, FileMetaData* f,
                           int hit_level, Slice user_key, PinnableSlice* value,
                           Status* status, bool is_blob_index, bool do_merge,
                           unsigned int prev_level) {
-  CompactionRouter* router = mutable_cf_options_.compaction_router;
-  if (router && value && prev_level == static_cast<unsigned int>(-1)) {
-    router->Access(hit_level, user_key, value->size());
-    if (router->Tier(hit_level) == 1) {
-      assert(hit_level > 0);
-      int target_level = hit_level - 1;
-      while (router->Tier(target_level) == 1) {
-        target_level -= 1;
-      }
-      auto caches_guard = cfd_->promotion_caches().Write();
-      if (f->being_or_has_been_compacted) return;
-      auto& caches = caches_guard.deref_mut();
-      // The first whose level <= target_level
-      auto it = caches.find(target_level);
-      if (it == caches.end()) {
-        auto ret = caches.emplace(target_level, cfd_->user_comparator());
-        it = ret.first;
-        assert(ret.second);
-      }
-      assert(it->first == target_level);
-      auto& cache = it->second;
-      cache.Promote(user_key.ToString(), *value);
-    }
-  }
+  Access(cfd_, mutable_cf_options_.compaction_router, f, hit_level, user_key,
+         value, prev_level);
   if (hit_level == 0) {
     RecordTick(db_statistics_, GET_HIT_L0);
   } else if (hit_level == 1) {
