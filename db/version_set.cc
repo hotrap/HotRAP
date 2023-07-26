@@ -11,13 +11,16 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cinttypes>
 #include <cstdio>
 #include <list>
 #include <map>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "db/blob/blob_fetcher.h"
@@ -34,8 +37,10 @@
 #include "db/merge_context.h"
 #include "db/merge_helper.h"
 #include "db/pinned_iterators_manager.h"
+#include "db/promote_cache.h"
 #include "db/table_cache.h"
 #include "db/version_builder.h"
+#include "db/version_edit.h"
 #include "db/version_edit_handler.h"
 #include "file/filename.h"
 #include "file/random_access_file_reader.h"
@@ -1950,6 +1955,169 @@ void Version::MultiGetBlob(
   }
 }
 
+void Version::HandleFound(const ReadOptions& read_options,
+                          GetContext& get_context, FileMetaData* f,
+                          int hit_level, Slice user_key, PinnableSlice* value,
+                          Status* status, bool is_blob_index, bool do_merge,
+                          unsigned int prev_level) {
+  CompactionRouter* router = mutable_cf_options_.compaction_router;
+  if (router && value && prev_level == static_cast<unsigned int>(-1)) {
+    router->Access(hit_level, user_key, value->size());
+    if (router->Tier(hit_level) == 1) {
+      assert(hit_level > 0);
+      int target_level = hit_level - 1;
+      while (router->Tier(target_level) == 1) {
+        target_level -= 1;
+      }
+      auto caches_guard = cfd_->promotion_caches().Write();
+      if (f->being_or_has_been_compacted) return;
+      auto& caches = caches_guard.deref_mut();
+      // The first whose level <= target_level
+      auto it = caches.find(target_level);
+      if (it == caches.end()) {
+        auto ret = caches.emplace(target_level, cfd_->user_comparator());
+        it = ret.first;
+        assert(ret.second);
+      }
+      assert(it->first == target_level);
+      auto& cache = it->second;
+      cache.Promote(user_key.ToString(), *value);
+    }
+  }
+  if (hit_level == 0) {
+    RecordTick(db_statistics_, GET_HIT_L0);
+  } else if (hit_level == 1) {
+    RecordTick(db_statistics_, GET_HIT_L1);
+  } else if (hit_level >= 2) {
+    RecordTick(db_statistics_, GET_HIT_L2_AND_UP);
+  }
+
+  PERF_COUNTER_BY_LEVEL_ADD(user_key_return_count, 1, hit_level);
+
+  if (is_blob_index) {
+    if (do_merge && value) {
+      constexpr FilePrefetchBuffer* prefetch_buffer = nullptr;
+      constexpr uint64_t* bytes_read = nullptr;
+
+      *status = GetBlob(read_options, user_key, *value, prefetch_buffer, value,
+                        bytes_read);
+      if (!status->ok()) {
+        if (status->IsIncomplete()) {
+          get_context.MarkKeyMayExist();
+        }
+        return;
+      }
+    }
+  }
+}
+void Version::HandleNotFound(GetContext& get_context, Slice user_key,
+                             PinnableSlice* value, Status* status,
+                             MergeContext* merge_context, bool* key_exists,
+                             bool do_merge) {
+  if (db_statistics_ != nullptr) {
+    get_context.ReportCounters();
+  }
+  if (GetContext::kMerge == get_context.State()) {
+    if (!do_merge) {
+      *status = Status::OK();
+      return;
+    }
+    if (!merge_operator_) {
+      *status = Status::InvalidArgument(
+          "merge_operator is not properly initialized.");
+      return;
+    }
+    // merge_operands are in saver and we hit the beginning of the key history
+    // do a final merge of nullptr and operands;
+    std::string* str_value = value != nullptr ? value->GetSelf() : nullptr;
+    *status = MergeHelper::TimedFullMerge(
+        merge_operator_, user_key, nullptr, merge_context->GetOperands(),
+        str_value, info_log_, db_statistics_, clock_,
+        nullptr /* result_operand */, true);
+    if (LIKELY(value != nullptr)) {
+      value->PinSelf();
+    }
+  } else {
+    if (key_exists != nullptr) {
+      *key_exists = false;
+    }
+    *status = Status::NotFound();  // Use an empty error message for speed
+  }
+}
+
+// Return stop searching or not
+bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange* f, int hit_level,
+                        bool is_hit_file_last_in_level) {
+  Slice ikey = env_get.k.internal_key();
+  Slice user_key = env_get.k.user_key();
+  if (*env_get.max_covering_tombstone_seq > 0) {
+    // The remaining files we look at will only contain covered keys, so we
+    // stop here.
+    HandleNotFound(env_get.get_context, user_key, env_get.value, env_get.status,
+                   env_get.merge_context, env_get.key_exists, env_get.do_merge);
+    return true;
+  }
+  if (env_get.get_context.sample()) {
+    sample_file_read_inc(f->file_metadata);
+  }
+
+  bool timer_enabled = GetPerfLevel() >= PerfLevel::kEnableTimeExceptForMutex &&
+                       get_perf_context()->per_level_perf_context_enabled;
+  StopWatchNano timer(clock_, timer_enabled /* auto_start */);
+  *env_get.status = table_cache_->Get(
+      env_get.read_options, *internal_comparator(), *f->file_metadata, ikey,
+      &env_get.get_context, mutable_cf_options_.prefix_extractor.get(),
+      cfd_->internal_stats()->GetFileReadHist(hit_level),
+      IsFilterSkipped(static_cast<int>(hit_level), is_hit_file_last_in_level),
+      hit_level, max_file_size_for_l0_meta_pin_);
+  // TODO: examine the behavior for corrupted key
+  if (timer_enabled) {
+    PERF_COUNTER_BY_LEVEL_ADD(get_from_table_nanos, timer.ElapsedNanos(),
+                              hit_level);
+  }
+  if (!env_get.status->ok()) {
+    if (db_statistics_ != nullptr) {
+      env_get.get_context.ReportCounters();
+    }
+    return true;
+  }
+
+  // report the counters before returning
+  if (env_get.get_context.State() != GetContext::kNotFound &&
+      env_get.get_context.State() != GetContext::kMerge &&
+      db_statistics_ != nullptr) {
+    env_get.get_context.ReportCounters();
+  }
+  switch (env_get.get_context.State()) {
+    case GetContext::kNotFound:
+      // Keep searching in other files
+      break;
+    case GetContext::kMerge:
+      // TODO: update per-level perfcontext user_key_return_count for kMerge
+      // TODO: How to update VisCnts?
+      break;
+    case GetContext::kFound:
+      HandleFound(env_get.read_options, env_get.get_context, f->file_metadata,
+                  hit_level, user_key, env_get.value, env_get.status,
+                  env_get.is_blob_index, env_get.do_merge, env_get.prev_level);
+      return true;
+    case GetContext::kDeleted:
+      // Use empty error message for speed
+      *env_get.status = Status::NotFound();
+      return true;
+    case GetContext::kCorrupt:
+      *env_get.status = Status::Corruption("corrupted key for ", user_key);
+      return true;
+    case GetContext::kUnexpectedBlobIndex:
+      ROCKS_LOG_ERROR(info_log_, "Encounter unexpected blob index.");
+      *env_get.status = Status::NotSupported(
+          "Encounter unexpected blob index. Please open DB with "
+          "ROCKSDB_NAMESPACE::blob_db::BlobDB instead.");
+      return true;
+  }
+  return false;
+}
+
 void Version::Get(const ReadOptions& read_options, const LookupKey& k,
                   PinnableSlice* value, std::string* timestamp, Status* status,
                   MergeContext* merge_context,
@@ -1998,135 +2166,47 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
                 &storage_info_.file_indexer_, user_comparator(),
                 internal_comparator(), prev_level);
   FdWithKeyRange* f = fp.GetNextFile();
-
-  while (f != nullptr) {
-    if (*max_covering_tombstone_seq > 0) {
-      // The remaining files we look at will only contain covered keys, so we
-      // stop here.
-      break;
-    }
-    if (get_context.sample()) {
-      sample_file_read_inc(f->file_metadata);
-    }
-
-    bool timer_enabled =
-        GetPerfLevel() >= PerfLevel::kEnableTimeExceptForMutex &&
-        get_perf_context()->per_level_perf_context_enabled;
-    StopWatchNano timer(clock_, timer_enabled /* auto_start */);
-    *status = table_cache_->Get(
-        read_options, *internal_comparator(), *f->file_metadata, ikey,
-        &get_context, mutable_cf_options_.prefix_extractor.get(),
-        cfd_->internal_stats()->GetFileReadHist(fp.GetHitFileLevel()),
-        IsFilterSkipped(static_cast<int>(fp.GetHitFileLevel()),
-                        fp.IsHitFileLastInLevel()),
-        fp.GetHitFileLevel(), max_file_size_for_l0_meta_pin_);
-    // TODO: examine the behavior for corrupted key
-    if (timer_enabled) {
-      PERF_COUNTER_BY_LEVEL_ADD(get_from_table_nanos, timer.ElapsedNanos(),
-                                fp.GetHitFileLevel());
-    }
-    if (!status->ok()) {
-      if (db_statistics_ != nullptr) {
-        get_context.ReportCounters();
+  EnvGet env_get{.read_options = read_options,
+                 .k = k,
+                 .value = value,
+                 .get_context = get_context,
+                 .status = status,
+                 .merge_context = merge_context,
+                 .max_covering_tombstone_seq = max_covering_tombstone_seq,
+                 .key_exists = key_exists,
+                 .is_blob_index = is_blob_index,
+                 .do_merge = do_merge,
+                 .prev_level = prev_level};
+  {
+    auto guard = cfd_->promotion_caches().Read();
+    const auto& caches = guard.deref();
+    for (auto it = caches.cbegin(); it != caches.cend(); ++it) {
+      int cache_level = it->first;
+      const auto& cache = it->second;
+      while (f != nullptr && (int)fp.GetHitFileLevel() <= cache_level) {
+        bool should_stop = GetInFile(env_get, f, fp.GetHitFileLevel(),
+                                     fp.IsHitFileLastInLevel());
+        if (should_stop) return;
+        f = fp.GetNextFile();
       }
-      return;
+      if (cache.Get(k.user_key(), value)) {
+        guard.drop();
+        HandleFound(env_get.read_options, env_get.get_context, f->file_metadata,
+                    fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
+                    env_get.is_blob_index, env_get.do_merge,
+                    env_get.prev_level);
+        return;
+      }
     }
-
-    // report the counters before returning
-    if (get_context.State() != GetContext::kNotFound &&
-        get_context.State() != GetContext::kMerge &&
-        db_statistics_ != nullptr) {
-      get_context.ReportCounters();
-    }
-    unsigned int hit_level;
-    CompactionRouter* router;
-    switch (get_context.State()) {
-      case GetContext::kNotFound:
-        // Keep searching in other files
-        break;
-      case GetContext::kMerge:
-        // TODO: update per-level perfcontext user_key_return_count for kMerge
-        // TODO: How to update VisCnts?
-        break;
-      case GetContext::kFound:
-        hit_level = fp.GetHitFileLevel();
-        router = mutable_cf_options_.compaction_router;
-        if (router && value && prev_level == static_cast<unsigned int>(-1)) {
-          router->Access(hit_level, user_key, value->size());
-        }
-        if (hit_level == 0) {
-          RecordTick(db_statistics_, GET_HIT_L0);
-        } else if (hit_level == 1) {
-          RecordTick(db_statistics_, GET_HIT_L1);
-        } else if (hit_level >= 2) {
-          RecordTick(db_statistics_, GET_HIT_L2_AND_UP);
-        }
-
-        PERF_COUNTER_BY_LEVEL_ADD(user_key_return_count, 1,
-                                  fp.GetHitFileLevel());
-
-        if (is_blob_index) {
-          if (do_merge && value) {
-            constexpr FilePrefetchBuffer* prefetch_buffer = nullptr;
-            constexpr uint64_t* bytes_read = nullptr;
-
-            *status = GetBlob(read_options, user_key, *value, prefetch_buffer,
-                              value, bytes_read);
-            if (!status->ok()) {
-              if (status->IsIncomplete()) {
-                get_context.MarkKeyMayExist();
-              }
-              return;
-            }
-          }
-        }
-
-        return;
-      case GetContext::kDeleted:
-        // Use empty error message for speed
-        *status = Status::NotFound();
-        return;
-      case GetContext::kCorrupt:
-        *status = Status::Corruption("corrupted key for ", user_key);
-        return;
-      case GetContext::kUnexpectedBlobIndex:
-        ROCKS_LOG_ERROR(info_log_, "Encounter unexpected blob index.");
-        *status = Status::NotSupported(
-            "Encounter unexpected blob index. Please open DB with "
-            "ROCKSDB_NAMESPACE::blob_db::BlobDB instead.");
-        return;
-    }
+  }
+  while (f != nullptr) {
+    bool should_stop =
+        GetInFile(env_get, f, fp.GetHitFileLevel(), fp.IsHitFileLastInLevel());
+    if (should_stop) return;
     f = fp.GetNextFile();
   }
-  if (db_statistics_ != nullptr) {
-    get_context.ReportCounters();
-  }
-  if (GetContext::kMerge == get_context.State()) {
-    if (!do_merge) {
-      *status = Status::OK();
-      return;
-    }
-    if (!merge_operator_) {
-      *status = Status::InvalidArgument(
-          "merge_operator is not properly initialized.");
-      return;
-    }
-    // merge_operands are in saver and we hit the beginning of the key history
-    // do a final merge of nullptr and operands;
-    std::string* str_value = value != nullptr ? value->GetSelf() : nullptr;
-    *status = MergeHelper::TimedFullMerge(
-        merge_operator_, user_key, nullptr, merge_context->GetOperands(),
-        str_value, info_log_, db_statistics_, clock_,
-        nullptr /* result_operand */, true);
-    if (LIKELY(value != nullptr)) {
-      value->PinSelf();
-    }
-  } else {
-    if (key_exists != nullptr) {
-      *key_exists = false;
-    }
-    *status = Status::NotFound();  // Use an empty error message for speed
-  }
+  HandleNotFound(env_get.get_context, user_key, env_get.value, env_get.status,
+                 env_get.merge_context, env_get.key_exists, env_get.do_merge);
 }
 
 void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,

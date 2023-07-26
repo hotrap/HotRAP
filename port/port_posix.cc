@@ -157,16 +157,18 @@ RWMutex::~RWMutex() {
   PthreadCall("destroy mutex", pthread_rwlock_destroy(&mu_));
 }
 
-void RWMutex::ReadLock() {
-  PthreadCall("read lock", pthread_rwlock_rdlock(&mu_));
+void RWMutex::ReadLock() const {
+  PthreadCall("read lock",
+              pthread_rwlock_rdlock(const_cast<pthread_rwlock_t*>(&mu_)));
 }
 
 void RWMutex::WriteLock() {
   PthreadCall("write lock", pthread_rwlock_wrlock(&mu_));
 }
 
-void RWMutex::ReadUnlock() {
-  PthreadCall("read unlock", pthread_rwlock_unlock(&mu_));
+void RWMutex::ReadUnlock() const {
+  PthreadCall("read unlock",
+              pthread_rwlock_unlock(const_cast<pthread_rwlock_t*>(&mu_)));
 }
 
 void RWMutex::WriteUnlock() {

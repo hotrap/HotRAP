@@ -126,6 +126,28 @@ class Peekable : TraitIterator<typename Iter::Item> {
   std::unique_ptr<Item> cur_;
 };
 
+template <typename T>
+class VecIter {
+ public:
+  VecIter(const std::vector<T> &v) : v_(v), it_(v_.cbegin()) {}
+  const T *next() {
+    if (it_ == v_.end()) return nullptr;
+    const T *ret = &*it_;
+    ++it_;
+    return ret;
+  }
+  const T *peek() {
+    if (it_ == v_.end())
+      return nullptr;
+    else
+      return &*it_;
+  }
+
+ private:
+  const std::vector<T> &v_;
+  typename std::vector<T>::const_iterator it_;
+};
+
 struct Bound {
   Slice user_key;
   bool excluded;

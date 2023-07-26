@@ -140,9 +140,9 @@ class RWMutex {
 
   ~RWMutex();
 
-  void ReadLock();
+  void ReadLock() const;
   void WriteLock();
-  void ReadUnlock();
+  void ReadUnlock() const;
   void WriteUnlock();
   void AssertHeld() {}
 

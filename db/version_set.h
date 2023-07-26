@@ -835,6 +835,29 @@ class Version {
     return storage_info_.user_comparator_;
   }
 
+  void HandleFound(const ReadOptions& read_options, GetContext& get_context,
+                   FileMetaData* f, int hit_level, Slice user_key,
+                   PinnableSlice* value, Status* status, bool is_blob_index,
+                   bool do_merge, unsigned int prev_level);
+  void HandleNotFound(GetContext& get_context, Slice user_key,
+                      PinnableSlice* value, Status* status,
+                      MergeContext* merge_context, bool* key_exists,
+                      bool do_merge);
+  struct EnvGet {
+    const ReadOptions& read_options;
+    const LookupKey& k;
+    PinnableSlice* value;
+    GetContext& get_context;
+    Status* status;
+    MergeContext* merge_context;
+    SequenceNumber* max_covering_tombstone_seq;
+    bool* key_exists;
+    bool is_blob_index;
+    bool do_merge;
+    unsigned int prev_level;
+  };
+  bool GetInFile(EnvGet& env_get, FdWithKeyRange* f, int hit_level,
+                 bool is_hit_file_last_in_level);
   // Returns true if the filter blocks in the specified level will not be
   // checked during read operations. In certain cases (trivial move or preload),
   // the filter block may already be cached, but we still do not access it such

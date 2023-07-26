@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "port/port.h"
+#include "port/port_posix.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -48,15 +49,32 @@ class MutexLock {
 //
 class ReadLock {
  public:
-  explicit ReadLock(port::RWMutex *mu) : mu_(mu) { this->mu_->ReadLock(); }
+  explicit ReadLock(const port::RWMutex *mu) : mu_(mu) {
+    this->mu_->ReadLock();
+  }
   // No copying allowed
   ReadLock(const ReadLock &) = delete;
   void operator=(const ReadLock &) = delete;
+  ReadLock(ReadLock &&rhs) : mu_(rhs.mu_) { rhs.mu_ = nullptr; }
+  ReadLock &operator=(ReadLock &&rhs) {
+    this->~ReadLock();
+    mu_ = rhs.mu_;
+    rhs.mu_ = nullptr;
+    return *this;
+  }
 
-  ~ReadLock() { this->mu_->ReadUnlock(); }
+  ~ReadLock() {
+    if (mu_ != nullptr) mu_->ReadUnlock();
+  }
+
+  void drop() {
+    assert(mu_ != nullptr);
+    mu_->ReadUnlock();
+    mu_ = nullptr;
+  }
 
  private:
-  port::RWMutex *const mu_;
+  const port::RWMutex *mu_;
 };
 
 //
@@ -86,11 +104,67 @@ class WriteLock {
   // No copying allowed
   WriteLock(const WriteLock &) = delete;
   void operator=(const WriteLock &) = delete;
+  WriteLock(WriteLock &&rhs) : mu_(rhs.mu_) { rhs.mu_ = nullptr; }
+  WriteLock &operator=(WriteLock &&rhs) {
+    this->~WriteLock();
+    mu_ = rhs.mu_;
+    rhs.mu_ = nullptr;
+    return *this;
+  }
 
-  ~WriteLock() { this->mu_->WriteUnlock(); }
+  ~WriteLock() {
+    if (mu_ != nullptr) mu_->WriteUnlock();
+  }
 
  private:
-  port::RWMutex *const mu_;
+  port::RWMutex *mu_;
+};
+
+template <typename T>
+class ReadGuard {
+ public:
+  ReadGuard(const T &data, port::RWMutex *mu) : data_(data), lock_(mu) {}
+  ReadGuard(const ReadGuard &) = delete;
+  ReadGuard &operator=(const ReadGuard<T> &) = delete;
+  ReadGuard(ReadGuard<T> &&rhs)
+      : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
+  ReadGuard &operator=(ReadGuard<T> &&rhs) = delete;
+
+  const T &deref() const { return data_; }
+  void drop() { lock_.drop(); }
+
+ private:
+  const T &data_;
+  ReadLock lock_;
+};
+
+template <typename T>
+class WriteGuard {
+ public:
+  WriteGuard(T &data, port::RWMutex *mu) : data_(data), lock_(mu) {}
+  WriteGuard(const WriteGuard &) = delete;
+  WriteGuard<T> &operator=(const WriteGuard &) = delete;
+  WriteGuard(WriteGuard<T> &&rhs)
+      : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
+  WriteGuard<T> &operator=(WriteGuard<T> &&) = delete;
+
+  const T &deref() const { return data_; }
+  T &deref_mut() { return data_; }
+
+ private:
+  T &data_;
+  WriteLock lock_;
+};
+
+template <typename T>
+class RWMutexProtected {
+ public:
+  ReadGuard<T> Read() { return ReadGuard<T>(data_, &lock_); }
+  WriteGuard<T> Write() { return WriteGuard<T>(data_, &lock_); }
+
+ private:
+  T data_;
+  port::RWMutex lock_;
 };
 
 //
