@@ -489,7 +489,8 @@ static std::unordered_map<std::string, OptionTypeInfo>
         {"compaction_router",
          OptionTypeInfo::AsCustomRawPtr<const CompactionRouter>(
              offsetof(struct MutableCFOptions, compaction_router),
-             OptionVerificationType::kByName, OptionTypeFlags::kAllowNull)},
+             OptionVerificationType::kByName,
+             OptionTypeFlags::kMutable | OptionTypeFlags::kAllowNull)},
         // End special case properties
 };
 
@@ -902,9 +903,9 @@ uint64_t MultiplyCheckOverflow(uint64_t op1, double op2) {
 // when level_compaction_dynamic_level_bytes is true and leveled compaction
 // is used, the base level is not always L1, so precomupted max_file_size can
 // no longer be used. Recompute file_size_for_level from base level.
-uint64_t MaxFileSizeForLevel(const MutableCFOptions& cf_options,
-    int level, CompactionStyle compaction_style, int base_level,
-    bool level_compaction_dynamic_level_bytes) {
+uint64_t MaxFileSizeForLevel(const MutableCFOptions& cf_options, int level,
+                             CompactionStyle compaction_style, int base_level,
+                             bool level_compaction_dynamic_level_bytes) {
   if (!level_compaction_dynamic_level_bytes || level < base_level ||
       compaction_style != kCompactionStyleLevel) {
     assert(level >= 0);
@@ -1065,6 +1066,7 @@ void MutableCFOptions::Dump(Logger* log) const {
                  blob_garbage_collection_force_threshold);
   ROCKS_LOG_INFO(log, "           blob_compaction_readahead_size: %" PRIu64,
                  blob_compaction_readahead_size);
+  ROCKS_LOG_INFO(log, "compaction_router: %p", compaction_router);
 }
 
 MutableCFOptions::MutableCFOptions(const Options& options)

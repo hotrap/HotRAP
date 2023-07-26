@@ -66,11 +66,12 @@ uint64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
 }
 
 void CompactionInputFiles::GetBoundaryKeys(const Comparator* ucmp,
-    Slice* smallest_user_key, Slice* largest_user_key) const {
+                                           Slice* smallest_user_key,
+                                           Slice* largest_user_key) const {
   assert(!files.empty());
   if (level == 0) {
     // we need to consider all files on level 0
-    const FileMetaData *f = files[0];
+    const FileMetaData* f = files[0];
     *smallest_user_key = f->smallest.user_key();
     *largest_user_key = f->largest.user_key();
     for (size_t i = 1; i < files.size(); ++i) {
@@ -351,8 +352,8 @@ bool Compaction::IsTrivialMove() const {
   }
 
   if (!(start_level_ != output_level_ && num_input_levels() == 1 &&
-          input(0, 0)->fd.GetPathId() == latter_level_path_id() &&
-          InputCompressionMatchesOutput())) {
+        input(0, 0)->fd.GetPathId() == latter_level_path_id() &&
+        InputCompressionMatchesOutput())) {
     return false;
   }
 
