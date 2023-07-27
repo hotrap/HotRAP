@@ -65,6 +65,7 @@ LIB_SOURCES =                                                   \
   db/merge_operator.cc                                          \
   db/output_validator.cc                                        \
   db/periodic_work_scheduler.cc                                 \
+  db/promotion_cache.cc                                         \
   db/range_del_aggregator.cc                                    \
   db/range_tombstone_fragmenter.cc                              \
   db/repair.cc                                                  \

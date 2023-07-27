@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "db/memtable_list.h"
-#include "db/promote_cache.h"
+#include "db/promotion_cache.h"
 #include "db/table_cache.h"
 #include "db/table_properties_collector.h"
 #include "db/write_batch_internal.h"
