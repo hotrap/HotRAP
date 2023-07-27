@@ -26,11 +26,11 @@ class PromotionCache {
     // TODO: Avoid requiring the ownership of key here after upgrading to C++14
     auto it = cache_.find(key);
     if (it != cache_.end()) return;
+    size_ += key.size() + value.size();
+    if (size_ > max_size_) max_size_ = size_;
     auto ret = cache_.insert(std::make_pair(std::move(key), value.ToString()));
     (void)ret;
     assert(ret.second == true);
-    size_ += key.size() + value.size();
-    if (size_ > max_size_) max_size_ = size_;
   }
   // [begin, end)
   std::vector<std::pair<std::string, std::string>> TakeRange(Slice smallest,
@@ -39,7 +39,7 @@ class PromotionCache {
     std::vector<std::pair<std::string, std::string>> ret;
     auto begin_it = cache_.lower_bound(smallest.ToString());
     auto it = begin_it;
-    while (it != cache_.end() && ucmp_->Compare(it->first, largest) < 0) {
+    while (it != cache_.end() && ucmp_->Compare(it->first, largest) <= 0) {
       // TODO: Is it possible to avoid copying here?
       ret.emplace_back(it->first, it->second);
       size_ -= it->first.size() + it->second.size();
