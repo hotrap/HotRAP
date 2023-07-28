@@ -2,39 +2,44 @@
 
 namespace ROCKSDB_NAMESPACE {
 bool PromotionCache::Get(Slice key, PinnableSlice *value) const {
-  ReadLock l_(&lock_);
+  auto guard = mut_.Read();
+  const MutableCache &mut = guard.deref();
   // TODO: Avoid the copy here after upgrading to C++14
-  auto it = cache_.find(key.ToString());
-  if (it == cache_.end()) return false;
-  value->PinSelf(it->second);
-  return true;
+  auto it = mut.cache.find(key.ToString());
+  if (it != mut.cache.end()) {
+    value->PinSelf(it->second);
+    return true;
+  }
+  return false;
 }
 
 void PromotionCache::Promote(std::string key, Slice value) {
-  WriteLock l_(&lock_);
+  auto guard = mut_.Write();
+  MutableCache &mut = guard.deref_mut();
   // TODO: Avoid requiring the ownership of key here after upgrading to C++14
-  auto it = cache_.find(key);
-  if (it != cache_.end()) return;
-  size_ += key.size() + value.size();
-  if (size_ > max_size_) max_size_ = size_;
-  auto ret = cache_.insert(std::make_pair(std::move(key), value.ToString()));
+  auto it = mut.cache.find(key);
+  if (it != mut.cache.end()) return;
+  mut.size += key.size() + value.size();
+  if (mut.size > mut.max_size) mut.max_size = mut.size;
+  auto ret = mut.cache.insert(std::make_pair(std::move(key), value.ToString()));
   (void)ret;
   assert(ret.second == true);
 }
 // [begin, end)
 std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
     Slice smallest, Slice largest) {
-  WriteLock l_(&lock_);
+  auto guard = mut_.Write();
+  MutableCache &mut = guard.deref_mut();
   std::vector<std::pair<std::string, std::string>> ret;
-  auto begin_it = cache_.lower_bound(smallest.ToString());
+  auto begin_it = mut.cache.lower_bound(smallest.ToString());
   auto it = begin_it;
-  while (it != cache_.end() && ucmp_->Compare(it->first, largest) <= 0) {
+  while (it != mut.cache.end() && ucmp_->Compare(it->first, largest) <= 0) {
     // TODO: Is it possible to avoid copying here?
     ret.emplace_back(it->first, it->second);
-    size_ -= it->first.size() + it->second.size();
+    mut.size -= it->first.size() + it->second.size();
     ++it;
   }
-  cache_.erase(begin_it, it);
+  mut.cache.erase(begin_it, it);
   return ret;
 }
 }  // namespace ROCKSDB_NAMESPACE

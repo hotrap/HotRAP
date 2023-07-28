@@ -123,7 +123,7 @@ class WriteLock {
 template <typename T>
 class ReadGuard {
  public:
-  ReadGuard(const T &data, port::RWMutex *mu) : data_(data), lock_(mu) {}
+  ReadGuard(const T &data, const port::RWMutex *mu) : data_(data), lock_(mu) {}
   ReadGuard(const ReadGuard &) = delete;
   ReadGuard &operator=(const ReadGuard<T> &) = delete;
   ReadGuard(ReadGuard<T> &&rhs)
@@ -159,7 +159,10 @@ class WriteGuard {
 template <typename T>
 class RWMutexProtected {
  public:
-  ReadGuard<T> Read() { return ReadGuard<T>(data_, &lock_); }
+  RWMutexProtected() = default;
+  RWMutexProtected(T &&rhs) : data_(std::move(rhs)) {}
+
+  ReadGuard<T> Read() const { return ReadGuard<T>(data_, &lock_); }
   WriteGuard<T> Write() { return WriteGuard<T>(data_, &lock_); }
 
  private:
