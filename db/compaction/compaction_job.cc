@@ -1621,8 +1621,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "anymore.");
     return;
   }
-  CompactionRouter* router =
-      cfd->GetCurrentMutableCFOptions()->compaction_router;
+  CompactionRouter* router = c->mutable_cf_options()->compaction_router;
   TimerGuard timer_guard =
       router
           ? router->GetTimerGuard(c->start_level(),
