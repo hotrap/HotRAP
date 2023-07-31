@@ -76,21 +76,21 @@ Mutex::Mutex(bool adaptive) {
 
 Mutex::~Mutex() { PthreadCall("destroy mutex", pthread_mutex_destroy(&mu_)); }
 
-void Mutex::Lock() {
+void Mutex::Lock() const {
   PthreadCall("lock", pthread_mutex_lock(&mu_));
 #ifndef NDEBUG
   locked_ = true;
 #endif
 }
 
-void Mutex::Unlock() {
+void Mutex::Unlock() const {
 #ifndef NDEBUG
   locked_ = false;
 #endif
   PthreadCall("unlock", pthread_mutex_unlock(&mu_));
 }
 
-bool Mutex::TryLock() {
+bool Mutex::TryLock() const {
   bool ret = PthreadCall("trylock", pthread_mutex_trylock(&mu_)) == 0;
 #ifndef NDEBUG
   if (ret) {
@@ -100,7 +100,7 @@ bool Mutex::TryLock() {
   return ret;
 }
 
-void Mutex::AssertHeld() {
+void Mutex::AssertHeld() const {
 #ifndef NDEBUG
   assert(locked_);
 #endif
@@ -158,20 +158,18 @@ RWMutex::~RWMutex() {
 }
 
 void RWMutex::ReadLock() const {
-  PthreadCall("read lock",
-              pthread_rwlock_rdlock(const_cast<pthread_rwlock_t*>(&mu_)));
+  PthreadCall("read lock", pthread_rwlock_rdlock(&mu_));
 }
 
-void RWMutex::WriteLock() {
+void RWMutex::WriteLock() const {
   PthreadCall("write lock", pthread_rwlock_wrlock(&mu_));
 }
 
 void RWMutex::ReadUnlock() const {
-  PthreadCall("read unlock",
-              pthread_rwlock_unlock(const_cast<pthread_rwlock_t*>(&mu_)));
+  PthreadCall("read unlock", pthread_rwlock_unlock(&mu_));
 }
 
-void RWMutex::WriteUnlock() {
+void RWMutex::WriteUnlock() const {
   PthreadCall("write unlock", pthread_rwlock_unlock(&mu_));
 }
 

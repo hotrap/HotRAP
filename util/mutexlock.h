@@ -31,15 +31,24 @@ namespace ROCKSDB_NAMESPACE {
 
 class MutexLock {
  public:
-  explicit MutexLock(port::Mutex *mu) : mu_(mu) { this->mu_->Lock(); }
+  explicit MutexLock(const port::Mutex *mu) : mu_(mu) { mu_->Lock(); }
   // No copying allowed
   MutexLock(const MutexLock &) = delete;
   void operator=(const MutexLock &) = delete;
+  MutexLock(MutexLock &&rhs) : mu_(rhs.mu_) { rhs.mu_ = nullptr; }
+  MutexLock &operator=(MutexLock &&rhs) {
+    this->~MutexLock();
+    mu_ = rhs.mu_;
+    rhs.mu_ = nullptr;
+    return *this;
+  }
 
-  ~MutexLock() { this->mu_->Unlock(); }
+  ~MutexLock() {
+    if (mu_) this->mu_->Unlock();
+  }
 
  private:
-  port::Mutex *const mu_;
+  const port::Mutex *mu_;
 };
 
 //
@@ -100,7 +109,9 @@ class ReadUnlock {
 //
 class WriteLock {
  public:
-  explicit WriteLock(port::RWMutex *mu) : mu_(mu) { this->mu_->WriteLock(); }
+  explicit WriteLock(const port::RWMutex *mu) : mu_(mu) {
+    this->mu_->WriteLock();
+  }
   // No copying allowed
   WriteLock(const WriteLock &) = delete;
   void operator=(const WriteLock &) = delete;
@@ -117,7 +128,37 @@ class WriteLock {
   }
 
  private:
-  port::RWMutex *mu_;
+  const port::RWMutex *mu_;
+};
+
+template <typename T>
+class MutexProtected;
+template <typename T>
+class MutexGuard {
+ public:
+  MutexGuard(MutexGuard &&rhs)
+      : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
+  MutexGuard &operator=(MutexGuard &&rhs) {
+    data_ = rhs.data_;
+    lock_ = std::move(rhs.lock_);
+    return *this;
+  }
+  T &deref_mut() const { return data_; }
+
+ private:
+  MutexGuard(T &data, const port::Mutex *mu) : data_(data), lock_(mu) {}
+  T &data_;
+  MutexLock lock_;
+  friend class MutexProtected<T>;
+};
+template <typename T>
+class MutexProtected {
+ public:
+  MutexGuard<T> Lock() const { return MutexGuard<T>(data_, &lock_); }
+
+ private:
+  mutable T data_;
+  port::Mutex lock_;
 };
 
 template <typename T>
@@ -141,7 +182,7 @@ class ReadGuard {
 template <typename T>
 class WriteGuard {
  public:
-  WriteGuard(T &data, port::RWMutex *mu) : data_(data), lock_(mu) {}
+  WriteGuard(T &data, const port::RWMutex *mu) : data_(data), lock_(mu) {}
   WriteGuard(const WriteGuard &) = delete;
   WriteGuard<T> &operator=(const WriteGuard &) = delete;
   WriteGuard(WriteGuard<T> &&rhs)
@@ -163,10 +204,10 @@ class RWMutexProtected {
   RWMutexProtected(T &&rhs) : data_(std::move(rhs)) {}
 
   ReadGuard<T> Read() const { return ReadGuard<T>(data_, &lock_); }
-  WriteGuard<T> Write() { return WriteGuard<T>(data_, &lock_); }
+  WriteGuard<T> Write() const { return WriteGuard<T>(data_, &lock_); }
 
  private:
-  T data_;
+  mutable T data_;
   port::RWMutex lock_;
 };
 

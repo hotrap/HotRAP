@@ -706,13 +706,15 @@ class Version {
   //    If the key has any merge operands then store them in
   //    merge_context.operands_list and don't merge the operands
   // REQUIRES: lock is not held
-  void Get(const ReadOptions&, const LookupKey& key, PinnableSlice* value,
-           std::string* timestamp, Status* status, MergeContext* merge_context,
+  void Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
+           PinnableSlice* value, std::string* timestamp, Status* status,
+           MergeContext* merge_context,
            SequenceNumber* max_covering_tombstone_seq,
            bool* value_found = nullptr, bool* key_exists = nullptr,
            SequenceNumber* seq = nullptr, ReadCallback* callback = nullptr,
            bool* is_blob = nullptr, bool do_merge = true,
-           unsigned int prev_level = static_cast<unsigned int>(-1));
+           unsigned int prev_level = static_cast<unsigned int>(-1),
+           int last_level = std::numeric_limits<int>::max() / 2);
 
   void MultiGet(const ReadOptions&, MultiGetRange* range,
                 ReadCallback* callback = nullptr);
@@ -837,25 +839,26 @@ class Version {
 
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
                    int hit_level, Slice user_key, PinnableSlice* value,
-                   Status* status, bool is_blob_index, bool do_merge);
+                   Status& status, bool is_blob_index, bool do_merge);
   void HandleNotFound(GetContext& get_context, Slice user_key,
-                      PinnableSlice* value, Status* status,
-                      MergeContext* merge_context, bool* key_exists,
+                      PinnableSlice* value, Status& status,
+                      MergeContext& merge_context, bool* key_exists,
                       bool do_merge);
   struct EnvGet {
+    DBImpl* db;
     const ReadOptions& read_options;
     const LookupKey& k;
     PinnableSlice* value;
     GetContext& get_context;
-    Status* status;
-    MergeContext* merge_context;
-    SequenceNumber* max_covering_tombstone_seq;
+    Status& status;
+    MergeContext& merge_context;
+    SequenceNumber& max_covering_tombstone_seq;
     bool* key_exists;
     bool is_blob_index;
     bool do_merge;
     unsigned int prev_level;
   };
-  bool GetInFile(EnvGet& env_get, FdWithKeyRange* f, int hit_level,
+  bool GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
                  bool is_hit_file_last_in_level);
   // Returns true if the filter blocks in the specified level will not be
   // checked during read operations. In certain cases (trivial move or preload),

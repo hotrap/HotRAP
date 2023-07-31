@@ -249,6 +249,7 @@ class Compaction {
   // is the sum of all input file sizes.
   uint64_t OutputFilePreallocationSize() const;
 
+  // REQUIRES: DB mutex held
   void SetInputVersion(Version* input_version);
 
   struct InputLevelSummaryBuffer {

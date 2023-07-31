@@ -1129,6 +1129,17 @@ class DBImpl : public DB {
 
   static std::string GenerateDbSessionId(Env* env);
 
+  // Background threads call this function, which is just a wrapper around
+  // the InstallSuperVersion() function. Background threads carry
+  // sv_context which can have new_superversion already
+  // allocated.
+  // All ColumnFamily state changes go through this function. Here we analyze
+  // the new state and we schedule background work if we detect that the new
+  // state needs flush or compaction.
+  void InstallSuperVersionAndScheduleWork(
+      ColumnFamilyData* cfd, SuperVersionContext* sv_context,
+      const MutableCFOptions& mutable_cf_options);
+
  protected:
   const std::string dbname_;
   std::string db_id_;
@@ -1850,17 +1861,6 @@ class DBImpl : public DB {
   Status CloseHelper();
 
   void WaitForBackgroundWork();
-
-  // Background threads call this function, which is just a wrapper around
-  // the InstallSuperVersion() function. Background threads carry
-  // sv_context which can have new_superversion already
-  // allocated.
-  // All ColumnFamily state changes go through this function. Here we analyze
-  // the new state and we schedule background work if we detect that the new
-  // state needs flush or compaction.
-  void InstallSuperVersionAndScheduleWork(
-      ColumnFamilyData* cfd, SuperVersionContext* sv_context,
-      const MutableCFOptions& mutable_cf_options);
 
   bool GetIntPropertyInternal(ColumnFamilyData* cfd,
                               const DBPropertyInfo& property_info,

@@ -1870,7 +1870,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
     sv->current->Get(
-        read_options, lkey, get_impl_options.value, timestamp, &s,
+        this, read_options, lkey, get_impl_options.value, timestamp, &s,
         &merge_context, &max_covering_tombstone_seq,
         get_impl_options.get_value ? get_impl_options.value_found : nullptr,
         nullptr, nullptr,
@@ -2049,8 +2049,8 @@ std::vector<Status> DBImpl::MultiGet(
       PinnableSlice pinnable_val;
       PERF_TIMER_GUARD(get_from_output_files_time);
       super_version->current->Get(
-          read_options, lkey, &pinnable_val, timestamp, &s, &merge_context,
-          &max_covering_tombstone_seq, /*value_found=*/nullptr,
+          this, read_options, lkey, &pinnable_val, timestamp, &s,
+          &merge_context, &max_covering_tombstone_seq, /*value_found=*/nullptr,
           /*key_exists=*/nullptr,
           /*seq=*/nullptr, read_callback);
       value->assign(pinnable_val.data(), pinnable_val.size());
@@ -4501,7 +4501,7 @@ Status DBImpl::GetLatestSequenceForKey(
   // SST files if cache_only=true?
   if (!cache_only) {
     // Check tables
-    sv->current->Get(read_options, lkey, /*value=*/nullptr, timestamp, &s,
+    sv->current->Get(this, read_options, lkey, /*value=*/nullptr, timestamp, &s,
                      &merge_context, &max_covering_tombstone_seq,
                      nullptr /* value_found */, found_record_for_key, seq,
                      nullptr /*read_callback*/, is_blob_index);

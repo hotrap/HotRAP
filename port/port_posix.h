@@ -114,20 +114,20 @@ class Mutex {
 
   ~Mutex();
 
-  void Lock();
-  void Unlock();
+  void Lock() const;
+  void Unlock() const;
 
-  bool TryLock();
+  bool TryLock() const;
 
   // this will assert if the mutex is not locked
   // it does NOT verify that mutex is held by a calling thread
-  void AssertHeld();
+  void AssertHeld() const;
 
  private:
   friend class CondVar;
-  pthread_mutex_t mu_;
+  mutable pthread_mutex_t mu_;
 #ifndef NDEBUG
-  bool locked_ = false;
+  mutable bool locked_ = false;
 #endif
 };
 
@@ -141,13 +141,13 @@ class RWMutex {
   ~RWMutex();
 
   void ReadLock() const;
-  void WriteLock();
+  void WriteLock() const;
   void ReadUnlock() const;
-  void WriteUnlock();
+  void WriteUnlock() const;
   void AssertHeld() {}
 
  private:
-  pthread_rwlock_t mu_;  // the underlying platform mutex
+  mutable pthread_rwlock_t mu_;  // the underlying platform mutex
 };
 
 class CondVar {
