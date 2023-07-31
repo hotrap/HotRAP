@@ -1990,12 +1990,9 @@ static void Access(ColumnFamilyData* cfd, CompactionRouter* router,
   router->Access(level, user_key, value->size());
 }
 void Version::HandleFound(const ReadOptions& read_options,
-                          GetContext& get_context, FileMetaData* f,
-                          int hit_level, Slice user_key, PinnableSlice* value,
-                          Status* status, bool is_blob_index, bool do_merge,
-                          unsigned int prev_level) {
-  Access(cfd_, mutable_cf_options_.compaction_router, f, hit_level, user_key,
-         value, prev_level);
+                          GetContext& get_context, int hit_level,
+                          Slice user_key, PinnableSlice* value, Status* status,
+                          bool is_blob_index, bool do_merge) {
   if (hit_level == 0) {
     RecordTick(db_statistics_, GET_HIT_L0);
   } else if (hit_level == 1) {
@@ -2109,9 +2106,11 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange* f, int hit_level,
       // TODO: How to update VisCnts?
       break;
     case GetContext::kFound:
-      HandleFound(env_get.read_options, env_get.get_context, f->file_metadata,
-                  hit_level, user_key, env_get.value, env_get.status,
-                  env_get.is_blob_index, env_get.do_merge, env_get.prev_level);
+      Access(cfd_, mutable_cf_options_.compaction_router, f->file_metadata,
+             hit_level, user_key, env_get.value, env_get.prev_level);
+      HandleFound(env_get.read_options, env_get.get_context, hit_level,
+                  user_key, env_get.value, env_get.status,
+                  env_get.is_blob_index, env_get.do_merge);
       return true;
     case GetContext::kDeleted:
       // Use empty error message for speed
@@ -2203,10 +2202,9 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
       }
       if (cache.Get(k.user_key(), value)) {
         guard.drop();
-        HandleFound(env_get.read_options, env_get.get_context, f->file_metadata,
+        HandleFound(env_get.read_options, env_get.get_context,
                     fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
-                    env_get.is_blob_index, env_get.do_merge,
-                    env_get.prev_level);
+                    env_get.is_blob_index, env_get.do_merge);
         return;
       }
     }
