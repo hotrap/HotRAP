@@ -322,8 +322,7 @@ std::map<CompactionPri, std::string> OptionsHelper::compaction_pri_to_string = {
     {kOldestSmallestSeqFirst, "kOldestSmallestSeqFirst"},
     {kMinOverlappingRatio, "kMinOverlappingRatio"},
     {kStaticEstimatedHotSize, "kStaticEstimatedHotSize"},
-    {kAccurateHotSize, "kAccurateHotSize"},
-    {kAccurateHotSizePromotionSize, "kAccurateHotSizePromotionSize"}};
+    {kAccurateHotSize, "kAccurateHotSize"}};
 
 std::map<CompactionStopStyle, std::string>
     OptionsHelper::compaction_stop_style_to_string = {

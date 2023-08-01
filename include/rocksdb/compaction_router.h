@@ -184,10 +184,8 @@ class CompactionRouter : public Customizable {
   const char *Name() const override = 0;
   virtual size_t Tier(int level) = 0;
   virtual void Access(int level, Slice key, size_t vlen) = 0;
-  virtual Iter LowerBound(size_t tier, Slice key) = 0;
-  virtual void TransferRange(size_t target_tier, size_t source_tier,
-                             RangeBounds range) = 0;
-  virtual size_t RangeHotSize(size_t tier, Slice smallest, Slice largest) = 0;
+  virtual Iter LowerBound(Slice key) = 0;
+  virtual size_t RangeHotSize(Slice smallest, Slice largest) = 0;
 
   static std::chrono::steady_clock::time_point Start() {
     return std::chrono::steady_clock::now();
