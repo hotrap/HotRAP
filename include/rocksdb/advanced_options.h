@@ -56,7 +56,6 @@ enum CompactionPri : char {
   kMinOverlappingRatio = 0x3,
   kStaticEstimatedHotSize = 0x4,
   kAccurateHotSize = 0x5,
-  kAccurateHotSizePromotionSize = 0x6,
 };
 
 struct CompactionOptionsFIFO {

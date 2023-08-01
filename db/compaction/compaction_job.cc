@@ -1421,35 +1421,16 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
  public:
   RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
                       CompactionIterator& c_iter, Slice start, Bound end)
-      : router_(router),
-        c_(c),
+      : c_(c),
         c_iter_(c_iter),
         start_(start),
         end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
-        start_tier_(router.Tier(c.level())),
-        latter_tier_(router.Tier(c.output_level())),
-        start_tier_iter_(Peekable<CompactionRouter::Iter>(
-            router.LowerBound(start_tier_, start_))),
-        latter_tier_iter_(Peekable<CompactionRouter::Iter>(
-            router.LowerBound(latter_tier_, start_))),
+        hot_iter_(Peekable<CompactionRouter::Iter>(router.LowerBound(start_))),
         first_(true),
         previous_decision_(Decision::kUndetermined) {
-    assert(start_tier_ < latter_tier_);
     // TODO: Handle other cases.
-    assert(start_tier_ + 1 == latter_tier_);
     assert(c.cached_records_to_promote().empty());
-  }
-  ~RouterIteratorSD2CD() {
-    RangeBounds range{
-        .start =
-            Bound{
-                .user_key = start_,
-                .excluded = false,
-            },
-        .end = end_,
-    };
-    router_.TransferRange(start_tier_, latter_tier_, range);
   }
   std::unique_ptr<Elem> next() override {
     if (first_)
@@ -1485,32 +1466,14 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
           new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
     }
     auto stats = c_.immutable_options()->stats;
-    const rocksdb::Slice* latter_hot = latter_tier_iter_.peek();
-    while (latter_hot != nullptr) {
-      if (ucmp_->Compare(*latter_hot, c_iter_.user_key()) >= 0) break;
-      latter_tier_iter_.next();
-      latter_hot = start_tier_iter_.peek();
+    const rocksdb::Slice* hot = hot_iter_.peek();
+    while (hot != nullptr) {
+      if (ucmp_->Compare(*hot, c_iter_.user_key()) >= 0) break;
+      hot_iter_.next();
+      hot = hot_iter_.peek();
     }
-    if (latter_hot && ucmp_->Compare(*latter_hot, c_iter_.user_key()) == 0) {
-      latter_tier_iter_.next();
-      previous_decision_ = Decision::kStartLevel;
-      previous_user_key_ = c_iter_.user_key().ToString();
-      auto ret = std::unique_ptr<Elem>(
-          new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
-      RecordTick(stats, Tickers::PROMOTED_ITER_BYTES,
-                 ret->key.size() + ret->value.size());
-      return ret;
-    }
-    const rocksdb::Slice* start_hot = start_tier_iter_.peek();
-    for (;;) {
-      if (start_hot == NULL ||
-          ucmp_->Compare(*start_hot, c_iter_.user_key()) >= 0)
-        break;
-      start_tier_iter_.next();
-      start_hot = start_tier_iter_.peek();
-    }
-    if (start_hot && ucmp_->Compare(*start_hot, c_iter_.user_key()) == 0) {
-      start_tier_iter_.next();
+    if (hot && ucmp_->Compare(*hot, c_iter_.user_key()) == 0) {
+      hot_iter_.next();
       previous_decision_ = Decision::kStartLevel;
     } else {
       previous_decision_ = Decision::kNextLevel;
@@ -1520,17 +1483,13 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
   }
 
-  CompactionRouter& router_;
   const Compaction& c_;
   CompactionIterator& c_iter_;
   const Slice start_;
   const Bound end_;
 
   const Comparator* ucmp_;
-  size_t start_tier_;
-  size_t latter_tier_;
-  Peekable<CompactionRouter::Iter> start_tier_iter_;
-  Peekable<CompactionRouter::Iter> latter_tier_iter_;
+  Peekable<CompactionRouter::Iter> hot_iter_;
 
   bool first_;
   Decision previous_decision_;
