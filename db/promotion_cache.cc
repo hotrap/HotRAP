@@ -6,7 +6,9 @@
 #include "db/lookup_key.h"
 #include "db/version_set.h"
 #include "logging/logging.h"
+#include "monitoring/statistics.h"
 #include "rocksdb/options.h"
+#include "rocksdb/statistics.h"
 
 namespace ROCKSDB_NAMESPACE {
 // Returns the previous value
@@ -117,6 +119,8 @@ static void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
 
   for (MemTable *table : memtables_to_free) delete table;
   svc.Clean();
+  Statistics *stats = cfd->ioptions()->stats;
+  RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, iter->size);
 
   {
     auto guard = cfd->promotion_caches().Read();

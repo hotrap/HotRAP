@@ -1389,7 +1389,7 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
         advance_ = Advance::kNone;
         auto kv = promotion_iter_.next();
         auto stats = c_.immutable_options()->stats;
-        RecordTick(stats, Tickers::PROMOTED_GET_BYTES,
+        RecordTick(stats, Tickers::PROMOTED_2SDLAST_BYTES,
                    kv->first.size() + kv->second.size());
         return std::unique_ptr<Elem>(
             new Elem(Elem::from(Decision::kNextLevel, kv->first, kv->second)));
