@@ -100,17 +100,20 @@ static void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
   SuperVersionContext svc(true);
 
   db->mutex()->Lock();
-  const auto &updated = cache.updated.Lock().deref_mut();
-  // TODO: Avoid copying here by flushing immutable promotion cache directly.
-  for (const auto &item : cache.cache) {
-    const std::string &user_key = item.first;
-    const std::string &value = item.second;
-    if (updated.find(user_key) != updated.end()) continue;
-    Status s = m->Add(0, ValueType::kTypeValue, user_key, value, nullptr);
-    if (!s.ok()) {
-      ROCKS_LOG_FATAL(cfd->ioptions()->logger,
-                      "check_newer_version: Unexpected error: %s",
-                      s.ToString().c_str());
+  {
+    auto updated_guard = cache.updated.Lock();
+    const auto &updated = updated_guard.deref_mut();
+    // TODO: Avoid copying here by flushing immutable promotion cache directly.
+    for (const auto &item : cache.cache) {
+      const std::string &user_key = item.first;
+      const std::string &value = item.second;
+      if (updated.find(user_key) != updated.end()) continue;
+      Status s = m->Add(0, ValueType::kTypeValue, user_key, value, nullptr);
+      if (!s.ok()) {
+        ROCKS_LOG_FATAL(cfd->ioptions()->logger,
+                        "check_newer_version: Unexpected error: %s",
+                        s.ToString().c_str());
+      }
     }
   }
   cfd->imm()->Add(m, &memtables_to_free);
