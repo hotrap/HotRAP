@@ -21,6 +21,14 @@ T atomic_max_relaxed(std::atomic<T> &dst, T src) {
   return x;
 }
 
+PromotionCache::PromotionCache(int target_level, const Comparator *ucmp)
+    : target_level_(target_level),
+      ucmp_(ucmp),
+      mut_{MutableCache{std::map<std::string, std::string, UserKeyCompare>{
+                            UserKeyCompare(ucmp)},
+                        0}},
+      max_size_(0) {}
+
 bool PromotionCache::Get(Slice key, PinnableSlice *value) const {
   {
     auto guard = mut_.Read();
@@ -115,7 +123,10 @@ static void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
     const std::map<int, PromotionCache> &caches = guard.deref();
     auto it = caches.find(target_level);
     assert(it->first == target_level);
-    it->second.imm_list().Write().deref_mut().list.erase(iter);
+    auto list_guard = it->second.imm_list().Write();
+    auto &list = list_guard.deref_mut();
+    list.size -= iter->size;
+    list.list.erase(iter);
   }
 
   if (sv->Unref()) {
@@ -145,8 +156,9 @@ void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
   sv->Ref();
   auto imm_guard = imm_list_.Write();
   ImmPromotionCacheList &imm_list = imm_guard.deref_mut();
-  auto iter = imm_list.list.emplace(imm_list.list.end(), std::move(mut.cache));
   imm_list.size += mut.size;
+  auto iter = imm_list.list.emplace(imm_list.list.end(), std::move(mut.cache),
+                                    mut.size);
   mut.cache = std::map<std::string, std::string, UserKeyCompare>(
       cfd.ioptions()->user_comparator);
   mut.size = 0;

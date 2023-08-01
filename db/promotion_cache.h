@@ -28,23 +28,21 @@ class UserKeyCompare {
 
 struct ImmPromotionCache {
   std::map<std::string, std::string, UserKeyCompare> cache;
+  size_t size;
   MutexProtected<std::unordered_set<std::string>> updated;
-  ImmPromotionCache(std::map<std::string, std::string, UserKeyCompare> &&c)
-      : cache(std::move(c)) {}
+  ImmPromotionCache(
+      std::map<std::string, std::string, UserKeyCompare> &&arg_cache,
+      size_t arg_size)
+      : cache(std::move(arg_cache)), size(arg_size) {}
 };
 struct ImmPromotionCacheList {
   std::list<ImmPromotionCache> list;
-  size_t size;
+  size_t size = 0;
 };
 
 class PromotionCache {
  public:
-  PromotionCache(int target_level, const Comparator *ucmp)
-      : target_level_(target_level),
-        ucmp_(ucmp),
-        mut_{MutableCache{std::map<std::string, std::string, UserKeyCompare>{
-                              UserKeyCompare(ucmp)},
-                          0}} {}
+  PromotionCache(int target_level, const Comparator *ucmp);
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
   bool Get(Slice key, PinnableSlice *value) const;
