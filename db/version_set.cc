@@ -2212,7 +2212,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
         if (should_stop) return;
         f = fp.GetNextFile();
       }
-      if (cache.Get(k.user_key(), value)) {
+      if (cache_level < last_level && cache.Get(k.user_key(), value)) {
         guard.drop();
         HandleFound(env_get.read_options, env_get.get_context,
                     fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
