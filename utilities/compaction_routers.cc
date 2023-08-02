@@ -10,17 +10,4 @@ Status CompactionRouter::CreateFromString(const ConfigOptions &config_options,
   return Status::OK();
 }
 
-const char *timer_names[] = {
-    "UpdateFilesByCompactionPri",
-    "GetKeyValueFromLevelsBelow",
-};
-static_assert(sizeof(timer_names) / sizeof(const char *) == timer_num);
-
-const char *per_level_timer_names[] = {
-    "kPickSST",
-    "ProcessKeyValueCompaction",
-};
-static_assert(sizeof(per_level_timer_names) / sizeof(const char *) ==
-              per_level_timer_num);
-
 }  // namespace ROCKSDB_NAMESPACE

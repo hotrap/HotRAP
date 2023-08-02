@@ -11,64 +11,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-enum class TimerType : size_t {
-  kUpdateFilesByCompactionPri = 0,
-  kGetKeyValueFromLevelsBelow,
-  kEnd,
-};
-constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
-
-extern const char *timer_names[];
-
-enum class PerLevelTimerType {
-  kPickSST,
-  kProcessKeyValueCompaction,  // start_level
-  kEnd,
-};
-constexpr size_t per_level_timer_num =
-    static_cast<size_t>(PerLevelTimerType::kEnd);
-extern const char *per_level_timer_names[];
-
-struct TimerStatus {
-  const char *name;
-  uint64_t count;
-  uint64_t nsec;
-};
-
-class SingleTimer {
- public:
-  SingleTimer() : count_(0), nsec_(0) {}
-  uint64_t count() const { return count_.load(); }
-  uint64_t nsec() const { return nsec_.load(); }
-  void add(uint64_t nsec) {
-    count_.fetch_add(1, std::memory_order_relaxed);
-    nsec_.fetch_add(nsec, std::memory_order_relaxed);
-  }
-
- private:
-  std::atomic<uint64_t> count_;
-  std::atomic<uint64_t> nsec_;
-};
-
-class TimerGuard {
- public:
-  TimerGuard() : timer_(nullptr) {}
-  TimerGuard(SingleTimer &timer)
-      : timer_(&timer), start_time_(std::chrono::steady_clock::now()) {}
-  ~TimerGuard() {
-    if (timer_ == nullptr) return;
-    auto end_time = std::chrono::steady_clock::now();
-    auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    end_time - start_time_)
-                    .count();
-    timer_->add(nsec);
-  }
-
- private:
-  SingleTimer *timer_;
-  std::chrono::steady_clock::time_point start_time_;
-};
-
 template <typename T>
 class TraitIterator {
  public:
@@ -175,7 +117,6 @@ struct RangeBounds {
 class CompactionRouter : public Customizable {
  public:
   using Iter = TraitObjIterator<Slice>;
-  CompactionRouter() : num_used_levels_(0) {}
   virtual ~CompactionRouter() {}
   static const char *Type() { return "CompactionRouter"; }
   static Status CreateFromString(const ConfigOptions &config_options,
@@ -186,76 +127,6 @@ class CompactionRouter : public Customizable {
   virtual void Access(int level, Slice key, size_t vlen) = 0;
   virtual Iter LowerBound(Slice key) = 0;
   virtual size_t RangeHotSize(Slice smallest, Slice largest) = 0;
-
-  static std::chrono::steady_clock::time_point Start() {
-    return std::chrono::steady_clock::now();
-  }
-  void Stop(TimerType type, std::chrono::steady_clock::time_point start_time) {
-    auto end_time = std::chrono::steady_clock::now();
-    auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time -
-                                                                     start_time)
-                    .count();
-    AddTimer(type, nsec);
-  }
-  void AddTimer(TimerType type, uint64_t nsec) {
-    timers_[static_cast<size_t>(type)].add(nsec);
-  }
-  std::vector<TimerStatus> CollectTimers() {
-    std::vector<TimerStatus> ret;
-    for (size_t id = 0; id < timer_num; id += 1) {
-      const auto &timer = timers_[id];
-      ret.push_back(TimerStatus{timer_names[id], timer.count(), timer.nsec()});
-    }
-    return ret;
-  }
-  std::vector<std::vector<TimerStatus>> CollectTimersInAllLevels() {
-    std::vector<std::vector<TimerStatus>> ret;
-    size_t num_used_levels = num_used_levels_.load(std::memory_order_relaxed);
-    for (size_t level = 0; level < num_used_levels; ++level) {
-      std::vector<TimerStatus> timers;
-      for (size_t id = 0; id < per_level_timer_num; id += 1) {
-        const auto &timer = per_level_timers_[level][id];
-        timers.push_back(TimerStatus{per_level_timer_names[id], timer.count(),
-                                     timer.nsec()});
-      }
-      ret.push_back(std::move(timers));
-    }
-    return ret;
-  }
-  void AddTimerInLevel(int level, PerLevelTimerType type, uint64_t nsec) {
-    level = std::min((size_t)level, MAX_LEVEL_NUM - 1);
-    MarkLevelUsed(level);
-    per_level_timers_[level][static_cast<size_t>(type)].add(nsec);
-  }
-  void Stop(int level, PerLevelTimerType type,
-            std::chrono::steady_clock::time_point start_time) {
-    auto end_time = std::chrono::steady_clock::now();
-    auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time -
-                                                                     start_time)
-                    .count();
-    AddTimerInLevel(level, type, nsec);
-  }
-  TimerGuard GetTimerGuard(TimerType type) {
-    return TimerGuard(timers_[static_cast<size_t>(type)]);
-  }
-  TimerGuard GetTimerGuard(int level, PerLevelTimerType type) {
-    level = std::min((size_t)level, MAX_LEVEL_NUM - 1);
-    MarkLevelUsed(level);
-    return TimerGuard(per_level_timers_[level][static_cast<size_t>(type)]);
-  }
-
- private:
-  void MarkLevelUsed(int level) {
-    int num_used_levels = num_used_levels_.load(std::memory_order_relaxed);
-    while (num_used_levels <= level) {
-      num_used_levels_.compare_exchange_weak(num_used_levels, level + 1,
-                                             std::memory_order_relaxed);
-    }
-  }
-  SingleTimer timers_[timer_num];
-  static constexpr size_t MAX_LEVEL_NUM = 10;
-  SingleTimer per_level_timers_[MAX_LEVEL_NUM][per_level_timer_num];
-  std::atomic<int> num_used_levels_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

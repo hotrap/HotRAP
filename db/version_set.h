@@ -197,7 +197,7 @@ class VersionStorageInfo {
   // Sort all files for this version based on their file size and
   // record results in files_by_compaction_pri_. The largest files are listed
   // first.
-  void UpdateFilesByCompactionPri(const ImmutableOptions& immutable_options,
+  void UpdateFilesByCompactionPri(ColumnFamilyData* cfd,
                                   const MutableCFOptions& mutable_cf_options);
 
   void GenerateLevel0NonOverlapping();

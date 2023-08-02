@@ -18,6 +18,7 @@
 #include "cache/cache_entry_roles.h"
 #include "db/version_set.h"
 #include "rocksdb/system_clock.h"
+#include "util/timers.h"
 
 class ColumnFamilyData;
 
@@ -100,6 +101,24 @@ struct DBStatInfo {
   // This what will be property_name in the flat map returned to the user
   std::string property_name;
 };
+
+enum class TimerType : size_t {
+  kUpdateFilesByCompactionPri = 0,
+  kGetKeyValueFromLevelsBelow,
+  kEnd,
+};
+constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
+
+extern const char* timer_names[];
+
+enum class PerLevelTimerType {
+  kPickSST,
+  kProcessKeyValueCompaction,  // start_level
+  kEnd,
+};
+constexpr size_t per_level_timer_num =
+    static_cast<size_t>(PerLevelTimerType::kEnd);
+extern const char* per_level_timer_names[];
 
 class InternalStats {
  public:
@@ -484,6 +503,11 @@ class InternalStats {
   // DBPropertyInfo struct used internally for retrieving properties.
   static const std::unordered_map<std::string, DBPropertyInfo> ppt_name_to_info;
 
+  TypedTimers<TimerType>& hotrap_timers() { return hotrap_timers_; }
+  TypedTimersPerLevel<PerLevelTimerType>& hotrap_timers_per_level() {
+    return hotrap_timers_per_level_;
+  }
+
  private:
   void DumpDBMapStats(std::map<std::string, std::string>* db_stats);
   void DumpDBStats(std::string* value);
@@ -696,6 +720,9 @@ class InternalStats {
   // resources, or input file corruption. Failing when retrying the same flush
   // or compaction will cause the counter to increase too.
   uint64_t bg_error_count_;
+
+  TypedTimers<TimerType> hotrap_timers_;
+  TypedTimersPerLevel<PerLevelTimerType> hotrap_timers_per_level_;
 
   const int number_levels_;
   SystemClock* clock_;

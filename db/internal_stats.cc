@@ -28,10 +28,24 @@
 #include "rocksdb/table.h"
 #include "table/block_based/cachable_entry.h"
 #include "util/string_util.h"
+#include "util/timers.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 #ifndef ROCKSDB_LITE
+
+const char* timer_names[] = {
+    "UpdateFilesByCompactionPri",
+    "GetKeyValueFromLevelsBelow",
+};
+static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
+
+const char* per_level_timer_names[] = {
+    "kPickSST",
+    "ProcessKeyValueCompaction",
+};
+static_assert(sizeof(per_level_timer_names) / sizeof(const char*) ==
+              per_level_timer_num);
 
 const std::map<LevelStatType, LevelStat> InternalStats::compaction_level_stats =
     {
@@ -1582,6 +1596,33 @@ void InternalStats::DumpCFStats(std::string* value) {
   DumpCFFileHistogram(value);
 }
 
+static void dump_indent(std::string& value, size_t indent) {
+  while (indent > 0) {
+    value.push_back('\t');
+    indent -= 1;
+  }
+}
+static void dump_timers(std::string& value, size_t indent, const Timers& timers,
+                        const char* names[]) {
+  value.append("[\n");
+  indent += 1;
+  for (size_t i = 0; i < timers.num(); ++i) {
+    const AtomicTimer& timer = timers.timer(i);
+    dump_indent(value, indent);
+    value.append("{\"name\": \"");
+    value.append(names[i]);
+    auto count = timer.count();
+    auto nsec = timer.time().as_nanos();
+    value.append("\", \"count\": ");
+    value.append(std::to_string(count));
+    value.append(", \"time(nsec)\": ");
+    value.append(std::to_string(nsec));
+    value.append("},\n");
+  }
+  indent -= 1;
+  dump_indent(value, indent);
+  value.append("],\n");
+}
 void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
   char buf[2000];
   // Per-ColumnFamily stats
@@ -1787,6 +1828,23 @@ void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
       value->append(stats.ToString(clock_));
     }
   }
+
+  value->append("Timers of hotrap\n");
+  dump_timers(*value, 0, hotrap_timers_.timers(), timer_names);
+
+  value->append("Per level timers of hotrap\n[\n");
+  const TimersPerLevel& per_level_timers =
+      hotrap_timers_per_level_.timers_per_level();
+  size_t num_levels = per_level_timers.num_levels();
+  for (size_t i = 0; i < num_levels; ++i) {
+    value->append("\t{\n\t\t\"level\": ");
+    value->append(std::to_string(i));
+    value->append(",\n\t\t\"timers\": ");
+    const Timers& timers = per_level_timers.timers_in_level(i);
+    dump_timers(*value, 2, timers, per_level_timer_names);
+    value->append("\t},\n");
+  }
+  value->append("]\n");
 
   auto guard = cfd_->promotion_caches().Read();
   const auto& caches = guard.deref();

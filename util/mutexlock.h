@@ -164,18 +164,21 @@ class MutexProtected {
 template <typename T>
 class ReadGuard {
  public:
-  ReadGuard(const T &data, const port::RWMutex *mu) : data_(data), lock_(mu) {}
+  ReadGuard(const T &data, const port::RWMutex *mu) : data_(&data), lock_(mu) {}
   ReadGuard(const ReadGuard &) = delete;
   ReadGuard &operator=(const ReadGuard<T> &) = delete;
   ReadGuard(ReadGuard<T> &&rhs)
       : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
-  ReadGuard &operator=(ReadGuard<T> &&rhs) = delete;
+  ReadGuard &operator=(ReadGuard<T> &&rhs) {
+    data_ = rhs.data_;
+    lock_ = std::move(rhs.lock_);
+  }
 
-  const T &deref() const { return data_; }
+  const T &deref() const { return *data_; }
   void drop() { lock_.drop(); }
 
  private:
-  const T &data_;
+  const T *data_;
   ReadLock lock_;
 };
 

@@ -69,6 +69,7 @@
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
 #include "util/coding.h"
+#include "util/rusty.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
 #include "util/user_comparator_wrapper.h"
@@ -2515,8 +2516,7 @@ void Version::PrepareApply(const MutableCFOptions& mutable_cf_options,
   UpdateAccumulatedStats(update_stats);
   storage_info_.UpdateNumNonEmptyLevels();
   storage_info_.CalculateBaseBytes(*cfd_->ioptions(), mutable_cf_options);
-  storage_info_.UpdateFilesByCompactionPri(*cfd_->ioptions(),
-                                           mutable_cf_options);
+  storage_info_.UpdateFilesByCompactionPri(cfd_, mutable_cf_options);
   storage_info_.GenerateFileIndexer();
   storage_info_.GenerateLevelFilesBrief();
   storage_info_.GenerateLevel0NonOverlapping();
@@ -3467,7 +3467,8 @@ void PickSSTAccurateHotSize(CompactionRouter* router,
 }  // namespace
 
 void VersionStorageInfo::UpdateFilesByCompactionPri(
-    const ImmutableOptions& ioptions, const MutableCFOptions& options) {
+    ColumnFamilyData* cfd, const MutableCFOptions& options) {
+  const ImmutableOptions& ioptions = *cfd->ioptions();
   if (compaction_style_ == kCompactionStyleNone ||
       compaction_style_ == kCompactionStyleFIFO ||
       compaction_style_ == kCompactionStyleUniversal) {
@@ -3475,7 +3476,8 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     return;
   }
   auto router = options.compaction_router;
-  auto start_time = CompactionRouter::Start();
+  InternalStats* internal_stats = cfd->internal_stats();
+  auto start_time = rusty::time::Instant::now();
   // No need to sort the highest level because it is never compacted.
   for (int level = 0; level < num_levels() - 1; level++) {
     const std::vector<FileMetaData*>& files = files_[level];
@@ -3494,7 +3496,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     if (num > temp.size()) {
       num = temp.size();
     }
-    auto pick_sst_start = CompactionRouter::Start();
+    auto pick_sst_start = rusty::time::Instant::now();
     switch (ioptions.compaction_pri) {
       case kByCompensatedSize:
         std::partial_sort(temp.begin(), temp.begin() + num, temp.end(),
@@ -3534,7 +3536,9 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     }
     assert(temp.size() == files.size());
     if (!files.empty() && router) {
-      router->Stop(level, PerLevelTimerType::kPickSST, pick_sst_start);
+      internal_stats->hotrap_timers_per_level()
+          .timer(level, PerLevelTimerType::kPickSST)
+          .add(pick_sst_start.elapsed());
     }
 
     // initialize files_by_compaction_pri_
@@ -3545,7 +3549,9 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     assert(files_[level].size() == files_by_compaction_pri_[level].size());
   }
   if (router) {
-    router->Stop(TimerType::kUpdateFilesByCompactionPri, start_time);
+    internal_stats->hotrap_timers()
+        .timer(TimerType::kUpdateFilesByCompactionPri)
+        .add(start_time.elapsed());
   }
 }
 

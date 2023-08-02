@@ -1582,10 +1582,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
   CompactionRouter* router = c->mutable_cf_options()->compaction_router;
   TimerGuard timer_guard =
-      router
-          ? router->GetTimerGuard(c->start_level(),
-                                  PerLevelTimerType::kProcessKeyValueCompaction)
-          : TimerGuard();
+      cfd->internal_stats()
+          ->hotrap_timers_per_level()
+          .timer(c->start_level(),
+                 PerLevelTimerType::kProcessKeyValueCompaction)
+          .start();
   const int level = c->level();
 
   CompactionRangeDelAggregator range_del_agg(&cfd->internal_comparator(),
