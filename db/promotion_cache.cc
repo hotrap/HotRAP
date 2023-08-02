@@ -65,6 +65,10 @@ static void mark_updated(ImmPromotionCache &cache,
 static void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
                                 std::list<ImmPromotionCache>::iterator iter) {
   ColumnFamilyData *cfd = sv->cfd;
+  InternalStats &internal_stats = *cfd->internal_stats();
+  TimerGuard timer_guard = internal_stats.hotrap_timers()
+                               .timer(TimerType::kCheckNewerVersion)
+                               .start();
   ImmPromotionCache &cache = *iter;
   for (const auto &item : cache.cache) {
     const std::string &user_key = item.first;

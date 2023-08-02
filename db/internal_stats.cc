@@ -37,6 +37,7 @@ namespace ROCKSDB_NAMESPACE {
 const char* timer_names[] = {
     "UpdateFilesByCompactionPri",
     "GetKeyValueFromLevelsBelow",
+    "CheckNewerVersion",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 

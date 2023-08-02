@@ -105,6 +105,7 @@ struct DBStatInfo {
 enum class TimerType : size_t {
   kUpdateFilesByCompactionPri = 0,
   kGetKeyValueFromLevelsBelow,
+  kCheckNewerVersion,
   kEnd,
 };
 constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
