@@ -70,17 +70,16 @@ class TimersPerLevel {
   TimersPerLevel &operator=(const TimersPerLevel &) = delete;
   TimersPerLevel(TimersPerLevel &&) = delete;
   TimersPerLevel &operator=(TimersPerLevel &&) = delete;
-  size_t num_levels() const { return v_.Read().deref().size(); }
+  size_t num_levels() const { return v_.Read()->size(); }
   const Timers &timers_in_level(size_t level) const {
     {
-      auto guard = v_.Read();
-      if (level < guard.deref().size()) return guard.deref()[level];
+      auto v = v_.Read();
+      if (level < v->size()) return (*v)[level];
     }
-    auto guard = v_.Write();
-    std::deque<Timers> &timers_mut = guard.deref_mut();
-    while (timers_mut.size() <= level)
-      timers_mut.emplace_back(num_timers_in_each_level_);
-    return guard.deref()[level];
+    auto v = v_.Write();
+    while (v->size() <= level)
+      v->emplace_back(num_timers_in_each_level_);
+    return (*v)[level];
   }
   const AtomicTimer &timer(size_t level, size_t type) const {
     return timers_in_level(level).timer(type);
@@ -88,7 +87,7 @@ class TimersPerLevel {
 
  private:
   rocksdb::RWMutexProtected<std::deque<Timers>> v_;
-  size_t num_timers_in_each_level_;
+  const size_t num_timers_in_each_level_;
 };
 
 template <typename Type>

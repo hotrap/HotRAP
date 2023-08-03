@@ -1970,15 +1970,14 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
   while (router->Tier(target_level) == 1) {
     target_level -= 1;
   }
-  auto caches_guard = cfd.promotion_caches().Write();
+  auto caches = cfd.promotion_caches().Write();
   if (f.being_or_has_been_compacted) return;
-  auto& caches = caches_guard.deref_mut();
   // The first whose level <= target_level
-  auto it = caches.find(target_level);
-  if (it == caches.end()) {
+  auto it = caches->find(target_level);
+  if (it == caches->end()) {
     auto ret =
-        caches.emplace(std::piecewise_construct, std::make_tuple(target_level),
-                       std::make_tuple(target_level, cfd.user_comparator()));
+        caches->emplace(std::piecewise_construct, std::make_tuple(target_level),
+                        std::make_tuple(target_level, cfd.user_comparator()));
     it = ret.first;
     assert(ret.second);
   }
@@ -2203,9 +2202,8 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .prev_level = prev_level};
   std::vector<int> cache_levels;
   {
-    auto guard = cfd_->promotion_caches().Read();
-    const auto& caches = guard.deref();
-    for (auto it = caches.cbegin(); it != caches.cend(); ++it)
+    auto caches = cfd_->promotion_caches().Read();
+    for (auto it = caches->cbegin(); it != caches->cend(); ++it)
       cache_levels.push_back(it->first);
   }
   for (int cache_level : cache_levels) {
@@ -2216,10 +2214,9 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
       f = fp.GetNextFile();
     }
     if (cache_level < last_level) {
-      auto guard = cfd_->promotion_caches().Read();
-      const auto& caches = guard.deref();
-      auto it = caches.find(cache_level);
-      assert(it != caches.end());
+      auto caches = cfd_->promotion_caches().Read();
+      auto it = caches->find(cache_level);
+      assert(it != caches->end());
       const auto& cache = it->second;
       if (cache.Get(k.user_key(), value)) {
         HandleFound(env_get.read_options, env_get.get_context,

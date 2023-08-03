@@ -143,7 +143,8 @@ class MutexGuard {
     lock_ = std::move(rhs.lock_);
     return *this;
   }
-  T &deref_mut() const { return data_; }
+  T &operator*() const { return data_; }
+  T *operator->() const { return &data_; }
 
  private:
   MutexGuard(T &data, const port::Mutex *mu) : data_(data), lock_(mu) {}
@@ -173,8 +174,9 @@ class ReadGuard {
     data_ = rhs.data_;
     lock_ = std::move(rhs.lock_);
   }
+  const T &operator*() const { return *data_; }
+  const T *operator->() const { return data_; }
 
-  const T &deref() const { return *data_; }
   void drop() { lock_.drop(); }
 
  private:
@@ -191,9 +193,8 @@ class WriteGuard {
   WriteGuard(WriteGuard<T> &&rhs)
       : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
   WriteGuard<T> &operator=(WriteGuard<T> &&) = delete;
-
-  const T &deref() const { return data_; }
-  T &deref_mut() { return data_; }
+  T &operator*() const { return data_; }
+  T *operator->() const { return &data_; }
 
  private:
   T &data_;
