@@ -6,6 +6,8 @@
 #include "util/mutexlock.h"
 #include "util/rusty.h"
 
+namespace ROCKSDB_NAMESPACE {
+
 class TimerGuard;
 class AtomicTimer {
  public:
@@ -116,3 +118,4 @@ class TypedTimersPerLevel {
  private:
   TimersPerLevel v_;
 };
+}  // namespace ROCKSDB_NAMESPACE

@@ -3,6 +3,9 @@
 #include <chrono>
 #include <cstdint>
 
+#include "rocksdb/rocksdb_namespace.h"
+
+namespace ROCKSDB_NAMESPACE {
 namespace rusty {
 namespace time {
 class Duration {
@@ -32,3 +35,4 @@ class Instant {
 };
 }  // namespace time
 }  // namespace rusty
+}  // namespace ROCKSDB_NAMESPACE
