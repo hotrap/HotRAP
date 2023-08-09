@@ -384,22 +384,6 @@ class VersionBuilder::Rep {
             return Status::Corruption("VersionBuilder", oss.str());
           }
 
-          if (rhs->fd.smallest_seqno == rhs->fd.largest_seqno) {
-            // This is an external file that we ingested
-            const SequenceNumber external_file_seqno = rhs->fd.smallest_seqno;
-
-            if (!(external_file_seqno < lhs->fd.largest_seqno ||
-                  external_file_seqno == 0)) {
-              std::ostringstream oss;
-              oss << "L0 file #" << lhs->fd.GetNumber() << " with seqno "
-                  << lhs->fd.smallest_seqno << ' ' << lhs->fd.largest_seqno
-                  << " vs. file #" << rhs->fd.GetNumber()
-                  << " with global_seqno " << external_file_seqno;
-
-              return Status::Corruption("VersionBuilder", oss.str());
-            }
-          }
-
           return Status::OK();
         };
 

@@ -9,6 +9,7 @@
 #include "monitoring/statistics.h"
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
+#include "util/autovector.h"
 
 namespace ROCKSDB_NAMESPACE {
 // Returns the previous value
@@ -59,8 +60,8 @@ static void mark_updated(ImmPromotionCache &cache,
   updated->insert(user_key);
 }
 // Will unref sv
-static void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
-                                std::list<ImmPromotionCache>::iterator iter) {
+void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
+                         std::list<ImmPromotionCache>::iterator iter) {
   ColumnFamilyData *cfd = sv->cfd;
   InternalStats &internal_stats = *cfd->internal_stats();
   TimerGuard timer_guard = internal_stats.hotrap_timers()
@@ -101,6 +102,7 @@ static void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
   SuperVersionContext svc(true);
 
   db->mutex()->Lock();
+  m->SetNextLogNumber(db->logfile_number_);
   {
     auto updated = cache.updated.Lock();
     // TODO: Avoid copying here by flushing immutable promotion cache directly.
@@ -108,7 +110,8 @@ static void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
       const std::string &user_key = item.first;
       const std::string &value = item.second;
       if (updated->find(user_key) != updated->end()) continue;
-      Status s = m->Add(0, ValueType::kTypeValue, user_key, value, nullptr);
+      // It seems that sequence number 0 is treated specially. So we use 1 here.
+      Status s = m->Add(1, ValueType::kTypeValue, user_key, value, nullptr);
       if (!s.ok()) {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger,
                         "check_newer_version: Unexpected error: %s",
@@ -118,6 +121,10 @@ static void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
   }
   cfd->imm()->Add(m, &memtables_to_free);
   db->InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
+  DBImpl::FlushRequest flush_req;
+  db->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}), &flush_req);
+  db->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
+  db->MaybeScheduleFlushOrCompaction();
   db->mutex()->Unlock();
 
   for (MemTable *table : memtables_to_free) delete table;
