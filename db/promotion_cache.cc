@@ -103,6 +103,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
 
   db->mutex()->Lock();
   m->SetNextLogNumber(db->logfile_number_);
+  size_t flushed_bytes = 0;
   {
     auto updated = cache.updated.Lock();
     // TODO: Avoid copying here by flushing immutable promotion cache directly.
@@ -117,6 +118,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
                         "check_newer_version: Unexpected error: %s",
                         s.ToString().c_str());
       }
+      flushed_bytes += user_key.size() + value.size();
     }
   }
   cfd->imm()->Add(m, &memtables_to_free);
@@ -130,7 +132,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
   for (MemTable *table : memtables_to_free) delete table;
   svc.Clean();
   Statistics *stats = cfd->ioptions()->stats;
-  RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, iter->size);
+  RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, flushed_bytes);
 
   {
     auto caches = cfd->promotion_caches().Read();
