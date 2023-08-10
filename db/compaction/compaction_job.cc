@@ -1417,6 +1417,27 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
   VecIter<std::pair<InternalKey, std::string>> promotion_iter_;
 };
 
+template <typename Iter>
+class IgnoreStableHot : public TraitIterator<Slice> {
+ public:
+  IgnoreStableHot(Iter&& iter) : iter_(std::move(iter)) {}
+  IgnoreStableHot(IgnoreStableHot<Iter>&& iter)
+      : iter_(std::move(iter.iter_)) {}
+  std::unique_ptr<Slice> next() override {
+    for (;;) {
+      std::unique_ptr<HotRecInfo> ret = iter_.next();
+      if (ret == nullptr) {
+        return nullptr;
+      } else {
+        return std::unique_ptr<Slice>(new Slice(ret->key));
+      }
+    }
+  }
+
+ private:
+  Iter iter_;
+};
+
 class RouterIteratorSD2CD : public TraitIterator<Elem> {
  public:
   RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
@@ -1426,7 +1447,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         start_(start),
         end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
-        hot_iter_(Peekable<CompactionRouter::Iter>(router.LowerBound(start_))),
+        hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
+            router.LowerBound(start_))),
         first_(true),
         previous_decision_(Decision::kUndetermined) {
     // TODO: Handle other cases.
@@ -1489,7 +1511,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   const Bound end_;
 
   const Comparator* ucmp_;
-  Peekable<CompactionRouter::Iter> hot_iter_;
+  Peekable<IgnoreStableHot<CompactionRouter::Iter>> hot_iter_;
 
   bool first_;
   Decision previous_decision_;

@@ -1,5 +1,7 @@
 #include "promotion_cache.h"
 
+#include <functional>
+
 #include "column_family.h"
 #include "db/db_impl/db_impl.h"
 #include "db/job_context.h"
@@ -7,6 +9,7 @@
 #include "db/version_set.h"
 #include "logging/logging.h"
 #include "monitoring/statistics.h"
+#include "rocksdb/compaction_router.h"
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
 #include "util/autovector.h"
@@ -68,8 +71,33 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
                                .timer(TimerType::kCheckNewerVersion)
                                .start();
   ImmPromotionCache &cache = *iter;
-  for (const auto &item : cache.cache) {
-    const std::string &user_key = item.first;
+  struct RefHash {
+    size_t operator()(std::reference_wrapper<const std::string> x) const {
+      return std::hash<std::string>()(x.get());
+    }
+  };
+  struct RefEq {
+    bool operator()(std::reference_wrapper<const std::string> lhs,
+                    std::reference_wrapper<const std::string> rhs) const {
+      return lhs.get() == rhs.get();
+    }
+  };
+  std::unordered_set<std::reference_wrapper<const std::string>, RefHash, RefEq>
+      stable_hot;
+  CompactionRouter *router = sv->mutable_cf_options.compaction_router;
+  const Comparator *ucmp = cfd->ioptions()->user_comparator;
+  if (router) {
+    for (const auto &item : cache.cache) {
+      const std::string &user_key = item.first;
+      auto it = router->LowerBound(user_key);
+      std::unique_ptr<HotRecInfo> info = it.next();
+      if (info == nullptr) continue;
+      if (ucmp->Compare(info->key, user_key) != 0) continue;
+      if (!info->stable) continue;
+      stable_hot.insert(user_key);
+    }
+  }
+  for (const std::string &user_key : stable_hot) {
     LookupKey key(user_key, kMaxSequenceNumber);
     Status s;
     MergeContext merge_context;
@@ -109,6 +137,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
     for (const auto &item : cache.cache) {
       const std::string &user_key = item.first;
       const std::string &value = item.second;
+      if (stable_hot.find(user_key) == stable_hot.end()) continue;
       if (updated->find(user_key) != updated->end()) continue;
       // It seems that sequence number 0 is treated specially. So we use 1 here.
       Status s = m->Add(1, ValueType::kTypeValue, user_key, value, nullptr);
