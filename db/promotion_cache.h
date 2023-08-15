@@ -46,6 +46,7 @@ class PromotionCache {
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
   bool Get(Slice key, PinnableSlice *value) const;
+  // REQUIRES: PromotionCaches mutex not held
   void Promote(DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size,
                std::string key, Slice value);
   // [begin, end)

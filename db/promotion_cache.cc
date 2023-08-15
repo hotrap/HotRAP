@@ -181,19 +181,26 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
 void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
                              size_t write_buffer_size, std::string key,
                              Slice value) {
-  auto mut = mut_.Write();
-  // TODO: Avoid requiring the ownership of key here after upgrading to C++14
-  auto it = mut->cache.find(key);
-  if (it != mut->cache.end()) return;
-  mut->size += key.size() + value.size();
-  size_t tot = mut->size + imm_list_.Read()->size;
-  atomic_max_relaxed(max_size_, tot);
-  auto ret =
-      mut->cache.insert(std::make_pair(std::move(key), value.ToString()));
-  (void)ret;
-  assert(ret.second == true);
-  if (mut->size < write_buffer_size) return;
+  {
+    auto mut = mut_.Write();
+    // TODO: Avoid requiring the ownership of key here after upgrading to C++14
+    auto it = mut->cache.find(key);
+    if (it != mut->cache.end()) return;
+    mut->size += key.size() + value.size();
+    size_t tot = mut->size + imm_list_.Read()->size;
+    atomic_max_relaxed(max_size_, tot);
+    auto ret =
+        mut->cache.insert(std::make_pair(std::move(key), value.ToString()));
+    (void)ret;
+    assert(ret.second == true);
+    if (mut->size < write_buffer_size) return;
+  }
   db.mutex()->Lock();
+  auto mut = mut_.Write();
+  if (mut->size < write_buffer_size) {
+    db.mutex()->Unlock();
+    return;
+  }
   SuperVersion *sv = cfd.GetSuperVersion();
   // check_newer_version is responsible to unref it
   sv->Ref();
