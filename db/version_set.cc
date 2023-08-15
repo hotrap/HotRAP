@@ -1970,21 +1970,24 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
   while (router->Tier(target_level) == 1) {
     target_level -= 1;
   }
-  auto caches = cfd.promotion_caches().Write();
-  if (f.being_or_has_been_compacted) return;
-  // The first whose level <= target_level
-  auto it = caches->find(target_level);
-  if (it == caches->end()) {
-    auto ret =
-        caches->emplace(std::piecewise_construct, std::make_tuple(target_level),
-                        std::make_tuple(target_level, cfd.user_comparator()));
-    it = ret.first;
-    assert(ret.second);
+  PromotionCache* cache;
+  {
+    auto caches = cfd.promotion_caches().Write();
+    if (f.being_or_has_been_compacted) return;
+    // The first whose level <= target_level
+    auto it = caches->find(target_level);
+    if (it == caches->end()) {
+      auto ret = caches->emplace(
+          std::piecewise_construct, std::make_tuple(target_level),
+          std::make_tuple(target_level, cfd.user_comparator()));
+      it = ret.first;
+      assert(ret.second);
+    }
+    assert(it->first == target_level);
+    cache = &it->second;
   }
-  assert(it->first == target_level);
-  auto& cache = it->second;
-  cache.Promote(db, cfd, mutable_cf_options.write_buffer_size,
-                user_key.ToString(), value);
+  cache->Promote(db, cfd, mutable_cf_options.write_buffer_size,
+                 user_key.ToString(), value);
   return;
 }
 static void Access(DBImpl* db, ColumnFamilyData& cfd,
