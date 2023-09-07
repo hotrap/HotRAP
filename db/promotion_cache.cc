@@ -134,7 +134,6 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
   size_t flushed_bytes = 0;
   {
     auto updated = cache.updated.Lock();
-    // TODO: Avoid copying here by flushing immutable promotion cache directly.
     for (const auto &item : cache.cache) {
       const std::string &user_key = item.first;
       const std::string &value = item.second;
@@ -212,7 +211,6 @@ void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
       cfd.ioptions()->user_comparator);
   mut->size = 0;
   db.mutex()->Unlock();
-  // TODO: Use thread pool of RocksDB
   std::thread checker(check_newer_version, &db, sv, target_level_, iter);
   checker.detach();
 }
