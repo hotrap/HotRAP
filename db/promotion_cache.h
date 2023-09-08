@@ -14,6 +14,7 @@ namespace ROCKSDB_NAMESPACE {
 
 class ColumnFamilyData;
 class DBImpl;
+class InternalStats;
 
 class UserKeyCompare {
  public:
@@ -45,7 +46,8 @@ class PromotionCache {
   PromotionCache(int target_level, const Comparator *ucmp);
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
-  bool Get(Slice key, PinnableSlice *value) const;
+  bool Get(InternalStats *internal_stats, Slice key,
+           PinnableSlice *value) const;
   // REQUIRES: PromotionCaches mutex not held
   void Promote(DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size,
                std::string key, Slice value);

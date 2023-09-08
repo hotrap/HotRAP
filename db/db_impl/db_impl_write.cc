@@ -19,6 +19,7 @@
 #include "table/scoped_arena_iterator.h"
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
+#include "util/rusty.h"
 
 namespace ROCKSDB_NAMESPACE {
 // Convenience methods
@@ -1938,6 +1939,7 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
 
   cfd->mem()->SetNextLogNumber(logfile_number_);
 
+  auto invalidate_old_start = rusty::time::Instant::now();
   Arena arena;
   ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
   auto caches = cfd->promotion_caches().Read();
@@ -1954,6 +1956,10 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
       }
     }
   }
+  cfd->internal_stats()
+      ->hotrap_timers()
+      .timer(TimerType::kInvalidateOld)
+      .add(invalidate_old_start.elapsed());
 
   assert(new_mem != nullptr);
   cfd->imm()->Add(cfd->mem(), &context->memtables_to_free_);

@@ -1963,6 +1963,10 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
                        const MutableCFOptions& mutable_cf_options,
                        FileMetaData& f, int hit_level, Slice user_key,
                        PinnableSlice& value, unsigned int prev_level) {
+  auto timer_guard = cfd.internal_stats()
+                         ->hotrap_timers()
+                         .timer(TimerType::kTryPromote)
+                         .start();
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (router->Tier(hit_level) == 0) return;
   assert(hit_level > 0);
@@ -1994,6 +1998,8 @@ static void Access(DBImpl* db, ColumnFamilyData& cfd,
                    const MutableCFOptions& mutable_cf_options, FileMetaData& f,
                    int hit_level, Slice user_key, PinnableSlice* value,
                    unsigned int prev_level) {
+  auto timer_guard =
+      cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value || prev_level != static_cast<unsigned int>(-1)) return;
@@ -2005,6 +2011,10 @@ void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
                           Slice user_key, PinnableSlice* value, Status& status,
                           bool is_blob_index, bool do_merge) {
+  auto timer_guard = cfd_->internal_stats()
+                         ->hotrap_timers()
+                         .timer(TimerType::kHandleFound)
+                         .start();
   if (hit_level == 0) {
     RecordTick(db_statistics_, GET_HIT_L0);
   } else if (hit_level == 1) {
@@ -2035,6 +2045,10 @@ void Version::HandleNotFound(GetContext& get_context, Slice user_key,
                              PinnableSlice* value, Status& status,
                              MergeContext& merge_context, bool* key_exists,
                              bool do_merge) {
+  auto timer_guard = cfd_->internal_stats()
+                         ->hotrap_timers()
+                         .timer(TimerType::kHandleNotFound)
+                         .start();
   if (db_statistics_ != nullptr) {
     get_context.ReportCounters();
   }
@@ -2069,6 +2083,8 @@ void Version::HandleNotFound(GetContext& get_context, Slice user_key,
 // Return stop searching or not
 bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
                         bool is_hit_file_last_in_level) {
+  auto& hotrap_timers = cfd_->internal_stats()->hotrap_timers();
+  auto timer_guard = hotrap_timers.timer(TimerType::kGetInFile).start();
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
   if (env_get.max_covering_tombstone_seq > 0) {
@@ -2085,12 +2101,14 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   bool timer_enabled = GetPerfLevel() >= PerfLevel::kEnableTimeExceptForMutex &&
                        get_perf_context()->per_level_perf_context_enabled;
   StopWatchNano timer(clock_, timer_enabled /* auto_start */);
+  auto get_start = rusty::time::Instant::now();
   env_get.status = table_cache_->Get(
       env_get.read_options, *internal_comparator(), *f.file_metadata, ikey,
       &env_get.get_context, mutable_cf_options_.prefix_extractor.get(),
       cfd_->internal_stats()->GetFileReadHist(hit_level),
       IsFilterSkipped(static_cast<int>(hit_level), is_hit_file_last_in_level),
       hit_level, max_file_size_for_l0_meta_pin_);
+  hotrap_timers.timer(TimerType::kTableCacheGet).add(get_start.elapsed());
   // TODO: examine the behavior for corrupted key
   if (timer_enabled) {
     PERF_COUNTER_BY_LEVEL_ADD(get_from_table_nanos, timer.ElapsedNanos(),
@@ -2149,6 +2167,10 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                   bool* key_exists, SequenceNumber* seq, ReadCallback* callback,
                   bool* is_blob, bool do_merge, unsigned int prev_level,
                   int last_level) {
+  auto timer_guard = cfd_->internal_stats()
+                         ->hotrap_timers()
+                         .timer(TimerType::kVersionGet)
+                         .start();
   Slice ikey = k.internal_key();
   Slice user_key = k.user_key();
 
@@ -2221,7 +2243,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
       auto it = caches->find(cache_level);
       assert(it != caches->end());
       const auto& cache = it->second;
-      if (cache.Get(k.user_key(), value)) {
+      if (cache.Get(cfd_->internal_stats(), k.user_key(), value)) {
         HandleFound(env_get.read_options, env_get.get_context,
                     fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
                     env_get.is_blob_index, env_get.do_merge);

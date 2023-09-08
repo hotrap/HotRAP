@@ -105,6 +105,16 @@ struct DBStatInfo {
 enum class TimerType : size_t {
   kUpdateFilesByCompactionPri = 0,
   kGetKeyValueFromLevelsBelow,
+  kInvalidateOld,
+  kVersionGet,
+  kTableCacheGet,
+  kGetInFile,
+  kHandleFound,
+  kHandleNotFound,
+  kAccess,
+  kPromotionCacheGet,
+  kTryPromote,
+  kCheckStablyHot,
   kCheckNewerVersion,
   kEnd,
 };

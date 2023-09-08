@@ -35,7 +35,11 @@ PromotionCache::PromotionCache(int target_level, const Comparator *ucmp)
                         0}},
       max_size_(0) {}
 
-bool PromotionCache::Get(Slice key, PinnableSlice *value) const {
+bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
+                         PinnableSlice *value) const {
+  auto timer_guard = internal_stats->hotrap_timers()
+                         .timer(TimerType::kPromotionCacheGet)
+                         .start();
   {
     auto mut = mut_.Read();
     // TODO: Avoid the copy here after upgrading to C++14
@@ -67,9 +71,6 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
                          std::list<ImmPromotionCache>::iterator iter) {
   ColumnFamilyData *cfd = sv->cfd;
   InternalStats &internal_stats = *cfd->internal_stats();
-  TimerGuard timer_guard = internal_stats.hotrap_timers()
-                               .timer(TimerType::kCheckNewerVersion)
-                               .start();
   ImmPromotionCache &cache = *iter;
   struct RefHash {
     size_t operator()(std::reference_wrapper<const std::string> x) const {
@@ -87,6 +88,9 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
   CompactionRouter *router = sv->mutable_cf_options.compaction_router;
   const Comparator *ucmp = cfd->ioptions()->user_comparator;
   if (router) {
+    TimerGuard check_stably_hot_start = internal_stats.hotrap_timers()
+                                            .timer(TimerType::kCheckStablyHot)
+                                            .start();
     for (const auto &item : cache.cache) {
       const std::string &user_key = item.first;
       auto it = router->LowerBound(user_key);
@@ -97,6 +101,10 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
       stable_hot.insert(user_key);
     }
   }
+  TimerGuard check_newer_version_start =
+      internal_stats.hotrap_timers()
+          .timer(TimerType::kCheckNewerVersion)
+          .start();
   for (const std::string &user_key : stable_hot) {
     LookupKey key(user_key, kMaxSequenceNumber);
     Status s;
