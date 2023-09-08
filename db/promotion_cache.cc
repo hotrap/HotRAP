@@ -32,7 +32,11 @@ PromotionCache::PromotionCache(int target_level, const Comparator *ucmp)
                         0}},
       max_size_(0) {}
 
-bool PromotionCache::Get(Slice key, PinnableSlice *value) const {
+bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
+                         PinnableSlice *value) const {
+  auto timer_guard = internal_stats->hotrap_timers()
+                         .timer(TimerType::kPromotionCacheGet)
+                         .start();
   {
     auto mut = mut_.Read();
     // TODO: Avoid the copy here after upgrading to C++14
@@ -64,10 +68,11 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
                          std::list<ImmPromotionCache>::iterator iter) {
   ColumnFamilyData *cfd = sv->cfd;
   InternalStats &internal_stats = *cfd->internal_stats();
-  TimerGuard timer_guard = internal_stats.hotrap_timers()
-                               .timer(TimerType::kCheckNewerVersion)
-                               .start();
   ImmPromotionCache &cache = *iter;
+  TimerGuard check_newer_version_start =
+      internal_stats.hotrap_timers()
+          .timer(TimerType::kCheckNewerVersion)
+          .start();
   for (const auto &item : cache.cache) {
     const std::string &user_key = item.first;
     LookupKey key(user_key, kMaxSequenceNumber);
