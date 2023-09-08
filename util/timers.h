@@ -46,16 +46,6 @@ inline TimerGuard AtomicTimer::start() const { return TimerGuard(*this); }
 
 class Timers {
  public:
-  struct Status {
-    uint64_t count;
-    uint64_t nsec;
-    Status operator+(const Status &rhs) const {
-      return Status{
-          .count = count + rhs.count,
-          .nsec = nsec + rhs.nsec,
-      };
-    }
-  };
   Timers(size_t num) : timers_(num) {}
   size_t num() const { return timers_.size(); }
   const AtomicTimer &timer(size_t type) const { return timers_[type]; }
