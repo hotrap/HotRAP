@@ -2929,8 +2929,9 @@ enum BinaryFormatVersion : uint32_t {
 // ex: offset_of(&ColumnFamilyDescriptor::options)
 // This call will return the offset of options in ColumnFamilyDescriptor class
 //
-// This is the same as offsetof() but allow us to work with non
-// standard-layout classes and structures refs:
+// This is the same as offsetof() but allow us to work with non standard-layout
+// classes and structures
+// refs:
 // http://en.cppreference.com/w/cpp/concept/StandardLayoutType
 // https://gist.github.com/graphitemaster/494f21190bb2c63c5516
 static ColumnFamilyDescriptor dummy_cfd("", ColumnFamilyOptions());

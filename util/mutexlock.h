@@ -9,11 +9,9 @@
 
 #pragma once
 #include <assert.h>
-
 #include <atomic>
 #include <mutex>
 #include <thread>
-
 #include "port/port.h"
 #include "port/port_posix.h"
 
@@ -31,7 +29,9 @@ namespace ROCKSDB_NAMESPACE {
 
 class MutexLock {
  public:
-  explicit MutexLock(const port::Mutex *mu) : mu_(mu) { mu_->Lock(); }
+  explicit MutexLock(const port::Mutex *mu) : mu_(mu) {
+    this->mu_->Lock();
+  }
   // No copying allowed
   MutexLock(const MutexLock &) = delete;
   void operator=(const MutexLock &) = delete;
@@ -270,11 +270,13 @@ class Striped {
  public:
   Striped(size_t stripes, std::function<uint64_t(const P &)> hash)
       : stripes_(stripes), hash_(hash) {
+
     locks_ = reinterpret_cast<LockData<T> *>(
         port::cacheline_aligned_alloc(sizeof(LockData<T>) * stripes));
     for (size_t i = 0; i < stripes; i++) {
       new (&locks_[i]) LockData<T>();
     }
+
   }
 
   virtual ~Striped() {
