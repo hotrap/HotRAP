@@ -3571,7 +3571,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
         assert(false);
     }
     assert(temp.size() == files.size());
-    if (!files.empty() && router) {
+    if (!files.empty()) {
       internal_stats->hotrap_timers_per_level()
           .timer(level, PerLevelTimerType::kPickSST)
           .add(pick_sst_start.elapsed());
@@ -3584,11 +3584,9 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     next_file_to_compact_by_size_[level] = 0;
     assert(files_[level].size() == files_by_compaction_pri_[level].size());
   }
-  if (router) {
-    internal_stats->hotrap_timers()
-        .timer(TimerType::kUpdateFilesByCompactionPri)
-        .add(start_time.elapsed());
-  }
+  internal_stats->hotrap_timers()
+      .timer(TimerType::kUpdateFilesByCompactionPri)
+      .add(start_time.elapsed());
 }
 
 void VersionStorageInfo::GenerateLevel0NonOverlapping() {
