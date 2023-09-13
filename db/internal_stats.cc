@@ -50,6 +50,9 @@ const char* timer_names[] = {
     "CheckStablyHot",
     "CheckNewerVersion",
     "RouterIteratorNext",
+    "WithoutRouterNext",
+    "2SDLastLevelNext",
+    "SD2CDNext",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 

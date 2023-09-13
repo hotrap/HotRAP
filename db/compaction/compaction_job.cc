@@ -1324,9 +1324,12 @@ struct Elem {
 
 class IteratorWithoutRouter : public TraitIterator<Elem> {
  public:
-  IteratorWithoutRouter(CompactionIterator& c_iter)
-      : first_(true), c_iter_(c_iter) {}
+  IteratorWithoutRouter(const Compaction& c, CompactionIterator& c_iter)
+      : first_(true),
+        c_iter_(c_iter),
+        timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {}
   std::unique_ptr<Elem> next() override {
+    auto guard = timers_.timer(TimerType::kWithoutRouterNext).start();
     if (first_) {
       first_ = false;
     } else {
@@ -1341,6 +1344,8 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
  private:
   bool first_;
   CompactionIterator& c_iter_;
+
+  const TypedTimers<TimerType>& timers_;
 };
 
 class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
@@ -1368,6 +1373,11 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
     // router_.TransferRange(start_tier_, latter_tier_, range, false);
   }
   std::unique_ptr<Elem> next() override {
+    auto guard = c_.column_family_data()
+                     ->internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::k2SDLastLevelNext)
+                     .start();
     switch (advance_) {
       case Advance::kNone:
         break;
@@ -1457,6 +1467,11 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     assert(c.cached_records_to_promote().empty());
   }
   std::unique_ptr<Elem> next() override {
+    auto guard = c_.column_family_data()
+                     ->internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kSD2CDNext)
+                     .start();
     if (first_)
       first_ = false;
     else
@@ -1531,7 +1546,7 @@ class RouterIterator {
       // router was not NULL but then is set to NULL.
       assert(c.cached_records_to_promote().empty());
       iter_ = std::unique_ptr<IteratorWithoutRouter>(
-          new IteratorWithoutRouter(c_iter));
+          new IteratorWithoutRouter(c, c_iter));
     } else {
       size_t start_tier = router->Tier(start_level);
       size_t latter_tier = router->Tier(latter_level);
@@ -1546,7 +1561,7 @@ class RouterIterator {
         // there are multiple levels in Tier 1
         assert(c.cached_records_to_promote().empty());
         iter_ = std::unique_ptr<IteratorWithoutRouter>(
-            new IteratorWithoutRouter(c_iter));
+            new IteratorWithoutRouter(c, c_iter));
       }
     }
     cur_ = iter_->next();
