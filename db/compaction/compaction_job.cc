@@ -71,6 +71,7 @@
 #include "util/rusty.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
+#include "util/timers.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -1521,7 +1522,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
 class RouterIterator {
  public:
   RouterIterator(CompactionRouter* router, const Compaction& c,
-                 CompactionIterator& c_iter, Slice start, Bound end) {
+                 CompactionIterator& c_iter, Slice start, Bound end)
+      : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
     int start_level = c.level();
     int latter_level = c.output_level();
     if (router == NULL) {
@@ -1551,6 +1553,7 @@ class RouterIterator {
   }
   bool Valid() { return cur_ != nullptr; }
   void Next() {
+    auto guard = timers_.timer(TimerType::kRouterIteratorNext).start();
     assert(Valid());
     cur_ = iter_->next();
   }
@@ -1563,6 +1566,8 @@ class RouterIterator {
  private:
   std::unique_ptr<TraitIterator<Elem>> iter_;
   std::unique_ptr<Elem> cur_;
+
+  const TypedTimers<TimerType>& timers_;
 };
 
 void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
@@ -1894,10 +1899,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                         &sub_compact->compaction_job_stats);
     }
   }
-  cfd->internal_stats()
-      ->hotrap_timers()
-      .timer(TimerType::kCompaction)
-      .add(compaction_start.elapsed());
 
   sub_compact->compaction_job_stats.num_blobs_read =
       c_iter_stats.num_blobs_read;
@@ -1993,6 +1994,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     }
     blob_file_builder.reset();
   }
+
+  cfd->internal_stats()
+      ->hotrap_timers()
+      .timer(TimerType::kCompaction)
+      .add(compaction_start.elapsed());
 
   sub_compact->compaction_job_stats.cpu_micros =
       db_options_.clock->CPUNanos() / 1000 - prev_cpu_micros;
