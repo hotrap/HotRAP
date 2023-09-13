@@ -36,6 +36,7 @@ namespace ROCKSDB_NAMESPACE {
 
 const char* timer_names[] = {
     "UpdateFilesByCompactionPri",
+    "Compaction",
     "GetKeyValueFromLevelsBelow",
     "InvalidateOld",
     "VersionGet",

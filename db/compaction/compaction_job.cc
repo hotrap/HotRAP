@@ -68,6 +68,7 @@
 #include "util/coding.h"
 #include "util/hash.h"
 #include "util/mutexlock.h"
+#include "util/rusty.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
 
@@ -1782,6 +1783,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                              promotable_end);
 
   std::string previous_user_key;
+  auto compaction_start = rusty::time::Instant::now();
   while (status.ok() && !cfd->IsDropped() && router_iter.Valid()) {
     // Invariant: router_iter.status() is guaranteed to be OK if
     // router_iter->Valid() returns true.
@@ -1892,6 +1894,10 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                         &sub_compact->compaction_job_stats);
     }
   }
+  cfd->internal_stats()
+      ->hotrap_timers()
+      .timer(TimerType::kCompaction)
+      .add(compaction_start.elapsed());
 
   sub_compact->compaction_job_stats.num_blobs_read =
       c_iter_stats.num_blobs_read;
