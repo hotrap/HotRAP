@@ -1628,11 +1628,11 @@ static void dump_timers(std::string& value, size_t indent, const Timers& timers,
     value.append("{\"name\": \"");
     value.append(names[i]);
     auto count = timer.count();
-    auto nsec = timer.time().as_nanos();
+    auto secs = timer.time().as_secs_double();
     value.append("\", \"count\": ");
     value.append(std::to_string(count));
-    value.append(", \"time(nsec)\": ");
-    value.append(std::to_string(nsec));
+    value.append(", \"time(sec)\": ");
+    value.append(std::to_string(secs));
     value.append("},\n");
   }
   indent -= 1;
