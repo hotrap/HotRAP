@@ -108,16 +108,18 @@ void Compaction::SetInputVersion(Version* _input_version) {
     }
   }
   if (cfd_->GetCurrentMutableCFOptions()->compaction_router == nullptr) return;
-  auto it = caches->find(start_level_);
-  if (it != caches->end()) {
-    assert(it->first == start_level_);
-    it->second.TakeRange(smallest_user_key_, largest_user_key_);
+  if (start_level_ != output_level_) {
+    // TODO: Handle other cases
+    assert(output_level_ == start_level_ + 1);
+    auto it = caches->find(start_level_);
+    if (it != caches->end()) {
+      assert(it->first == start_level_);
+      it->second.TakeRange(smallest_user_key_, largest_user_key_);
+    }
   }
-  // TODO: Handle other cases
-  assert(output_level_ == start_level_ + 1);
-  // it->first > output_level_ is not supported yet, which requires looking for
-  // the newer versions in smaller levels.
-  it = caches->find(output_level_);
+  // it->first > output_level_ is not supported yet, which requires looking
+  // for the newer versions in smaller levels.
+  auto it = caches->find(output_level_);
   if (it != caches->end()) {
     assert(it->first == output_level_);
     auto records = it->second.TakeRange(smallest_user_key_, largest_user_key_);
