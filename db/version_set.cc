@@ -2011,13 +2011,13 @@ static void Access(DBImpl* db, ColumnFamilyData& cfd,
                    const MutableCFOptions& mutable_cf_options, FileMetaData& f,
                    int hit_level, Slice user_key, PinnableSlice* value,
                    unsigned int prev_level) {
-  auto timer_guard =
-      cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value || prev_level != static_cast<unsigned int>(-1)) return;
   TryPromote(*db, cfd, mutable_cf_options, f, hit_level, user_key, *value,
              prev_level);
+  auto timer_guard =
+      cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
   router->Access(hit_level, user_key, value->size());
 }
 void Version::HandleFound(const ReadOptions& read_options,
