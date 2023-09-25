@@ -93,11 +93,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
                                             .start();
     for (const auto &item : cache.cache) {
       const std::string &user_key = item.first;
-      auto it = router->LowerBound(user_key);
-      std::unique_ptr<HotRecInfo> info = it.next();
-      if (info == nullptr) continue;
-      if (ucmp->Compare(info->key, user_key) != 0) continue;
-      if (!info->stable) continue;
+      if (!router->IsStablyHot(user_key)) continue;
       stable_hot.insert(user_key);
     }
   }
