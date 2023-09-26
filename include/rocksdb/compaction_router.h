@@ -127,6 +127,7 @@ class CompactionRouter : public Customizable {
   virtual void Access(int level, Slice key, size_t vlen) = 0;
   virtual Iter LowerBound(Slice key) = 0;
   virtual size_t RangeHotSize(Slice smallest, Slice largest) = 0;
+  virtual bool IsStablyHot(Slice key) = 0;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

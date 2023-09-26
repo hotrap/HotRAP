@@ -68,8 +68,10 @@
 #include "util/coding.h"
 #include "util/hash.h"
 #include "util/mutexlock.h"
+#include "util/rusty.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
+#include "util/timers.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -1322,9 +1324,12 @@ struct Elem {
 
 class IteratorWithoutRouter : public TraitIterator<Elem> {
  public:
-  IteratorWithoutRouter(CompactionIterator& c_iter)
-      : first_(true), c_iter_(c_iter) {}
+  IteratorWithoutRouter(const Compaction& c, CompactionIterator& c_iter)
+      : first_(true),
+        c_iter_(c_iter),
+        timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {}
   std::unique_ptr<Elem> next() override {
+    auto guard = timers_.timer(TimerType::kWithoutRouterNext).start();
     if (first_) {
       first_ = false;
     } else {
@@ -1339,6 +1344,8 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
  private:
   bool first_;
   CompactionIterator& c_iter_;
+
+  const TypedTimers<TimerType>& timers_;
 };
 
 class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
@@ -1366,6 +1373,11 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
     // router_.TransferRange(start_tier_, latter_tier_, range, false);
   }
   std::unique_ptr<Elem> next() override {
+    auto guard = c_.column_family_data()
+                     ->internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::k2SDLastLevelNext)
+                     .start();
     switch (advance_) {
       case Advance::kNone:
         break;
@@ -1433,6 +1445,11 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     assert(c.cached_records_to_promote().empty());
   }
   std::unique_ptr<Elem> next() override {
+    auto guard = c_.column_family_data()
+                     ->internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kSD2CDNext)
+                     .start();
     if (first_)
       first_ = false;
     else
@@ -1498,7 +1515,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
 class RouterIterator {
  public:
   RouterIterator(CompactionRouter* router, const Compaction& c,
-                 CompactionIterator& c_iter, Slice start, Bound end) {
+                 CompactionIterator& c_iter, Slice start, Bound end)
+      : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
     int start_level = c.level();
     int latter_level = c.output_level();
     if (router == NULL) {
@@ -1506,7 +1524,7 @@ class RouterIterator {
       // router was not NULL but then is set to NULL.
       assert(c.cached_records_to_promote().empty());
       iter_ = std::unique_ptr<IteratorWithoutRouter>(
-          new IteratorWithoutRouter(c_iter));
+          new IteratorWithoutRouter(c, c_iter));
     } else {
       size_t start_tier = router->Tier(start_level);
       size_t latter_tier = router->Tier(latter_level);
@@ -1521,13 +1539,14 @@ class RouterIterator {
         // there are multiple levels in Tier 1
         assert(c.cached_records_to_promote().empty());
         iter_ = std::unique_ptr<IteratorWithoutRouter>(
-            new IteratorWithoutRouter(c_iter));
+            new IteratorWithoutRouter(c, c_iter));
       }
     }
     cur_ = iter_->next();
   }
   bool Valid() { return cur_ != nullptr; }
   void Next() {
+    auto guard = timers_.timer(TimerType::kRouterIteratorNext).start();
     assert(Valid());
     cur_ = iter_->next();
   }
@@ -1540,6 +1559,8 @@ class RouterIterator {
  private:
   std::unique_ptr<TraitIterator<Elem>> iter_;
   std::unique_ptr<Elem> cur_;
+
+  const TypedTimers<TimerType>& timers_;
 };
 
 void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
@@ -1760,6 +1781,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                              promotable_end);
 
   std::string previous_user_key;
+  auto compaction_start = rusty::time::Instant::now();
   while (status.ok() && !cfd->IsDropped() && router_iter.Valid()) {
     // Invariant: router_iter.status() is guaranteed to be OK if
     // router_iter->Valid() returns true.
@@ -1965,6 +1987,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     }
     blob_file_builder.reset();
   }
+
+  cfd->internal_stats()
+      ->hotrap_timers()
+      .timer(TimerType::kCompaction)
+      .add(compaction_start.elapsed());
 
   sub_compact->compaction_job_stats.cpu_micros =
       db_options_.clock->CPUNanos() / 1000 - prev_cpu_micros;
@@ -2907,8 +2934,9 @@ enum BinaryFormatVersion : uint32_t {
 // ex: offset_of(&ColumnFamilyDescriptor::options)
 // This call will return the offset of options in ColumnFamilyDescriptor class
 //
-// This is the same as offsetof() but allow us to work with non
-// standard-layout classes and structures refs:
+// This is the same as offsetof() but allow us to work with non standard-layout
+// classes and structures
+// refs:
 // http://en.cppreference.com/w/cpp/concept/StandardLayoutType
 // https://gist.github.com/graphitemaster/494f21190bb2c63c5516
 static ColumnFamilyDescriptor dummy_cfd("", ColumnFamilyOptions());

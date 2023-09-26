@@ -12,6 +12,7 @@ class Duration {
  public:
   static Duration from_nanos(uint64_t nsec) { return Duration(nsec); }
   uint64_t as_nanos() const { return nsec_; }
+  double as_secs_double() const { return nsec_ / 1e9; }
 
  private:
   Duration(uint64_t nsec) : nsec_(nsec) {}
