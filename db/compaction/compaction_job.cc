@@ -1481,6 +1481,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
 
  private:
   std::unique_ptr<Elem> __next() {
+    const auto& hotrap_timers =
+        c_.column_family_data()->internal_stats()->hotrap_timers();
     if (!c_iter_.Valid()) {
       return nullptr;
     }
@@ -1508,11 +1510,15 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     const rocksdb::Slice* hot = hot_iter_.peek();
     while (hot != nullptr) {
       if (ucmp_->Compare(*hot, c_iter_.user_key()) >= 0) break;
+      auto next_start = rusty::time::Instant::now();
       hot_iter_.next();
+      hotrap_timers.timer(TimerType::kHotIterNext).add(next_start.elapsed());
       hot = hot_iter_.peek();
     }
     if (hot && ucmp_->Compare(*hot, c_iter_.user_key()) == 0) {
+      auto next_start = rusty::time::Instant::now();
       hot_iter_.next();
+      hotrap_timers.timer(TimerType::kHotIterNext).add(next_start.elapsed());
       previous_decision_ = Decision::kStartLevel;
     } else {
       previous_decision_ = Decision::kNextLevel;

@@ -121,6 +121,7 @@ enum class TimerType : size_t {
   kWithoutRouterNext,
   k2SDLastLevelNext,
   kSD2CDNext,
+  kHotIterNext,
   kEnd,
 };
 constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
