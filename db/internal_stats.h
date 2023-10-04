@@ -117,6 +117,10 @@ enum class TimerType : size_t {
   kTryPromote,
   kCheckStablyHot,
   kCheckNewerVersion,
+  kRouterIteratorNext,
+  kWithoutRouterNext,
+  k2SDLastLevelNext,
+  kSD2CDNext,
   kEnd,
 };
 constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
