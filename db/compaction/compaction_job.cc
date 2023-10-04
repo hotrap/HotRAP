@@ -1329,7 +1329,6 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
         c_iter_(c_iter),
         timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {}
   std::unique_ptr<Elem> next() override {
-    auto guard = timers_.timer(TimerType::kWithoutRouterNext).start();
     if (first_) {
       first_ = false;
     } else {
@@ -1373,11 +1372,6 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
     // router_.TransferRange(start_tier_, latter_tier_, range, false);
   }
   std::unique_ptr<Elem> next() override {
-    auto guard = c_.column_family_data()
-                     ->internal_stats()
-                     ->hotrap_timers()
-                     .timer(TimerType::k2SDLastLevelNext)
-                     .start();
     switch (advance_) {
       case Advance::kNone:
         break;
@@ -1467,11 +1461,6 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     assert(c.cached_records_to_promote().empty());
   }
   std::unique_ptr<Elem> next() override {
-    auto guard = c_.column_family_data()
-                     ->internal_stats()
-                     ->hotrap_timers()
-                     .timer(TimerType::kSD2CDNext)
-                     .start();
     if (first_)
       first_ = false;
     else
@@ -1568,7 +1557,6 @@ class RouterIterator {
   }
   bool Valid() { return cur_ != nullptr; }
   void Next() {
-    auto guard = timers_.timer(TimerType::kRouterIteratorNext).start();
     assert(Valid());
     cur_ = iter_->next();
   }
