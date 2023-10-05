@@ -54,6 +54,7 @@ const char* timer_names[] = {
     "2SDLastLevelNext",
     "SD2CDNext",
     "HotIterNext",
+    "SD2CDCompIterNext",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 

@@ -1467,15 +1467,15 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     assert(c.cached_records_to_promote().empty());
   }
   std::unique_ptr<Elem> next() override {
-    auto guard = c_.column_family_data()
-                     ->internal_stats()
-                     ->hotrap_timers()
-                     .timer(TimerType::kSD2CDNext)
-                     .start();
-    if (first_)
+    const auto& hotrap_timers =
+        c_.column_family_data()->internal_stats()->hotrap_timers();
+    auto guard = hotrap_timers.timer(TimerType::kSD2CDNext).start();
+    if (first_) {
       first_ = false;
-    else
+    } else {
+      auto guard_c = hotrap_timers.timer(TimerType::kSD2CDCompIterNext).start();
       c_iter_.Next();
+    }
     return __next();
   }
 
