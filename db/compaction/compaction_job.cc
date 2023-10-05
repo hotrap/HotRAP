@@ -1333,6 +1333,7 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
     if (first_) {
       first_ = false;
     } else {
+      auto guard_c = timers_.timer(TimerType::kWithoutRouterCompIterNext).start();
       assert(c_iter_.Valid());
       c_iter_.Next();
     }
