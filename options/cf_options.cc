@@ -347,11 +347,11 @@ static std::unordered_map<std::string, OptionTypeInfo>
           OptionType::kDouble, OptionVerificationType::kNormal,
           OptionTypeFlags::kMutable}},
         {"max_bytes_for_level_multiplier_additional",
-         OptionTypeInfo::Vector<int>(
+         OptionTypeInfo::Vector<double>(
              offsetof(struct MutableCFOptions,
                       max_bytes_for_level_multiplier_additional),
              OptionVerificationType::kNormal, OptionTypeFlags::kMutable,
-             {0, OptionType::kInt})},
+             {0, OptionType::kDouble})},
         {"max_sequential_skip_in_iterations",
          {offsetof(struct MutableCFOptions, max_sequential_skip_in_iterations),
           OptionType::kUInt64T, OptionVerificationType::kNormal,
@@ -993,10 +993,9 @@ void MutableCFOptions::Dump(Logger* log) const {
   ROCKS_LOG_INFO(log, "              periodic_compaction_seconds: %" PRIu64,
                  periodic_compaction_seconds);
   std::string result;
-  char buf[10];
   for (const auto m : max_bytes_for_level_multiplier_additional) {
-    snprintf(buf, sizeof(buf), "%d, ", m);
-    result += buf;
+    result += std::to_string(m);
+    result += ", ";
   }
   if (result.size() >= 2) {
     result.resize(result.size() - 2);

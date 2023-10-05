@@ -257,8 +257,9 @@ void ColumnFamilyOptions::Dump(Logger* log) const {
     for (size_t i = 0; i < max_bytes_for_level_multiplier_additional.size();
          i++) {
       ROCKS_LOG_HEADER(
-          log, "Options.max_bytes_for_level_multiplier_addtl[%" ROCKSDB_PRIszt
-               "]: %d",
+          log,
+          "Options.max_bytes_for_level_multiplier_addtl[%" ROCKSDB_PRIszt
+          "]: %f",
           i, max_bytes_for_level_multiplier_additional[i]);
     }
     ROCKS_LOG_HEADER(
