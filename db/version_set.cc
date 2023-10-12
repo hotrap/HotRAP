@@ -2560,8 +2560,7 @@ void Version::PrepareApply(
 }
 
 bool Version::MaybeInitializeFileMetaData(FileMetaData* file_meta) {
-  if (file_meta->init_stats_from_file ||
-      file_meta->compensated_file_size != UINT64_MAX) {
+  if (file_meta->init_stats_from_file || file_meta->compensated_file_size > 0) {
     return false;
   }
   std::shared_ptr<const TableProperties> tp;
@@ -2674,17 +2673,11 @@ void VersionStorageInfo::ComputeCompensatedSizes() {
   for (int level = 0; level < num_levels_; level++) {
     for (auto* file_meta : files_[level]) {
       // Here we only compute compensated_file_size for those file_meta
-      // which compensated_file_size is uninitialized (== UINT64_MAX). This is
-      // true only for files that have been created right now and no other
-      // thread has access to them. That's why we can safely mutate
-      // compensated_file_size.
-      if (file_meta->compensated_file_size == UINT64_MAX) {
+      // which compensated_file_size is uninitialized (== 0). This is true only
+      // for files that have been created right now and no other thread has
+      // access to them. That's why we can safely mutate compensated_file_size.
+      if (file_meta->compensated_file_size == 0) {
         file_meta->compensated_file_size = file_meta->fd.GetFileSize();
-        if (file_meta->compensated_file_size >= file_meta->estimated_hot_size) {
-          file_meta->compensated_file_size -= file_meta->estimated_hot_size;
-        } else {
-          file_meta->compensated_file_size = 0;
-        }
         // Here we only boost the size of deletion entries of a file only
         // when the number of deletion entries is greater than the number of
         // non-deletion entries in the file.  The motivation here is that in
@@ -2848,7 +2841,6 @@ void VersionStorageInfo::ComputeCompactionScore(
       uint64_t total_size = 0;
       for (auto* f : files_[level]) {
         if (!f->being_compacted) {
-          assert(f->compensated_file_size != UINT64_MAX);
           total_size += f->compensated_file_size;
           num_sorted_runs++;
         }
@@ -2918,7 +2910,6 @@ void VersionStorageInfo::ComputeCompactionScore(
       uint64_t level_bytes_no_compacting = 0;
       for (auto f : files_[level]) {
         if (!f->being_compacted) {
-          assert(f->compensated_file_size != UINT64_MAX);
           level_bytes_no_compacting += f->compensated_file_size;
         }
       }
@@ -3181,8 +3172,6 @@ struct Fsize {
 // Comparator that is used to sort files based on their size
 // In normal mode: descending size
 bool CompareCompensatedSizeDescending(const Fsize& first, const Fsize& second) {
-  assert(first.file->compensated_file_size != UINT64_MAX);
-  assert(second.file->compensated_file_size != UINT64_MAX);
   return (first.file->compensated_file_size >
       second.file->compensated_file_size);
 }
@@ -3362,7 +3351,6 @@ void PickSSTStaticEstimatedHotSize(
       next_level_it++;
     }
 
-    // assert(file->compensated_file_size != UINT64_MAX);
     uint64_t benefit =
         file->raw_key_size + file->raw_value_size - file->estimated_hot_size;
     if (file->num_deletions != 0) {
@@ -3447,7 +3435,6 @@ void PickSSTAccurateHotSize(CompactionRouter* router,
       next_level_it++;
     }
 
-    // assert(file->compensated_file_size != UINT64_MAX);
     uint64_t benefit = file->raw_key_size + file->raw_value_size;
     if (router && router->Tier(level) != router->Tier(level + 1)) {
       size_t hot_size = router->RangeHotSize(file->smallest.user_key(),

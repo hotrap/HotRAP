@@ -172,11 +172,10 @@ struct FileMetaData {
 
   // Stats for compensating deletion entries during compaction
 
-  // File size compensated by deletion entry and estimated hot entries.
+  // File size compensated by deletion entry.
   // This is updated in Version::UpdateAccumulatedStats() first time when the
-  // file is created or loaded.  After it is updated (!= UINT64_MAX), it is
-  // immutable.
-  uint64_t compensated_file_size = UINT64_MAX;
+  // file is created or loaded.  After it is updated (!= 0), it is immutable.
+  uint64_t compensated_file_size = 0;
   // These values can mutate, but they can only be read or written from
   // single-threaded LogAndApply thread
   uint64_t num_entries = 0;         // the number of entries.
@@ -297,7 +296,11 @@ struct FdWithKeyRange {
   Slice largest_key;     // slice that contain largest key
 
   FdWithKeyRange()
-      : fd(), file_metadata(nullptr), smallest_key(), largest_key() {}
+      : fd(),
+        file_metadata(nullptr),
+        smallest_key(),
+        largest_key() {
+  }
 
   FdWithKeyRange(FileDescriptor _fd, Slice _smallest_key, Slice _largest_key,
                  FileMetaData* _file_metadata)

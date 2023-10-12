@@ -341,7 +341,6 @@ UniversalCompactionBuilder::CalculateSortedRuns(
     const VersionStorageInfo& vstorage) {
   std::vector<UniversalCompactionBuilder::SortedRun> ret;
   for (FileMetaData* f : vstorage.LevelFiles(0)) {
-    assert(f->compensated_file_size != UINT64_MAX);
     ret.emplace_back(0, f, f->fd.GetFileSize(), f->compensated_file_size,
                      f->being_compacted);
   }
@@ -350,7 +349,6 @@ UniversalCompactionBuilder::CalculateSortedRuns(
     uint64_t total_size = 0U;
     bool being_compacted = false;
     for (FileMetaData* f : vstorage.LevelFiles(level)) {
-      assert(f->compensated_file_size != UINT64_MAX);
       total_compensated_size += f->compensated_file_size;
       total_size += f->fd.GetFileSize();
       // Size amp, read amp and periodic compactions always include all files
