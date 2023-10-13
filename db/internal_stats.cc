@@ -56,6 +56,7 @@ const char* timer_names[] = {
     "HotIterNext",
     "SD2CDCompIterNext",
     "WithoutRouterCompIterNext",
+    "AddToBuilder",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 

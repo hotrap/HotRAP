@@ -1847,10 +1847,15 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         break;
       }
     }
+    auto add_to_builder_start = rusty::time::Instant::now();
     status = level_output->AddToBuilder(key, value);
     if (!status.ok()) {
       break;
     }
+    cfd->internal_stats()
+        ->hotrap_timers()
+        .timer(TimerType::kAddToBuilder)
+        .add(add_to_builder_start.elapsed());
 
     status = sub_compact->ProcessOutFlowIfNeeded(key, value);
     if (!status.ok()) {
