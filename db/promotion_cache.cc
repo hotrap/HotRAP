@@ -150,6 +150,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
   if (sv->Unref()) {
     db->mutex()->Lock();
     sv->Cleanup();
+    delete sv;
     db->mutex()->Unlock();
   }
 }
