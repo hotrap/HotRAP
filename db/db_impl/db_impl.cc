@@ -1753,6 +1753,8 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
     }
   }
 
+  cfd->promotion_cache()->RegisterInProcessReadKey(key);
+
   // Acquire SuperVersion
   SuperVersion* sv = GetAndRefSuperVersion(cfd);
 
@@ -1864,6 +1866,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
     }
     if (!done && !s.ok() && !s.IsMergeInProgress()) {
       ReturnAndCleanupSuperVersion(cfd, sv);
+      cfd->promotion_cache()->UnregisterInProcessReadKey(key);
       return s;
     }
   }
@@ -1912,6 +1915,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
     }
     RecordInHistogram(stats_, BYTES_PER_READ, size);
   }
+  cfd->promotion_cache()->UnregisterInProcessReadKey(key);
   return s;
 }
 

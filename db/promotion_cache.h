@@ -9,12 +9,14 @@
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
 #include "util/mutexlock.h"
+#include "memtable/inlineskiplist.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 class ColumnFamilyData;
 class DBImpl;
 class InternalStats;
+class PromotionCache;
 
 class UserKeyCompare {
  public:
@@ -27,51 +29,108 @@ class UserKeyCompare {
   const Comparator *ucmp_;
 };
 
-struct ImmPromotionCache {
-  std::map<std::string, std::string, UserKeyCompare> cache;
-  size_t size;
-  MutexProtected<std::unordered_set<std::string>> updated;
-  ImmPromotionCache(
-      std::map<std::string, std::string, UserKeyCompare> &&arg_cache,
-      size_t arg_size)
-      : cache(std::move(arg_cache)), size(arg_size) {}
+class PromotionCacheMemtable {
+ public:
+  PromotionCacheMemtable(const Comparator* ucmp)
+    : data_(ucmp), del_data_(ucmp), ucmp_(ucmp) {}
+
+  bool Get(const Slice& key, PinnableSlice* value);
+
+  // Require external mutex.
+  void Put(const Slice& key, const Slice& value);
+
+  // Ensure that there is only one writer.
+  void Remove(const Slice& key);
+
+  size_t Size() const { return buffer_size_; }
+
+  void MarkChecked() {
+    checked_ = true;
+  }
+
+  bool IsChecked() const {
+    return checked_;
+  }
+
+  std::map<std::string, std::string, UserKeyCompare>& Data() {
+    return data_;
+  }
+  
+  std::map<std::string, std::string, UserKeyCompare>& DelData() {
+    return data_;
+  }
+ private:
+  std::map<std::string, std::string, UserKeyCompare> data_;
+  std::set<std::string, UserKeyCompare> del_data_;
+  const Comparator* ucmp_;
+  size_t buffer_size_{0};
+  bool checked_{false};
+  
+  friend class PromotionCache;
 };
-struct ImmPromotionCacheList {
-  std::list<ImmPromotionCache> list;
-  size_t size = 0;
+
+class PromotionCacheImmList {
+ public:
+  PromotionCacheImmList() = default;
+
+  bool Get(const Slice& key, PinnableSlice* value);
+
+  void Remove(const Slice& key);
+
+  void AddMemtable(std::unique_ptr<PromotionCacheMemtable> mem);
+
+  size_t Size() const { return buffer_size_; }
+
+  std::vector<std::unique_ptr<PromotionCacheMemtable>>& Imms() {
+    return imm_list_;
+  }
+
+ private:
+  std::vector<std::unique_ptr<PromotionCacheMemtable>> imm_list_;
+  size_t buffer_size_{0};
+
+  friend class PromotionCache;
 };
 
 class PromotionCache {
  public:
-  PromotionCache(int target_level, const Comparator *ucmp);
+  PromotionCache(const Comparator* ucmp, size_t table_size, ColumnFamilyData* cfd, DBImpl* db);
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
-  bool Get(InternalStats *internal_stats, Slice key,
-           PinnableSlice *value) const;
-  // REQUIRES: PromotionCaches mutex not held
-  void Promote(DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size,
-               std::string key, Slice value);
-  // [begin, end)
-  std::vector<std::pair<std::string, std::string>> TakeRange(Slice smallest,
-                                                             Slice largest);
-  // REQUIRES: DB mutex held
-  void Flush();
+  PromotionCache(PromotionCache &&) = delete;
+  PromotionCache &operator=(PromotionCache &&) = delete;
 
-  const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
-    return imm_list_;
-  }
+  ~PromotionCache() = default;
 
-  size_t max_size() const { return max_size_.load(std::memory_order_relaxed); }
+  void RegisterInProcessReadKey(const Slice& key);
+
+  void UnregisterInProcessReadKey(const Slice& key);
+
+  void Put(const Slice& key, const Slice& value);
+
+  void RemoveObsolete(MemTable* table);
+
+  bool Get(const Slice& key, PinnableSlice* value);
 
  private:
-  struct MutableCache {
-    std::map<std::string, std::string, UserKeyCompare> cache;
-    size_t size;
-  };
-  const int target_level_;
-  const Comparator *ucmp_;
-  RWMutexProtected<MutableCache> mut_;
-  RWMutexProtected<ImmPromotionCacheList> imm_list_;
-  std::atomic<size_t> max_size_;
+  void FlushThread();
+
+  const Comparator* ucmp_;
+  size_t table_size_;
+  ColumnFamilyData* cfd_;
+  DBImpl* db_;
+
+  std::unique_ptr<PromotionCacheMemtable> mut_;
+  std::unique_ptr<PromotionCacheImmList> imms_;
+  port::RWMutex io_m_;
+  port::Mutex flush_m_;
+  port::CondVar signal_flush_;
+  bool signal_terminate_{false};
+  std::thread flush_thread_;
+
+  std::set<std::string> in_process_;
+  port::RWMutex reg_st_m_;
+
 };
+
 }  // namespace ROCKSDB_NAMESPACE

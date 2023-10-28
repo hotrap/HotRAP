@@ -1983,28 +1983,7 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (router->Tier(hit_level) == 0) return;
   assert(hit_level > 0);
-  int target_level = hit_level - 1;
-  while (router->Tier(target_level) == 1) {
-    target_level -= 1;
-  }
-  PromotionCache* cache;
-  {
-    auto caches = cfd.promotion_caches().Write();
-    if (f.being_or_has_been_compacted) return;
-    // The first whose level <= target_level
-    auto it = caches->find(target_level);
-    if (it == caches->end()) {
-      auto ret = caches->emplace(
-          std::piecewise_construct, std::make_tuple(target_level),
-          std::make_tuple(target_level, cfd.user_comparator()));
-      it = ret.first;
-      assert(ret.second);
-    }
-    assert(it->first == target_level);
-    cache = &it->second;
-  }
-  cache->Promote(db, cfd, mutable_cf_options.write_buffer_size,
-                 user_key.ToString(), value);
+  cfd.promotion_caches()
   return;
 }
 static void Access(DBImpl* db, ColumnFamilyData& cfd,

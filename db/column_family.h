@@ -376,8 +376,8 @@ class ColumnFamilyData {
 
   TableCache* table_cache() const { return table_cache_.get(); }
   BlobFileCache* blob_file_cache() const { return blob_file_cache_.get(); }
-  RWMutexProtected<std::map<int, PromotionCache>>& promotion_caches() {
-    return promotion_caches_;
+  PromotionCache* promotion_cache() {
+    return promotion_cache_;
   }
 
   // See documentation in compaction_picker.h
@@ -560,8 +560,8 @@ class ColumnFamilyData {
   std::unique_ptr<TableCache> table_cache_;
   std::unique_ptr<BlobFileCache> blob_file_cache_;
   // Map from level to its promotion cache
-  // The promotion cache of level i is considered between level i and level i+1
-  RWMutexProtected<std::map<int, PromotionCache>> promotion_caches_;
+  // A cache between memtables and immutable memtables.
+  std::unique_ptr<PromotionCache> promotion_cache_;
 
   std::unique_ptr<InternalStats> internal_stats_;
 
