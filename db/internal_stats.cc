@@ -1857,12 +1857,6 @@ void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
     value->append("\t},\n");
   }
   value->append("]\n");
-
-  auto caches = cfd_->promotion_caches().Read();
-  for (const auto& cache : *caches) {
-    value->append("compaction_cache at level " + std::to_string(cache.first) +
-                  ": max_size " + std::to_string(cache.second.max_size()));
-  }
 }
 
 void InternalStats::DumpCFFileHistogram(std::string* value) {

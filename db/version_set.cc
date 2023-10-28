@@ -1982,8 +1982,10 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
                          .start();
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (router->Tier(hit_level) == 0) return;
+  if (f.being_or_has_been_compacted) return;
   assert(hit_level > 0);
-  cfd.promotion_caches()
+  (void) prev_level;
+  cfd.promotion_cache()->Put(user_key, value, &db);
   return;
 }
 static void Access(DBImpl* db, ColumnFamilyData& cfd,
@@ -2217,32 +2219,6 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .is_blob_index = is_blob_index,
                  .do_merge = do_merge,
                  .prev_level = prev_level};
-  std::vector<int> cache_levels;
-  {
-    auto caches = cfd_->promotion_caches().Read();
-    for (auto it = caches->cbegin(); it != caches->cend(); ++it)
-      cache_levels.push_back(it->first);
-  }
-  for (int cache_level : cache_levels) {
-    while (f != nullptr && (int)fp.GetHitFileLevel() <= cache_level) {
-      bool should_stop = GetInFile(env_get, *f, fp.GetHitFileLevel(),
-                                   fp.IsHitFileLastInLevel());
-      if (should_stop) return;
-      f = fp.GetNextFile();
-    }
-    if (cache_level < last_level) {
-      auto caches = cfd_->promotion_caches().Read();
-      auto it = caches->find(cache_level);
-      assert(it != caches->end());
-      const auto& cache = it->second;
-      if (cache.Get(cfd_->internal_stats(), k.user_key(), value)) {
-        HandleFound(env_get.read_options, env_get.get_context,
-                    fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
-                    env_get.is_blob_index, env_get.do_merge);
-        return;
-      }
-    }
-  }
   while (f != nullptr) {
     bool should_stop =
         GetInFile(env_get, *f, fp.GetHitFileLevel(), fp.IsHitFileLastInLevel());

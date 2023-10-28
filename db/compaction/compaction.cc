@@ -100,39 +100,39 @@ void Compaction::SetInputVersion(Version* _input_version) {
   input_version_->Ref();
   edit_.SetColumnFamily(cfd_->GetID());
 
-  auto caches = cfd_->promotion_caches().Write();
-  for (size_t i = 0; i < num_input_levels(); i++) {
-    for (size_t j = 0; j < inputs_[i].size(); j++) {
-      assert(!inputs_[i][j]->being_or_has_been_compacted);
-      inputs_[i][j]->being_or_has_been_compacted = true;
-    }
-  }
-  if (cfd_->GetCurrentMutableCFOptions()->compaction_router == nullptr) return;
-  if (start_level_ != output_level_) {
-    // TODO: Handle other cases
-    assert(output_level_ == start_level_ + 1);
-    auto it = caches->find(start_level_);
-    if (it != caches->end()) {
-      assert(it->first == start_level_);
-      it->second.TakeRange(smallest_user_key_, largest_user_key_);
-    }
-  }
-  // it->first > output_level_ is not supported yet, which requires looking
-  // for the newer versions in smaller levels.
-  auto it = caches->find(output_level_);
-  if (it != caches->end()) {
-    assert(it->first == output_level_);
-    auto records = it->second.TakeRange(smallest_user_key_, largest_user_key_);
-    for (auto& record : records) {
-      auto& user_key = record.first;
-      auto& value = record.second;
-      InternalKey key;
-      *key.rep() = std::move(user_key);
-      // TODO: Support other types and sequence number
-      key.ConvertFromUserKey(0, ValueType::kTypeValue);
-      cached_records_to_promote_.emplace_back(std::move(key), std::move(value));
-    }
-  }
+  // auto caches = cfd_->promotion_caches().Write();
+  // for (size_t i = 0; i < num_input_levels(); i++) {
+  //   for (size_t j = 0; j < inputs_[i].size(); j++) {
+  //     assert(!inputs_[i][j]->being_or_has_been_compacted);
+  //     inputs_[i][j]->being_or_has_been_compacted = true;
+  //   }
+  // }
+  // if (cfd_->GetCurrentMutableCFOptions()->compaction_router == nullptr) return;
+  // if (start_level_ != output_level_) {
+  //   // TODO: Handle other cases
+  //   assert(output_level_ == start_level_ + 1);
+  //   auto it = caches->find(start_level_);
+  //   if (it != caches->end()) {
+  //     assert(it->first == start_level_);
+  //     it->second.TakeRange(smallest_user_key_, largest_user_key_);
+  //   }
+  // }
+  // // it->first > output_level_ is not supported yet, which requires looking
+  // // for the newer versions in smaller levels.
+  // auto it = caches->find(output_level_);
+  // if (it != caches->end()) {
+  //   assert(it->first == output_level_);
+  //   auto records = it->second.TakeRange(smallest_user_key_, largest_user_key_);
+  //   for (auto& record : records) {
+  //     auto& user_key = record.first;
+  //     auto& value = record.second;
+  //     InternalKey key;
+  //     *key.rep() = std::move(user_key);
+  //     // TODO: Support other types and sequence number
+  //     key.ConvertFromUserKey(0, ValueType::kTypeValue);
+  //     cached_records_to_promote_.emplace_back(std::move(key), std::move(value));
+  //   }
+  // }
 }
 
 void Compaction::GetBoundaryKeys(

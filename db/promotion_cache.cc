@@ -13,15 +13,23 @@
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
 #include "util/autovector.h"
+#include "db/memtable.h"
+#include <memory>
+
+namespace std {
+
+template<typename T, typename... Args>
+std::unique_ptr<T> make_unique(Args&&... args) {
+  return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
+}
+
+}
 
 namespace ROCKSDB_NAMESPACE {
 
 bool PromotionCacheMemtable::Get(const Slice& key, PinnableSlice* value) {
-  if (auto it = del_data_.find(key.ToString()); it != del_data_.end()) {
-    return false;
-  }
-
-  if (auto it = data_.find(key.ToString()); it != data_.end()) {
+  auto it = data_.find(key.ToString());
+  if (it != data_.end()) {
     value->PinSelf(it->second);
     return true;
   }
@@ -30,14 +38,18 @@ bool PromotionCacheMemtable::Get(const Slice& key, PinnableSlice* value) {
 }
 
 void PromotionCacheMemtable::Put(const Slice& key, const Slice& value) {
-  if (auto it = del_data_.find(key.ToString()); it != del_data_.end()) {
-    del_data_.erase(it);
+  if(data_.emplace(key.ToString(), value.ToString()).second) {
+    buffer_size_ += value.size();
   }
-  data_.insert_or_assign(key.ToString(), value.ToString());
 }
 
-void PromotionCacheMemtable::Remove(const Slice& key) {
-  del_data_.insert(key.ToString());
+
+void PromotionCacheMemtable::Update(const Slice& key, const Slice& value) {
+  auto it = data_.find(key.ToString());
+  if (it != data_.end()) {
+    buffer_size_ += value.size() - it->second.size();
+    it->second = value.ToString();
+  }
 }
 
 bool PromotionCacheImmList::Get(const Slice& key, PinnableSlice* value) {
@@ -49,11 +61,10 @@ bool PromotionCacheImmList::Get(const Slice& key, PinnableSlice* value) {
   return false;
 }
 
-void PromotionCacheImmList::Remove(const Slice& key) {
-  buffer_size_ = 0;
+
+void PromotionCacheImmList::Update(const Slice& key, const Slice& value) {
   for (auto& t : imm_list_) {
-    t->Remove(key);
-    buffer_size_ += t->Size();
+    t->Update(key, value);
   }
 }
 
@@ -62,14 +73,22 @@ void PromotionCacheImmList::AddMemtable(std::unique_ptr<PromotionCacheMemtable> 
   imm_list_.push_back(std::move(mem));
 }
 
-PromotionCache::PromotionCache(const Comparator* ucmp, size_t table_size, ColumnFamilyData* cfd, DBImpl* db)
-  : ucmp_(ucmp), table_size_(table_size), cfd_(cfd), db_(db) {
+PromotionCache::PromotionCache(const Comparator* ucmp, size_t table_size, ColumnFamilyData* cfd)
+  : ucmp_(ucmp), table_size_(table_size), cfd_(cfd), signal_flush_(&flush_m_) {
   mut_ = std::make_unique<PromotionCacheMemtable>(ucmp);
   imms_ = std::make_unique<PromotionCacheImmList>();
+  checked_ = std::make_unique<PromotionCacheMemtable>(ucmp);
+  flush_thread_ = std::thread([&](){ this->FlushThread(); });
 }
 
-bool PromotionCache::Get(InternalStats *internal_stats, const Slice& key, PinnableSlice* value) {
-  auto timer_guard = internal_stats->hotrap_timers()
+PromotionCache::~PromotionCache() {
+  signal_terminate_ = true;
+  signal_flush_.Signal();
+  flush_thread_.join();
+}
+
+bool PromotionCache::Get(const Slice& key, PinnableSlice* value) {
+  auto timer_guard = cfd_->internal_stats()->hotrap_timers()
                          .timer(TimerType::kPromotionCacheGet)
                          .start();
   io_m_.ReadLock();
@@ -78,11 +97,15 @@ bool PromotionCache::Get(InternalStats *internal_stats, const Slice& key, Pinnab
   if (!s) {
     s = imms_->Get(key, value);
   }
+  if (!s) {
+    s = checked_->Get(key, value);
+  }
   io_m_.ReadUnlock();
   return s;
 }
 
-void PromotionCache::Put(const Slice& key, const Slice& value) {
+void PromotionCache::Put(const Slice& key, const Slice& value, DBImpl* db) {
+  db_ = db;
   io_m_.WriteLock();
   reg_st_m_.ReadLock();
   bool is_obsolete = in_process_.find(key.ToString()) == in_process_.end();
@@ -125,48 +148,155 @@ void PromotionCache::RemoveObsolete(MemTable* table) {
     it = nit;
   }
   reg_st_m_.WriteUnlock();
-  io_m_.ReadLock();
+  
+  // The inserted keys will not be accessed by GET() because they will access the memtable first.
+  // Use read lock because the structure of mut_ may be modified by Put.
   new_iter->SeekToFirst();
+  io_m_.ReadLock();
   while(new_iter->Valid()) {
     auto key = new_iter->user_key();
-    mut_->Remove(key);
-    imms_->Remove(key);
+    auto value = new_iter->value();
+    mut_->Update(key, value);
     new_iter->Next();
   }
   io_m_.ReadUnlock();
+
+  flush_m_.Lock();
+  if (imms_->Size()) {
+    new_iter->SeekToFirst();
+    while(new_iter->Valid()) {
+      auto key = new_iter->user_key();
+      auto value = new_iter->value();
+      imms_->Update(key, value);
+      new_iter->Next();
+    }
+  }
+  flush_m_.Unlock();
+
+  // These can only be modified by FlushThread. 
+  // We are modifying the immutable parts so we use imm_m_.
+  imm_m_.Lock();
+  new_iter->SeekToFirst();
+  while(new_iter->Valid()) {
+    auto key = new_iter->user_key();
+    auto value = new_iter->value();
+    checked_->Update(key, value);
+    new_iter->Next();
+  }
+  imm_m_.Unlock();
   delete new_iter;
 }
 
 void PromotionCache::FlushThread() {
   while (!signal_terminate_) {
     flush_m_.Lock();
-    signal_flush_.Wait();
+    while (!imms_->Size() || signal_terminate_) {
+      signal_flush_.Wait();
+    }
+    if (signal_terminate_) {
+      return;
+    }
     // Store the pointers we are going to process.
     std::vector<PromotionCacheMemtable*> Q;
-    for (auto& t : imms_->Imms()) if (!t->IsChecked()) {
+    for (auto& t : imms_->Imms()) {
       Q.push_back(t.get());
     }
     flush_m_.Unlock();
+
+    // Check if it is stably hot.
+    // Store the references to them. References are immutable.
+    std::vector<std::pair<const std::string&, const std::string&>> kv;
+    
     auto sv = db_->GetAndRefSuperVersion(cfd_);
     auto router = sv->mutable_cf_options.compaction_router;
-    
-    // Check if it is stably hot.
-    std::vector<std::pair<const std::string&, const std::string&>> keys;
-    if (router) {
+    size_t buffer_size = checked_->Size();
+    assert(router != nullptr);
+    {
       TimerGuard check_stably_hot_start = cfd_->internal_stats()->hotrap_timers()
                                               .timer(TimerType::kCheckStablyHot)
                                               .start();
       for (auto& t : Q) {
-        for (auto& [key, value] : t->Data()) {
+        for (auto& p : t->Data()) {
+          auto& key = p.first;
+          auto& value = p.second;
           if(router->IsStablyHot(key)) {
-            keys.emplace_back(key, value);
+            kv.emplace_back(key, value);
+            buffer_size += key.size() + value.size();
           }
         }
       }
     }
+    // This buffer size may be over estimated because some concurrency effects.
+    if (buffer_size >= table_size_) {
+      // Since RemoveObsolete only works under DBMutex. We can only acquire DBMutex.
+      db_->mutex()->Lock();
+      auto new_checked = std::make_unique<PromotionCacheMemtable>(*checked_);
+      for (auto& p : kv) {
+        auto& key = p.first;
+        auto& value = p.second;
+        new_checked->Put(key, value);
+      }
+      // Reset checked_;
+      io_m_.WriteLock();
+      checked_ = std::make_unique<PromotionCacheMemtable>(ucmp_);
+      io_m_.WriteUnlock();    
+      // Flush new_checked.
+      MemTable *m = cfd_->ConstructNewMemtable(sv->mutable_cf_options, 0);
+      m->Ref();
+      autovector<MemTable *> memtables_to_free;
+      size_t flushed_bytes = 0;
+      for (auto& p : new_checked->Data()) {
+        auto& key = p.first;
+        auto& value = p.second;
+        Status s = m->Add(1, ValueType::kTypeValue, key, value, nullptr);
+        if (!s.ok()) {
+          ROCKS_LOG_FATAL(cfd_->ioptions()->logger,
+                          "FlushThread: Unexpected error: %s",
+                          s.ToString().c_str());
+        }
+        flushed_bytes += key.size() + value.size();
+      }
+      cfd_->imm()->Add(m, &memtables_to_free);
+      SuperVersionContext svc(true);
+      db_->InstallSuperVersionAndScheduleWork(cfd_, &svc, sv->mutable_cf_options);
+      DBImpl::FlushRequest flush_req;
+      db_->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd_}), &flush_req);
+      db_->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
+      db_->MaybeScheduleFlushOrCompaction();
+      db_->mutex()->Unlock();
+      // Clean up.
+      for (MemTable *table : memtables_to_free) delete table;
+      svc.Clean();
+      Statistics *stats = cfd_->ioptions()->stats;
+      RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, flushed_bytes);
+    } else {
+      imm_m_.Lock();
+      // Create new memtable to avoid blocking GET.
+      auto new_checked = std::make_unique<PromotionCacheMemtable>(*checked_);
+      for (auto& p : kv) {
+        auto& key = p.first;
+        auto& value = p.second;
+        new_checked->Put(key, value);
+      }
+      io_m_.WriteLock();
+      checked_ = std::move(new_checked);
+      io_m_.WriteUnlock();    
+      imm_m_.Unlock();
+    }
+    
+    if (sv->Unref()) {
+      db_->mutex()->Lock();
+      sv->Cleanup();
+      delete sv;
+      db_->mutex()->Unlock();
+    }
 
-    
-    
+    // Remove the processed pointers.
+    io_m_.WriteLock();
+    flush_m_.Lock();
+    imms_->Imms().erase(imms_->Imms().begin(), imms_->Imms().begin() + Q.size());
+    flush_m_.Unlock();
+    io_m_.WriteUnlock();    
   }
 }
 

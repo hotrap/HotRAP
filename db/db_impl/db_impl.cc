@@ -1871,6 +1871,11 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
     }
   }
   if (!done) {
+    if (cfd->promotion_cache()->Get(lkey.user_key(), get_impl_options.value)) {
+      done = true;
+    }
+  }
+  if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
     sv->current->Get(
         this, read_options, lkey, get_impl_options.value, timestamp, &s,

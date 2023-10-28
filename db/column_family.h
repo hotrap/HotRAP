@@ -377,7 +377,7 @@ class ColumnFamilyData {
   TableCache* table_cache() const { return table_cache_.get(); }
   BlobFileCache* blob_file_cache() const { return blob_file_cache_.get(); }
   PromotionCache* promotion_cache() {
-    return promotion_cache_;
+    return promotion_cache_.get();
   }
 
   // See documentation in compaction_picker.h

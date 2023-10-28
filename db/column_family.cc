@@ -574,7 +574,7 @@ ColumnFamilyData::ColumnFamilyData(
         new BlobFileCache(_table_cache, ioptions(), soptions(), id_,
                           internal_stats_->GetBlobFileReadHist(), io_tracer));
     promotion_cache_.reset(
-        new PromotionCache(cf_options.comparator) 
+        new PromotionCache(cf_options.comparator, initial_cf_options_.write_buffer_size, this)
     );
     if (ioptions_.compaction_style == kCompactionStyleLevel) {
       compaction_picker_.reset(
