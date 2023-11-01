@@ -1,5 +1,5 @@
 #include "promotion_cache.h"
-
+#include <iostream>
 #include <functional>
 
 #include "column_family.h"
@@ -87,18 +87,24 @@ PromotionCache::~PromotionCache() {
   flush_thread_.join();
 }
 
+static std::atomic<size_t> get_count(0), get_hit_count(0), put_count(0);
+
 bool PromotionCache::Get(const Slice& key, PinnableSlice* value) {
   auto timer_guard = cfd_->internal_stats()->hotrap_timers()
                          .timer(TimerType::kPromotionCacheGet)
                          .start();
   io_m_.ReadLock();
   bool s = false;
+  get_count += 1;
   s = mut_->Get(key, value);
   if (!s) {
     s = imms_->Get(key, value);
   }
   if (!s) {
     s = checked_->Get(key, value);
+  }
+  if (s) {
+    get_hit_count += 1;
   }
   io_m_.ReadUnlock();
   return s;
@@ -111,6 +117,7 @@ void PromotionCache::Put(const Slice& key, const Slice& value, DBImpl* db) {
   bool is_obsolete = in_process_.find(key.ToString()) == in_process_.end();
   reg_st_m_.ReadUnlock();
   if (!is_obsolete) {
+    put_count += 1;
     mut_->Put(key, value);
     if (mut_->Size() > table_size_) {
       flush_m_.Lock();
@@ -139,6 +146,7 @@ void PromotionCache::RemoveObsolete(MemTable* table) {
   Arena arena;
   auto new_iter = table->NewIterator(ReadOptions(), &arena);
   reg_st_m_.WriteLock();
+  // std::cerr << "FUCK1: " << in_process_.size() << std::endl;
   for (auto it = in_process_.begin(); it != in_process_.end(); ) {
     new_iter->Seek(*it);
     auto nit = std::next(it);
@@ -147,44 +155,57 @@ void PromotionCache::RemoveObsolete(MemTable* table) {
     }
     it = nit;
   }
+  // std::cerr << "FUCK2" << std::endl;
   reg_st_m_.WriteUnlock();
   
   // The inserted keys will not be accessed by GET() because they will access the memtable first.
   // Use read lock because the structure of mut_ may be modified by Put.
-  new_iter->SeekToFirst();
-  io_m_.ReadLock();
-  while(new_iter->Valid()) {
-    auto key = new_iter->user_key();
-    auto value = new_iter->value();
-    mut_->Update(key, value);
-    new_iter->Next();
+  if (mut_->Size()) {
+    new_iter->SeekToFirst();
+    io_m_.ReadLock();
+    // std::cerr << "FUCK3: " << mut_->Size() << std::endl;
+    while(new_iter->Valid()) {
+      auto key = new_iter->user_key();
+      auto value = new_iter->value();
+      mut_->Update(key, value);
+      new_iter->Next();
+    }
+    // std::cerr << "FUCK4" << std::endl;
+    io_m_.ReadUnlock();
   }
-  io_m_.ReadUnlock();
 
-  flush_m_.Lock();
   if (imms_->Size()) {
+    flush_m_.Lock();
+    // std::cerr << "FUCK5: " << imms_->Size() << std::endl;
+    if (imms_->Size()) {
+      new_iter->SeekToFirst();
+      while(new_iter->Valid()) {
+        auto key = new_iter->user_key();
+        auto value = new_iter->value();
+        imms_->Update(key, value);
+        new_iter->Next();
+      }
+    }
+    // std::cerr << "FUCK6" << std::endl;
+    flush_m_.Unlock();
+  }
+
+  // These can only be modified by FlushThread. 
+  // We are modifying the immutable parts so we use imm_m_.
+  if (checked_->Size()) {
+    imm_m_.Lock();
+    // std::cerr << "FUCK7: " << checked_->Size() << std::endl;
     new_iter->SeekToFirst();
     while(new_iter->Valid()) {
       auto key = new_iter->user_key();
       auto value = new_iter->value();
-      imms_->Update(key, value);
+      checked_->Update(key, value);
       new_iter->Next();
     }
+    // std::cerr << "FUCK8" << std::endl;
+    imm_m_.Unlock();
   }
-  flush_m_.Unlock();
-
-  // These can only be modified by FlushThread. 
-  // We are modifying the immutable parts so we use imm_m_.
-  imm_m_.Lock();
-  new_iter->SeekToFirst();
-  while(new_iter->Valid()) {
-    auto key = new_iter->user_key();
-    auto value = new_iter->value();
-    checked_->Update(key, value);
-    new_iter->Next();
-  }
-  imm_m_.Unlock();
-  delete new_iter;
+  new_iter->~InternalIterator();
 }
 
 void PromotionCache::FlushThread() {
@@ -226,6 +247,9 @@ void PromotionCache::FlushThread() {
         }
       }
     }
+    std::cerr << "putcount = " << put_count << std::endl;
+    std::cerr << "getcount = " << get_count << ", " << "gethitcount = " << get_hit_count << std::endl;
+    std::cerr << "buffer size: " << buffer_size << std::endl;
     // This buffer size may be over estimated because some concurrency effects.
     if (buffer_size >= table_size_) {
       // Since RemoveObsolete only works under DBMutex. We can only acquire DBMutex.
@@ -256,6 +280,7 @@ void PromotionCache::FlushThread() {
         }
         flushed_bytes += key.size() + value.size();
       }
+      std::cerr << "flushed bytes: " << flushed_bytes << std::endl;
       cfd_->imm()->Add(m, &memtables_to_free);
       SuperVersionContext svc(true);
       db_->InstallSuperVersionAndScheduleWork(cfd_, &svc, sv->mutable_cf_options);
@@ -294,7 +319,9 @@ void PromotionCache::FlushThread() {
     // Remove the processed pointers.
     io_m_.WriteLock();
     flush_m_.Lock();
-    imms_->Imms().erase(imms_->Imms().begin(), imms_->Imms().begin() + Q.size());
+    std::cerr << "Qsize: " << Q.size() << std::endl;
+    imms_->EraseFront(Q.size());
+    std::cerr << "Immsize: " << imms_->Imms().size() << std::endl;
     flush_m_.Unlock();
     io_m_.WriteUnlock();    
   }

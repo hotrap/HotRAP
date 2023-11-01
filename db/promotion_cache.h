@@ -77,6 +77,14 @@ class PromotionCacheImmList {
     return imm_list_;
   }
 
+  void EraseFront(size_t t) {
+    imm_list_.erase(imm_list_.begin(), imm_list_.begin() + t);
+    buffer_size_ = 0;
+    for (auto& imm : imm_list_) {
+      buffer_size_ += imm->Size();
+    }
+  }
+
  private:
   std::vector<std::unique_ptr<PromotionCacheMemtable>> imm_list_;
   size_t buffer_size_{0};
