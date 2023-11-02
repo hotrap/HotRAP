@@ -1431,7 +1431,7 @@ class IgnoreStableHot : public TraitIterator<Slice> {
       : iter_(std::move(iter.iter_)) {}
   std::unique_ptr<Slice> next() override {
     for (;;) {
-      std::unique_ptr<HotRecInfo> ret = iter_.next();
+      std::unique_ptr<HotRecInfo> ret = iter_->next();
       if (ret == nullptr) {
         return nullptr;
       } else {

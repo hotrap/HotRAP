@@ -138,11 +138,6 @@ class MutexGuard {
  public:
   MutexGuard(MutexGuard &&rhs)
       : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
-  MutexGuard &operator=(MutexGuard &&rhs) {
-    data_ = rhs.data_;
-    lock_ = std::move(rhs.lock_);
-    return *this;
-  }
   T &operator*() const { return data_; }
   T *operator->() const { return &data_; }
 
