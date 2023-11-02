@@ -22,24 +22,6 @@ class TraitIterator {
   // TODO: Return std::optional<T> if upgrade to C++17
   virtual std::unique_ptr<T> next() = 0;
 };
-template <typename T>
-class TraitObjIterator : public TraitIterator<T> {
- public:
-  using Item = T;
-  TraitObjIterator(const TraitObjIterator<T> &) = delete;
-  TraitObjIterator<T> &operator=(const TraitObjIterator<T> &) = delete;
-  TraitObjIterator(TraitObjIterator<T> &&rhs) : iter_(std::move(rhs.iter_)) {}
-  TraitObjIterator<T> &operator=(TraitObjIterator<T> &&rhs) {
-    iter_ = std::move(rhs.iter_);
-    return *this;
-  }
-  TraitObjIterator(std::unique_ptr<TraitIterator<Item>> &&iter)
-      : iter_(std::move(iter)) {}
-  std::unique_ptr<T> next() override { return iter_->next(); }
-
- private:
-  std::unique_ptr<TraitIterator<Item>> iter_;
-};
 
 template <typename Iter>
 class Peekable : TraitIterator<typename Iter::Item> {
@@ -121,7 +103,7 @@ struct HotRecInfo {
 
 class CompactionRouter : public Customizable {
  public:
-  using Iter = TraitObjIterator<HotRecInfo>;
+  using Iter = std::unique_ptr<TraitIterator<HotRecInfo>>;
   virtual ~CompactionRouter() {}
   static const char *Type() { return "CompactionRouter"; }
   static Status CreateFromString(const ConfigOptions &config_options,
