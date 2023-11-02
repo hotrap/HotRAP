@@ -1356,21 +1356,9 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
         start_(start),
         end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
-        start_tier_(router.Tier(c.start_level())),
-        latter_tier_(router.Tier(c.output_level() + 1)),
         advance_(Advance::kNone),
         promotion_iter_(c.cached_records_to_promote()) {}
-  ~RouterIterator2SDLastLevel() override {
-    // RangeBounds range{
-    //     .start =
-    //         Bound{
-    //             .user_key = start_,
-    //             .excluded = false,
-    //         },
-    //     .end = end_,
-    // };
-    // router_.TransferRange(start_tier_, latter_tier_, range, false);
-  }
+  ~RouterIterator2SDLastLevel() override {}
   std::unique_ptr<Elem> next() override {
     switch (advance_) {
       case Advance::kNone:
@@ -1417,8 +1405,6 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
   const Bound end_;
 
   const Comparator* ucmp_;
-  const size_t start_tier_;
-  const size_t latter_tier_;
   Advance advance_;
   VecIter<std::pair<InternalKey, std::string>> promotion_iter_;
 };
