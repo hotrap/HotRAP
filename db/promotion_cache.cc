@@ -87,13 +87,18 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
       stable_hot;
   CompactionRouter *router = sv->mutable_cf_options.compaction_router;
   const Comparator *ucmp = cfd->ioptions()->user_comparator;
+  auto stats = cfd->ioptions()->stats;
   if (router) {
     TimerGuard check_stably_hot_start = internal_stats.hotrap_timers()
                                             .timer(TimerType::kCheckStablyHot)
                                             .start();
     for (const auto &item : cache.cache) {
       const std::string &user_key = item.first;
-      if (!router->IsStablyHot(user_key)) continue;
+      if (!router->IsStablyHot(user_key)) {
+        RecordTick(stats, Tickers::NOT_STABLY_HOT_BYTES,
+                   user_key.size() + item.second.size());
+        continue;
+      }
       stable_hot.insert(user_key);
     }
   }
@@ -141,7 +146,11 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
       const std::string &user_key = item.first;
       const std::string &value = item.second;
       if (stable_hot.find(user_key) == stable_hot.end()) continue;
-      if (updated->find(user_key) != updated->end()) continue;
+      if (updated->find(user_key) != updated->end()) {
+        RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
+                   user_key.size() + value.size());
+        continue;
+      }
       // It seems that sequence number 0 is treated specially. So we use 1 here.
       Status s = m->Add(1, ValueType::kTypeValue, user_key, value, nullptr);
       if (!s.ok()) {
@@ -162,7 +171,6 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
 
   for (MemTable *table : memtables_to_free) delete table;
   svc.Clean();
-  Statistics *stats = cfd->ioptions()->stats;
   RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, flushed_bytes);
 
   {

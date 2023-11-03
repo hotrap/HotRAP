@@ -1971,15 +1971,17 @@ void Version::MultiGetBlob(
   }
 }
 
-static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
+static void TryPromote(DBImpl* db, ColumnFamilyData& cfd,
                        const MutableCFOptions& mutable_cf_options,
                        FileMetaData& f, int hit_level, Slice user_key,
-                       PinnableSlice& value) {
+                       PinnableSlice* value) {
+  if (db == nullptr) return;
+  CompactionRouter* router = mutable_cf_options.compaction_router;
+  if (!router || !value) return;
   auto timer_guard = cfd.internal_stats()
                          ->hotrap_timers()
                          .timer(TimerType::kTryPromote)
                          .start();
-  CompactionRouter* router = mutable_cf_options.compaction_router;
   if (router->Tier(hit_level) == 0) return;
   assert(hit_level > 0);
   int target_level = hit_level - 1;
@@ -2002,17 +2004,16 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
     assert(it->first == target_level);
     cache = &it->second;
   }
-  cache->Promote(db, cfd, mutable_cf_options.write_buffer_size,
-                 user_key.ToString(), value);
+  cache->Promote(*db, cfd, mutable_cf_options.write_buffer_size,
+                 user_key.ToString(), *value);
   return;
 }
 static void Access(DBImpl* db, ColumnFamilyData& cfd,
-                   const MutableCFOptions& mutable_cf_options, FileMetaData& f,
-                   int hit_level, Slice user_key, PinnableSlice* value) {
+                   const MutableCFOptions& mutable_cf_options, int hit_level,
+                   Slice user_key, PinnableSlice* value) {
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value) return;
-  TryPromote(*db, cfd, mutable_cf_options, f, hit_level, user_key, *value);
   auto timer_guard =
       cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
   router->Access(hit_level, user_key, value->size());
@@ -2146,8 +2147,10 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
       // TODO: How to update VisCnts?
       break;
     case GetContext::kFound:
-      Access(env_get.db, *cfd_, mutable_cf_options_, *f.file_metadata,
-             hit_level, user_key, env_get.value);
+      Access(env_get.db, *cfd_, mutable_cf_options_, hit_level, user_key,
+             env_get.value);
+      TryPromote(env_get.db, *cfd_, mutable_cf_options_, *f.file_metadata,
+                 hit_level, user_key, env_get.value);
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
                   env_get.is_blob_index, env_get.do_merge);
@@ -2169,6 +2172,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   return false;
 }
 
+// If db == nullptr then it's called from check_newer_version
 void Version::Get(DBImpl* db, const ReadOptions& read_options,
                   const LookupKey& k, PinnableSlice* value,
                   std::string* timestamp, Status* status,
@@ -2246,12 +2250,15 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
       if (should_stop) return;
       f = fp.GetNextFile();
     }
-    if (cache_level < last_level) {
+    if (db != nullptr) {
+      assert(cache_level < last_level);
       auto caches = cfd_->promotion_caches().Read();
       auto it = caches->find(cache_level);
       assert(it != caches->end());
       const auto& cache = it->second;
       if (cache.Get(cfd_->internal_stats(), k.user_key(), value)) {
+        Access(env_get.db, *cfd_, mutable_cf_options_, cache_level, user_key,
+               env_get.value);
         HandleFound(env_get.read_options, env_get.get_context,
                     fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
                     env_get.is_blob_index, env_get.do_merge);
