@@ -1347,18 +1347,20 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
   const TypedTimers<TimerType>& timers_;
 };
 
-class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
+class RouterIteratorIntraTier : public TraitIterator<Elem> {
  public:
-  RouterIterator2SDLastLevel(CompactionRouter& router, const Compaction& c,
-                             CompactionIterator& c_iter, Slice start, Bound end)
+  RouterIteratorIntraTier(CompactionRouter& router, const Compaction& c,
+                          CompactionIterator& c_iter, Slice start, Bound end,
+                          Tickers promotion_type)
       : c_(c),
         c_iter_(c_iter),
         start_(start),
         end_(end),
+        promotion_type_(promotion_type),
         ucmp_(c.column_family_data()->user_comparator()),
         advance_(Advance::kNone),
         promotion_iter_(c.cached_records_to_promote()) {}
-  ~RouterIterator2SDLastLevel() override {}
+  ~RouterIteratorIntraTier() override {}
   std::unique_ptr<Elem> next() override {
     switch (advance_) {
       case Advance::kNone:
@@ -1383,7 +1385,7 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
         advance_ = Advance::kNone;
         auto kv = promotion_iter_.next();
         auto stats = c_.immutable_options()->stats;
-        RecordTick(stats, Tickers::PROMOTED_2SDLAST_BYTES,
+        RecordTick(stats, promotion_type_,
                    kv->first.size() + kv->second.size());
         return std::unique_ptr<Elem>(
             new Elem(Elem::from(Decision::kNextLevel, kv->first, kv->second)));
@@ -1403,6 +1405,7 @@ class RouterIterator2SDLastLevel : public TraitIterator<Elem> {
   CompactionIterator& c_iter_;
   const Slice start_;
   const Bound end_;
+  Tickers promotion_type_;
 
   const Comparator* ucmp_;
   Advance advance_;
@@ -1529,14 +1532,13 @@ class RouterIterator {
         iter_ = std::unique_ptr<RouterIteratorSD2CD>(
             new RouterIteratorSD2CD(*router, c, c_iter, start, end));
       } else if (router->Tier(latter_level + 1) != latter_tier) {
-        iter_ = std::unique_ptr<RouterIterator2SDLastLevel>(
-            new RouterIterator2SDLastLevel(*router, c, c_iter, start, end));
+        iter_ = std::unique_ptr<RouterIteratorIntraTier>(
+            new RouterIteratorIntraTier(*router, c, c_iter, start, end,
+                                        Tickers::PROMOTED_2SDLAST_BYTES));
       } else {
-        // TODO: Handle the case that it's not empty, which is possible when
-        // there are multiple levels in Tier 1
-        assert(c.cached_records_to_promote().empty());
-        iter_ = std::unique_ptr<IteratorWithoutRouter>(
-            new IteratorWithoutRouter(c, c_iter));
+        iter_ = std::unique_ptr<RouterIteratorIntraTier>(
+            new RouterIteratorIntraTier(*router, c, c_iter, start, end,
+                                        Tickers::PROMOTED_2CDFRONT_BYTES));
       }
     }
     cur_ = iter_->next();
