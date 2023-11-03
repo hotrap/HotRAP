@@ -715,7 +715,6 @@ class Version {
            bool* value_found = nullptr, bool* key_exists = nullptr,
            SequenceNumber* seq = nullptr, ReadCallback* callback = nullptr,
            bool* is_blob = nullptr, bool do_merge = true,
-           unsigned int prev_level = static_cast<unsigned int>(-1),
            int last_level = std::numeric_limits<int>::max() / 2);
 
   void MultiGet(const ReadOptions&, MultiGetRange* range,
@@ -858,7 +857,6 @@ class Version {
     bool* key_exists;
     bool is_blob_index;
     bool do_merge;
-    unsigned int prev_level;
   };
   bool GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
                  bool is_hit_file_last_in_level);

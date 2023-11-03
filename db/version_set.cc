@@ -132,10 +132,9 @@ class FilePicker {
   FilePicker(const Slice& user_key, const Slice& ikey,
              autovector<LevelFilesBrief>* file_levels, unsigned int num_levels,
              FileIndexer* file_indexer, const Comparator* user_comparator,
-             const InternalKeyComparator* internal_comparator,
-             unsigned int prev_level = static_cast<unsigned int>(-1))
+             const InternalKeyComparator* internal_comparator)
       : num_levels_(num_levels),
-        curr_level_(prev_level),
+        curr_level_(static_cast<unsigned int>(-1)),
         returned_file_level_(static_cast<unsigned int>(-1)),
         hit_file_level_(static_cast<unsigned int>(-1)),
         search_left_bound_(0),
@@ -1975,7 +1974,7 @@ void Version::MultiGetBlob(
 static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
                        const MutableCFOptions& mutable_cf_options,
                        FileMetaData& f, int hit_level, Slice user_key,
-                       PinnableSlice& value, unsigned int prev_level) {
+                       PinnableSlice& value) {
   auto timer_guard = cfd.internal_stats()
                          ->hotrap_timers()
                          .timer(TimerType::kTryPromote)
@@ -2009,13 +2008,11 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
 }
 static void Access(DBImpl* db, ColumnFamilyData& cfd,
                    const MutableCFOptions& mutable_cf_options, FileMetaData& f,
-                   int hit_level, Slice user_key, PinnableSlice* value,
-                   unsigned int prev_level) {
+                   int hit_level, Slice user_key, PinnableSlice* value) {
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
-  if (!router || !value || prev_level != static_cast<unsigned int>(-1)) return;
-  TryPromote(*db, cfd, mutable_cf_options, f, hit_level, user_key, *value,
-             prev_level);
+  if (!router || !value) return;
+  TryPromote(*db, cfd, mutable_cf_options, f, hit_level, user_key, *value);
   auto timer_guard =
       cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
   router->Access(hit_level, user_key, value->size());
@@ -2150,7 +2147,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
       break;
     case GetContext::kFound:
       Access(env_get.db, *cfd_, mutable_cf_options_, *f.file_metadata,
-             hit_level, user_key, env_get.value, env_get.prev_level);
+             hit_level, user_key, env_get.value);
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
                   env_get.is_blob_index, env_get.do_merge);
@@ -2178,8 +2175,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                   MergeContext* merge_context,
                   SequenceNumber* max_covering_tombstone_seq, bool* value_found,
                   bool* key_exists, SequenceNumber* seq, ReadCallback* callback,
-                  bool* is_blob, bool do_merge, unsigned int prev_level,
-                  int last_level) {
+                  bool* is_blob, bool do_merge, int last_level) {
   auto timer_guard = cfd_->internal_stats()
                          ->hotrap_timers()
                          .timer(TimerType::kVersionGet)
@@ -2224,7 +2220,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
   FilePicker fp(user_key, ikey, &storage_info_.level_files_brief_,
                 std::min(storage_info_.num_non_empty_levels_, last_level + 1),
                 &storage_info_.file_indexer_, user_comparator(),
-                internal_comparator(), prev_level);
+                internal_comparator());
   FdWithKeyRange* f = fp.GetNextFile();
   EnvGet env_get{.db = db,
                  .read_options = read_options,
@@ -2236,8 +2232,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .max_covering_tombstone_seq = *max_covering_tombstone_seq,
                  .key_exists = key_exists,
                  .is_blob_index = is_blob_index,
-                 .do_merge = do_merge,
-                 .prev_level = prev_level};
+                 .do_merge = do_merge};
   std::vector<int> cache_levels;
   {
     auto caches = cfd_->promotion_caches().Read();

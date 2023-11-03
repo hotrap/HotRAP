@@ -117,8 +117,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
     }
     sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
                      &merge_context, &max_covering_tombstone_seq, nullptr,
-                     nullptr, nullptr, nullptr, nullptr, false,
-                     static_cast<unsigned int>(-1), target_level);
+                     nullptr, nullptr, nullptr, nullptr, false, target_level);
     if (!s.IsNotFound()) {
       if (!s.ok()) {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
