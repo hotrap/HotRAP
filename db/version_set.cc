@@ -1985,9 +1985,6 @@ static void TryPromote(DBImpl* db, ColumnFamilyData& cfd,
   if (router->Tier(hit_level) == 0) return;
   assert(hit_level > 0);
   int target_level = hit_level - 1;
-  while (router->Tier(target_level) == 1) {
-    target_level -= 1;
-  }
   PromotionCache* cache;
   {
     auto caches = cfd.promotion_caches().Write();
