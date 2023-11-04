@@ -1328,16 +1328,16 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
       : first_(true),
         c_iter_(c_iter),
         timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {}
-  std::unique_ptr<Elem> next() override {
+  optional<Elem> next() override {
     if (first_) {
       first_ = false;
     } else {
       assert(c_iter_.Valid());
       c_iter_.Next();
     }
-    if (!c_iter_.Valid()) return nullptr;
-    return std::unique_ptr<Elem>(
-        new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
+    if (!c_iter_.Valid()) return optional<Elem>();
+    return optional<Elem>(
+        Elem::from_compaction_iter(Decision::kNextLevel, c_iter_));
   }
 
  private:
@@ -1361,7 +1361,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
         advance_(Advance::kNone),
         promotion_iter_(c.cached_records_to_promote()) {}
   ~RouterIteratorIntraTier() override {}
-  std::unique_ptr<Elem> next() override {
+  optional<Elem> next() override {
     switch (advance_) {
       case Advance::kNone:
         break;
@@ -1373,9 +1373,9 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   }
 
  private:
-  std::unique_ptr<Elem> __next() {
+  optional<Elem> __next() {
     if (!c_iter_.Valid()) {
-      return nullptr;
+      return optional<Elem>();
     }
     const rocksdb::Slice* latter_hot;
     if (promotion_iter_.peek() != NULL) {
@@ -1387,15 +1387,15 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
         auto stats = c_.immutable_options()->stats;
         RecordTick(stats, promotion_type_,
                    kv->first.size() + kv->second.size());
-        return std::unique_ptr<Elem>(
-            new Elem(Elem::from(Decision::kNextLevel, kv->first, kv->second)));
+        return optional<Elem>(
+            Elem::from(Decision::kNextLevel, kv->first, kv->second));
       } else if (res == 0) {
         promotion_iter_.next();
       }
     }
     advance_ = Advance::kCompactionIterator;
-    return std::unique_ptr<Elem>(
-        new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
+    return optional<Elem>(
+        Elem::from_compaction_iter(Decision::kNextLevel, c_iter_));
   }
   enum class Advance {
     kNone,
@@ -1418,13 +1418,13 @@ class IgnoreStableHot : public TraitIterator<Slice> {
   IgnoreStableHot(Iter&& iter) : iter_(std::move(iter)) {}
   IgnoreStableHot(IgnoreStableHot<Iter>&& iter)
       : iter_(std::move(iter.iter_)) {}
-  std::unique_ptr<Slice> next() override {
+  optional<Slice> next() override {
     for (;;) {
-      std::unique_ptr<HotRecInfo> ret = iter_->next();
-      if (ret == nullptr) {
-        return nullptr;
+      optional<HotRecInfo> ret = iter_->next();
+      if (!ret.has_value()) {
+        return optional<Slice>();
       } else {
-        return std::unique_ptr<Slice>(new Slice(ret->key));
+        return make_optional<Slice>(ret.value().key);
       }
     }
   }
@@ -1449,7 +1449,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     // TODO: Handle other cases.
     assert(c.cached_records_to_promote().empty());
   }
-  std::unique_ptr<Elem> next() override {
+  optional<Elem> next() override {
     if (first_)
       first_ = false;
     else
@@ -1458,9 +1458,9 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   }
 
  private:
-  std::unique_ptr<Elem> __next() {
+  optional<Elem> __next() {
     if (!c_iter_.Valid()) {
-      return nullptr;
+      return optional<Elem>();
     }
     // Invariant: c_iter.status() is guaranteed to be OK if c_iter->Valid()
     // returns true.
@@ -1473,14 +1473,14 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         .end = end_,
     };
     if (!range.contains(c_iter_.user_key(), ucmp_)) {
-      return std::unique_ptr<Elem>(
-          new Elem(Elem::from_compaction_iter(Decision::kNextLevel, c_iter_)));
+      return optional<Elem>(
+          Elem::from_compaction_iter(Decision::kNextLevel, c_iter_));
     }
     // Make sure that all versions of the same user key share the same decision.
     if (previous_decision_ != Decision::kUndetermined &&
         ucmp_->Compare(c_iter_.user_key(), Slice(previous_user_key_)) == 0) {
-      return std::unique_ptr<Elem>(
-          new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
+      return optional<Elem>(
+          Elem::from_compaction_iter(previous_decision_, c_iter_));
     }
     auto stats = c_.immutable_options()->stats;
     const rocksdb::Slice* hot = hot_iter_.peek();
@@ -1496,8 +1496,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       previous_decision_ = Decision::kNextLevel;
     }
     previous_user_key_ = c_iter_.user_key().ToString();
-    return std::unique_ptr<Elem>(
-        new Elem(Elem::from_compaction_iter(previous_decision_, c_iter_)));
+    return optional<Elem>(
+        Elem::from_compaction_iter(previous_decision_, c_iter_));
   }
 
   const Compaction& c_;
@@ -1543,20 +1543,20 @@ class RouterIterator {
     }
     cur_ = iter_->next();
   }
-  bool Valid() { return cur_ != nullptr; }
+  bool Valid() { return cur_.has_value(); }
   void Next() {
     assert(Valid());
     cur_ = iter_->next();
   }
-  Decision decision() { return cur_->decision; }
-  const Slice& key() const { return cur_->key; }
-  const ParsedInternalKey& ikey() const { return cur_->ikey; }
-  const Slice& user_key() const { return cur_->ikey.user_key; }
-  const Slice& value() const { return cur_->value; }
+  Decision decision() { return cur_.value().decision; }
+  const Slice& key() const { return cur_.value().key; }
+  const ParsedInternalKey& ikey() const { return cur_.value().ikey; }
+  const Slice& user_key() const { return cur_.value().ikey.user_key; }
+  const Slice& value() const { return cur_.value().value; }
 
  private:
   std::unique_ptr<TraitIterator<Elem>> iter_;
-  std::unique_ptr<Elem> cur_;
+  optional<Elem> cur_;
 
   const TypedTimers<TimerType>& timers_;
 };

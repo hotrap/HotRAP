@@ -12,6 +12,65 @@
 namespace ROCKSDB_NAMESPACE {
 
 template <typename T>
+class optional {
+ public:
+  optional() : has_value_(false) {}
+  optional(T &&x) : has_value_(true), x_(std::move(x)) {}
+  optional<T> &operator=(T &&x) {
+    if (has_value_) x_.~T();
+    has_value_ = true;
+    x_ = std::move(x);
+    return *this;
+  }
+  optional(const optional<T> &rhs) : has_value_(rhs.has_value_) {
+    if (has_value_) {
+      x_ = rhs.x_;
+    }
+  }
+  optional<T> &operator=(const optional<T> &rhs) {
+    this->~optional();
+    has_value_ = rhs.has_value_;
+    if (has_value_) {
+      x_ = rhs.x_;
+    }
+    return *this;
+  }
+  optional(optional<T> &&rhs) : has_value_(rhs.has_value_) {
+    if (has_value_) {
+      x_ = std::move(rhs.x_);
+      rhs.has_value_ = false;
+    }
+  }
+  optional<T> &operator=(optional<T> &&rhs) {
+    this->~optional();
+    has_value_ = rhs.has_value_;
+    if (has_value_) {
+      x_ = std::move(rhs.x_);
+      rhs.has_value_ = false;
+    }
+    return *this;
+  }
+  ~optional() {
+    if (has_value_) {
+      x_.~T();
+    }
+  }
+  bool has_value() const { return has_value_; }
+  T &value() { return x_; }
+  const T &value() const { return x_; }
+
+ private:
+  bool has_value_;
+  union {
+    T x_;
+  };
+};
+template <typename T, typename... Args>
+optional<T> make_optional(Args... args) {
+  return optional<T>(T(args...));
+}
+
+template <typename T>
 class TraitIterator {
  public:
   using Item = T;
@@ -20,7 +79,7 @@ class TraitIterator {
   TraitIterator &operator=(const TraitIterator &) = delete;
   virtual ~TraitIterator() = default;
   // TODO: Return std::optional<T> if upgrade to C++17
-  virtual std::unique_ptr<T> next() = 0;
+  virtual optional<T> next() = 0;
 };
 
 template <typename Iter>
@@ -38,16 +97,21 @@ class Peekable : TraitIterator<typename Iter::Item> {
     return *this;
   }
   ~Peekable() override = default;
-  const Item *peek() const { return cur_.get(); }
-  std::unique_ptr<Item> next() override {
-    std::unique_ptr<Item> ret = std::move(cur_);
+  const Item *peek() const {
+    if (cur_.has_value())
+      return &cur_.value();
+    else
+      return nullptr;
+  }
+  optional<Item> next() override {
+    optional<Item> ret = std::move(cur_);
     cur_ = iter_.next();
     return ret;
   }
 
  private:
   Iter iter_;
-  std::unique_ptr<Item> cur_;
+  optional<Item> cur_;
 };
 
 template <typename T>
