@@ -1289,60 +1289,73 @@ enum class Decision {
   kStartLevel,
 };
 
-struct Elem {
-  Decision decision;
+struct IKeyValue {
   Slice key;
   ParsedInternalKey ikey;
   Slice value;
+
+  IKeyValue() = default;
+  IKeyValue(const InternalKey& internal_key, Slice arg_value)
+      : key(internal_key.Encode()), value(arg_value) {
+    ParseInternalKey(key, &ikey, true);
+  }
+  IKeyValue(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value)
+      : key(arg_key), ikey(arg_ikey), value(arg_value) {}
+  IKeyValue(CompactionIterator& c_iter)
+      : key(c_iter.key()), ikey(c_iter.ikey()), value(c_iter.value()) {}
+};
+
+struct Elem {
+  Decision decision;
+  IKeyValue kv;
   Elem(const Elem&) = default;
 
-  static Elem from_compaction_iter(Decision decision,
-                                   CompactionIterator& c_iter) {
-    if (decision == Decision::kNextLevel) {
-      c_iter.ZeroOutSequenceIfPossible();
+  Elem(Decision arg_decision, IKeyValue arg_kv)
+      : decision(arg_decision), kv(arg_kv) {}
+  Elem(Decision arg_decision, Slice key, ParsedInternalKey ikey, Slice value)
+      : decision(arg_decision), kv(key, ikey, value) {}
+  Elem(Decision arg_decision, const InternalKey& internal_key, Slice arg_value)
+      : decision(arg_decision), kv(internal_key, arg_value) {}
+};
+
+// Future work: The caller should ZeroOutSequenceIfPossible if the final
+// decision is kNextLevel
+class CompactionIterWrapper {
+ public:
+  CompactionIterWrapper(CompactionIterator& c_iter)
+      : c_iter_(c_iter), first_(true) {}
+  optional<IKeyValue> next() {
+    if (first_) {
+      first_ = false;
+    } else {
+      c_iter_.Next();
     }
-    return Elem{
-        .decision = decision,
-        .key = c_iter.key(),
-        .ikey = c_iter.ikey(),
-        .value = c_iter.value(),
-    };
+    if (c_iter_.Valid())
+      return make_optional<IKeyValue>(c_iter_);
+    else
+      return optional<IKeyValue>();
   }
-  static Elem from(Decision decision, const InternalKey& internal_key,
-                   Slice value) {
-    Slice key = internal_key.Encode();
-    ParsedInternalKey ikey;
-    ParseInternalKey(key, &ikey, true);
-    return Elem{
-        .decision = decision,
-        .key = key,
-        .ikey = ikey,
-        .value = value,
-    };
-  }
+
+ private:
+  CompactionIterator& c_iter_;
+  bool first_;
 };
 
 class IteratorWithoutRouter : public TraitIterator<Elem> {
  public:
   IteratorWithoutRouter(const Compaction& c, CompactionIterator& c_iter)
-      : first_(true),
-        c_iter_(c_iter),
+      : c_iter_(c_iter),
         timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {}
   optional<Elem> next() override {
-    if (first_) {
-      first_ = false;
-    } else {
-      assert(c_iter_.Valid());
-      c_iter_.Next();
-    }
-    if (!c_iter_.Valid()) return optional<Elem>();
-    return optional<Elem>(
-        Elem::from_compaction_iter(Decision::kNextLevel, c_iter_));
+    optional<IKeyValue> ret = c_iter_.next();
+    if (ret.has_value())
+      return make_optional<Elem>(Decision::kNextLevel, ret.value());
+    else
+      return optional<Elem>();
   }
 
  private:
-  bool first_;
-  CompactionIterator& c_iter_;
+  CompactionIterWrapper c_iter_;
 
   const TypedTimers<TimerType>& timers_;
 };
@@ -1387,15 +1400,13 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
         auto stats = c_.immutable_options()->stats;
         RecordTick(stats, promotion_type_,
                    kv->first.size() + kv->second.size());
-        return optional<Elem>(
-            Elem::from(Decision::kNextLevel, kv->first, kv->second));
+        return make_optional<Elem>(Decision::kNextLevel, kv->first, kv->second);
       } else if (res == 0) {
         promotion_iter_.next();
       }
     }
     advance_ = Advance::kCompactionIterator;
-    return optional<Elem>(
-        Elem::from_compaction_iter(Decision::kNextLevel, c_iter_));
+    return make_optional<Elem>(Decision::kNextLevel, c_iter_);
   }
   enum class Advance {
     kNone,
@@ -1473,14 +1484,12 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         .end = end_,
     };
     if (!range.contains(c_iter_.user_key(), ucmp_)) {
-      return optional<Elem>(
-          Elem::from_compaction_iter(Decision::kNextLevel, c_iter_));
+      return make_optional<Elem>(Decision::kNextLevel, c_iter_);
     }
     // Make sure that all versions of the same user key share the same decision.
     if (previous_decision_ != Decision::kUndetermined &&
         ucmp_->Compare(c_iter_.user_key(), Slice(previous_user_key_)) == 0) {
-      return optional<Elem>(
-          Elem::from_compaction_iter(previous_decision_, c_iter_));
+      return make_optional<Elem>(previous_decision_, c_iter_);
     }
     auto stats = c_.immutable_options()->stats;
     const rocksdb::Slice* hot = hot_iter_.peek();
@@ -1496,8 +1505,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       previous_decision_ = Decision::kNextLevel;
     }
     previous_user_key_ = c_iter_.user_key().ToString();
-    return optional<Elem>(
-        Elem::from_compaction_iter(previous_decision_, c_iter_));
+    return make_optional<Elem>(previous_decision_, c_iter_);
   }
 
   const Compaction& c_;
@@ -1549,10 +1557,10 @@ class RouterIterator {
     cur_ = iter_->next();
   }
   Decision decision() { return cur_.value().decision; }
-  const Slice& key() const { return cur_.value().key; }
-  const ParsedInternalKey& ikey() const { return cur_.value().ikey; }
-  const Slice& user_key() const { return cur_.value().ikey.user_key; }
-  const Slice& value() const { return cur_.value().value; }
+  const Slice& key() const { return cur_.value().kv.key; }
+  const ParsedInternalKey& ikey() const { return cur_.value().kv.ikey; }
+  const Slice& user_key() const { return cur_.value().kv.ikey.user_key; }
+  const Slice& value() const { return cur_.value().kv.value; }
 
  private:
   std::unique_ptr<TraitIterator<Elem>> iter_;
