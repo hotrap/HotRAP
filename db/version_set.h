@@ -857,6 +857,7 @@ class Version {
     bool* key_exists;
     bool is_blob_index;
     bool do_merge;
+    std::vector<std::reference_wrapper<FileMetaData>> cd_files;
   };
   bool GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
                  bool is_hit_file_last_in_level);

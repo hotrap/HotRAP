@@ -1971,10 +1971,11 @@ void Version::MultiGetBlob(
   }
 }
 
-static void TryPromote(DBImpl* db, ColumnFamilyData& cfd,
-                       const MutableCFOptions& mutable_cf_options,
-                       FileMetaData& f, int hit_level, Slice user_key,
-                       PinnableSlice* value) {
+static void TryPromote(
+    DBImpl* db, ColumnFamilyData& cfd,
+    const MutableCFOptions& mutable_cf_options,
+    std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
+    Slice user_key, PinnableSlice* value) {
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value) return;
@@ -1985,10 +1986,15 @@ static void TryPromote(DBImpl* db, ColumnFamilyData& cfd,
   if (router->Tier(hit_level) == 0) return;
   assert(hit_level > 0);
   int target_level = hit_level - 1;
+  while (router->Tier(target_level) == 1) {
+    target_level -= 1;
+  }
   PromotionCache* cache;
   {
     auto caches = cfd.promotion_caches().Write();
-    if (f.being_or_has_been_compacted) return;
+    for (auto f : cd_files) {
+      if (f.get().being_or_has_been_compacted) return;
+    }
     // The first whose level <= target_level
     auto it = caches->find(target_level);
     if (it == caches->end()) {
@@ -2095,6 +2101,10 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   auto timer_guard = hotrap_timers.timer(TimerType::kGetInFile).start();
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
+  CompactionRouter* router = mutable_cf_options_.compaction_router;
+  if (router->Tier(hit_level) > 0) {
+    env_get.cd_files.push_back(*f.file_metadata);
+  }
   if (env_get.max_covering_tombstone_seq > 0) {
     // The remaining files we look at will only contain covered keys, so we
     // stop here.
@@ -2146,7 +2156,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
     case GetContext::kFound:
       Access(env_get.db, *cfd_, mutable_cf_options_, hit_level, user_key,
              env_get.value);
-      TryPromote(env_get.db, *cfd_, mutable_cf_options_, *f.file_metadata,
+      TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
                  hit_level, user_key, env_get.value);
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
