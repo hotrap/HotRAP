@@ -1278,7 +1278,7 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
              compaction_result.bytes_written);
   return CompactionServiceJobStatus::kSuccess;
 #endif
-  // TODO: Support this by adding an output level
+  // Future work: Support this by adding an output level
   return CompactionServiceJobStatus::kFailure;
 }
 #endif  // !ROCKSDB_LITE
@@ -1528,11 +1528,9 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     for (const auto& kv : c.cached_records_to_promote()) {
       kvsize += kv.first.user_key().size() + kv.second.size();
     }
-    // PROMOTED_2CDFRONT_BYTES may be over-estimated, because some may
-    // be promoted to the last level of SD.
-    // TODO: Also include the promotion cache of the last level of SD in the
-    // inputs
-    RecordTick(stats, Tickers::PROMOTED_2CDFRONT_BYTES, kvsize);
+    // PROMOTED_2SDLAST_BYTES may be slightly over-estimated, because some may
+    // not be hot any more.
+    RecordTick(stats, Tickers::PROMOTED_2SDLAST_BYTES, kvsize);
   }
   optional<Elem> next() override {
     optional<IKeyValue> kv_ret = iter_.next();
@@ -1591,8 +1589,8 @@ class RouterIterator {
     int start_level = c.level();
     int latter_level = c.output_level();
     if (router == NULL) {
-      // TODO: Handle the case that it's not empty, which is possible when
-      // router was not NULL but then is set to NULL.
+      // Future work: Handle the case that it's not empty, which is possible
+      // when router was not NULL but then is set to NULL.
       assert(c.cached_records_to_promote().empty());
       iter_ = std::unique_ptr<IteratorWithoutRouter>(
           new IteratorWithoutRouter(c, c_iter));
@@ -1825,7 +1823,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
           : sub_compact->compaction->CreateSstPartitioner();
   std::string last_key_for_partitioner;
 
-  // TODO: How to handle other cases?
+  // Future work: How to handle other cases?
   assert(c->num_input_levels() <= 2);
   const CompactionInputFiles& start_level_inputs = (*c->inputs())[0];
   assert(start_level_inputs.level == c->start_level());
