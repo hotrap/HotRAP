@@ -472,12 +472,12 @@ class ColumnFamilyData {
     kMemtableLimit,
     kL0FileCountLimit,
     kPendingCompactionBytes,
+    kDbPathsSizeLimit,
   };
   static std::pair<WriteStallCondition, WriteStallCause>
   GetWriteStallConditionAndCause(
-      int num_unflushed_memtables, int num_l0_files,
-      uint64_t num_compaction_needed_bytes,
-      const MutableCFOptions& mutable_cf_options,
+      const VersionStorageInfo* vstorage, int num_unflushed_memtables,
+      int num_l0_files, const MutableCFOptions& mutable_cf_options,
       const ImmutableCFOptions& immutable_cf_options);
 
   // Recalculate some small conditions, which are changed only during
