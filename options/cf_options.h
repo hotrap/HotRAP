@@ -123,6 +123,8 @@ struct MutableCFOptions {
             options.level0_file_num_compaction_trigger),
         level0_slowdown_writes_trigger(options.level0_slowdown_writes_trigger),
         level0_stop_writes_trigger(options.level0_stop_writes_trigger),
+        db_paths_soft_size_limit_multiplier(
+            options.db_paths_soft_size_limit_multiplier),
         max_compaction_bytes(options.max_compaction_bytes),
         target_file_size_base(options.target_file_size_base),
         target_file_size_multiplier(options.target_file_size_multiplier),
@@ -238,6 +240,7 @@ struct MutableCFOptions {
   int level0_file_num_compaction_trigger;
   int level0_slowdown_writes_trigger;
   int level0_stop_writes_trigger;
+  std::vector<double> db_paths_soft_size_limit_multiplier;
   uint64_t max_compaction_bytes;
   uint64_t target_file_size_base;
   int target_file_size_multiplier;
