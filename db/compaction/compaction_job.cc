@@ -1398,7 +1398,7 @@ class CompactionIterWrapper : public TraitIterator<IKeyValue> {
     if (c_iter_.Valid())
       return make_optional<IKeyValue>(c_iter_);
     else
-      return optional<IKeyValue>();
+      return nullopt;
   }
 
  private:
@@ -1416,7 +1416,7 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
     if (ret.has_value())
       return make_optional<Elem>(Decision::kNextLevel, ret.value());
     else
-      return optional<Elem>();
+      return nullopt;
   }
 
  private:
@@ -1440,7 +1440,7 @@ class VecIter : public TraitPeekable<IKeyValue> {
       return nullptr;
   }
   optional<IKeyValue> next() override {
-    if (it_ == v_.end()) return optional<IKeyValue>();
+    if (it_ == v_.end()) return nullopt;
     auto ret = std::move(cur_);
     ++it_;
     if (it_ != v_.end()) {
@@ -1477,7 +1477,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   optional<Elem> next() override {
     optional<IKeyValue> kv = iter_.next();
     if (!kv.has_value()) {
-      return optional<Elem>();
+    return nullopt;
     }
     return make_optional<Elem>(Decision::kNextLevel, kv.value());
   }
@@ -1496,7 +1496,7 @@ class IgnoreStableHot : public TraitIterator<Slice> {
     for (;;) {
       optional<HotRecInfo> ret = iter_->next();
       if (!ret.has_value()) {
-        return optional<Slice>();
+        return nullopt;
       } else {
         return make_optional<Slice>(ret.value().key);
       }
@@ -1547,7 +1547,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   optional<Elem> next() override {
     optional<IKeyValue> kv_ret = iter_.next();
     if (!kv_ret.has_value()) {
-      return optional<Elem>();
+      return nullopt;
     }
     const IKeyValue& kv = kv_ret.value();
     RangeBounds range{

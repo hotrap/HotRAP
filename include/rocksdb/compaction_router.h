@@ -14,10 +14,14 @@ namespace ROCKSDB_NAMESPACE {
 struct in_place_t {};
 constexpr in_place_t in_place{};
 
+struct nullopt_t {};
+constexpr nullopt_t nullopt{};
+
 template <typename T>
 class optional {
  public:
   optional() : has_value_(false) {}
+  optional(nullopt_t) : has_value_(false) {}
   optional(T &&x) : has_value_(true), x_(std::move(x)) {}
   template <typename... Args>
   optional(in_place_t, Args &&...args)
