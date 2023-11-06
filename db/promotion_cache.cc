@@ -69,6 +69,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
   ColumnFamilyData *cfd = sv->cfd;
   InternalStats &internal_stats = *cfd->internal_stats();
   ImmPromotionCache &cache = *iter;
+  auto stats = cfd->ioptions()->stats;
   TimerGuard check_newer_version_start =
       internal_stats.hotrap_timers()
           .timer(TimerType::kCheckNewerVersion)
@@ -90,8 +91,7 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
     }
     sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
                      &merge_context, &max_covering_tombstone_seq, nullptr,
-                     nullptr, nullptr, nullptr, nullptr, false,
-                     static_cast<unsigned int>(-1), target_level);
+                     nullptr, nullptr, nullptr, nullptr, false, target_level);
     if (!s.IsNotFound()) {
       if (!s.ok()) {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
@@ -114,7 +114,11 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
     for (const auto &item : cache.cache) {
       const std::string &user_key = item.first;
       const std::string &value = item.second;
-      if (updated->find(user_key) != updated->end()) continue;
+      if (updated->find(user_key) != updated->end()) {
+        RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
+                   user_key.size() + value.size());
+        continue;
+      }
       // It seems that sequence number 0 is treated specially. So we use 1 here.
       Status s = m->Add(1, ValueType::kTypeValue, user_key, value, nullptr);
       if (!s.ok()) {
@@ -135,7 +139,6 @@ void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
 
   for (MemTable *table : memtables_to_free) delete table;
   svc.Clean();
-  Statistics *stats = cfd->ioptions()->stats;
   RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, flushed_bytes);
 
   {

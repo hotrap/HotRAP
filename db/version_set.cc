@@ -132,10 +132,9 @@ class FilePicker {
   FilePicker(const Slice& user_key, const Slice& ikey,
              autovector<LevelFilesBrief>* file_levels, unsigned int num_levels,
              FileIndexer* file_indexer, const Comparator* user_comparator,
-             const InternalKeyComparator* internal_comparator,
-             unsigned int prev_level = static_cast<unsigned int>(-1))
+             const InternalKeyComparator* internal_comparator)
       : num_levels_(num_levels),
-        curr_level_(prev_level),
+        curr_level_(static_cast<unsigned int>(-1)),
         returned_file_level_(static_cast<unsigned int>(-1)),
         hit_file_level_(static_cast<unsigned int>(-1)),
         search_left_bound_(0),
@@ -1972,15 +1971,18 @@ void Version::MultiGetBlob(
   }
 }
 
-static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
-                       const MutableCFOptions& mutable_cf_options,
-                       FileMetaData& f, int hit_level, Slice user_key,
-                       PinnableSlice& value, unsigned int prev_level) {
+static void TryPromote(
+    DBImpl* db, ColumnFamilyData& cfd,
+    const MutableCFOptions& mutable_cf_options,
+    std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
+    Slice user_key, PinnableSlice* value) {
+  if (db == nullptr) return;
+  CompactionRouter* router = mutable_cf_options.compaction_router;
+  if (!router || !value) return;
   auto timer_guard = cfd.internal_stats()
                          ->hotrap_timers()
                          .timer(TimerType::kTryPromote)
                          .start();
-  CompactionRouter* router = mutable_cf_options.compaction_router;
   if (router->Tier(hit_level) == 0) return;
   assert(hit_level > 0);
   int target_level = hit_level - 1;
@@ -1990,7 +1992,9 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
   PromotionCache* cache;
   {
     auto caches = cfd.promotion_caches().Write();
-    if (f.being_or_has_been_compacted) return;
+    for (auto f : cd_files) {
+      if (f.get().being_or_has_been_compacted) return;
+    }
     // The first whose level <= target_level
     auto it = caches->find(target_level);
     if (it == caches->end()) {
@@ -2003,19 +2007,16 @@ static void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
     assert(it->first == target_level);
     cache = &it->second;
   }
-  cache->Promote(db, cfd, mutable_cf_options.write_buffer_size,
-                 user_key.ToString(), value);
+  cache->Promote(*db, cfd, mutable_cf_options.write_buffer_size,
+                 user_key.ToString(), *value);
   return;
 }
 static void Access(DBImpl* db, ColumnFamilyData& cfd,
-                   const MutableCFOptions& mutable_cf_options, FileMetaData& f,
-                   int hit_level, Slice user_key, PinnableSlice* value,
-                   unsigned int prev_level) {
+                   const MutableCFOptions& mutable_cf_options, int hit_level,
+                   Slice user_key, PinnableSlice* value) {
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
-  if (!router || !value || prev_level != static_cast<unsigned int>(-1)) return;
-  TryPromote(*db, cfd, mutable_cf_options, f, hit_level, user_key, *value,
-             prev_level);
+  if (!router || !value) return;
   auto timer_guard =
       cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
   router->Access(hit_level, user_key, value->size());
@@ -2100,6 +2101,10 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   auto timer_guard = hotrap_timers.timer(TimerType::kGetInFile).start();
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
+  CompactionRouter* router = mutable_cf_options_.compaction_router;
+  if (router->Tier(hit_level) > 0) {
+    env_get.cd_files.push_back(*f.file_metadata);
+  }
   if (env_get.max_covering_tombstone_seq > 0) {
     // The remaining files we look at will only contain covered keys, so we
     // stop here.
@@ -2149,8 +2154,10 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
       // TODO: How to update VisCnts?
       break;
     case GetContext::kFound:
-      Access(env_get.db, *cfd_, mutable_cf_options_, *f.file_metadata,
-             hit_level, user_key, env_get.value, env_get.prev_level);
+      Access(env_get.db, *cfd_, mutable_cf_options_, hit_level, user_key,
+             env_get.value);
+      TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
+                 hit_level, user_key, env_get.value);
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
                   env_get.is_blob_index, env_get.do_merge);
@@ -2172,14 +2179,14 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   return false;
 }
 
+// If db == nullptr then it's called from check_newer_version
 void Version::Get(DBImpl* db, const ReadOptions& read_options,
                   const LookupKey& k, PinnableSlice* value,
                   std::string* timestamp, Status* status,
                   MergeContext* merge_context,
                   SequenceNumber* max_covering_tombstone_seq, bool* value_found,
                   bool* key_exists, SequenceNumber* seq, ReadCallback* callback,
-                  bool* is_blob, bool do_merge, unsigned int prev_level,
-                  int last_level) {
+                  bool* is_blob, bool do_merge, int last_level) {
   auto timer_guard = cfd_->internal_stats()
                          ->hotrap_timers()
                          .timer(TimerType::kVersionGet)
@@ -2224,7 +2231,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
   FilePicker fp(user_key, ikey, &storage_info_.level_files_brief_,
                 std::min(storage_info_.num_non_empty_levels_, last_level + 1),
                 &storage_info_.file_indexer_, user_comparator(),
-                internal_comparator(), prev_level);
+                internal_comparator());
   FdWithKeyRange* f = fp.GetNextFile();
   EnvGet env_get{.db = db,
                  .read_options = read_options,
@@ -2236,8 +2243,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .max_covering_tombstone_seq = *max_covering_tombstone_seq,
                  .key_exists = key_exists,
                  .is_blob_index = is_blob_index,
-                 .do_merge = do_merge,
-                 .prev_level = prev_level};
+                 .do_merge = do_merge};
   std::vector<int> cache_levels;
   {
     auto caches = cfd_->promotion_caches().Read();
@@ -2251,12 +2257,15 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
       if (should_stop) return;
       f = fp.GetNextFile();
     }
-    if (cache_level < last_level) {
+    if (db != nullptr) {
+      assert(cache_level < last_level);
       auto caches = cfd_->promotion_caches().Read();
       auto it = caches->find(cache_level);
       assert(it != caches->end());
       const auto& cache = it->second;
       if (cache.Get(cfd_->internal_stats(), k.user_key(), value)) {
+        Access(env_get.db, *cfd_, mutable_cf_options_, cache_level, user_key,
+               env_get.value);
         HandleFound(env_get.read_options, env_get.get_context,
                     fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
                     env_get.is_blob_index, env_get.do_merge);
