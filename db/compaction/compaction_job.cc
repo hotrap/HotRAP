@@ -1469,7 +1469,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
     auto stats = c.immutable_options()->stats;
     size_t kvsize = 0;
     for (const auto& kv : c.cached_records_to_promote()) {
-    kvsize += kv.first.user_key().size() + kv.second.size();
+      kvsize += kv.first.user_key().size() + kv.second.size();
     }
     RecordTick(stats, promotion_type, kvsize);
   }
@@ -1477,7 +1477,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   optional<Elem> next() override {
     optional<IKeyValue> kv = iter_.next();
     if (!kv.has_value()) {
-    return nullopt;
+      return nullopt;
     }
     return make_optional<Elem>(Decision::kNextLevel, kv.value());
   }
@@ -1515,15 +1515,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         start_(start),
         end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
-        iter_(std::unique_ptr<Peekable<CompactionIterWrapper>>(
-                  new Peekable<CompactionIterWrapper>(
-                      CompactionIterWrapper(c_iter))),
-              std::unique_ptr<VecIter>(
-                  new VecIter(c.cached_records_to_promote())),
-              IKeyValue::Compare(ucmp_)),
-        hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
-            router.LowerBound(start_))),
-        previous_decision_(Decision::kUndetermined),
+        c_iter_(CompactionIterWrapper(c_iter)),
+        p_iter_(c.cached_records_to_promote()),
         kvsize_promoted_(0),
         promoted_or_retained_(0) {
     for (const auto& kv : c_.cached_records_to_promote()) {
@@ -1545,55 +1538,73 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     }
   }
   optional<Elem> next() override {
-    optional<IKeyValue> kv_ret = iter_.next();
-    if (!kv_ret.has_value()) {
-      return nullopt;
+    const IKeyValue* p_kv = p_iter_.peek();
+    if (p_kv == nullptr) {
+      return c_iter_next();
     }
-    const IKeyValue& kv = kv_ret.value();
-    RangeBounds range{
-        .start =
-            Bound{
-                .user_key = start_,
-                .excluded = false,
-            },
-        .end = end_,
-    };
-    if (!range.contains(kv.ikey.user_key, ucmp_)) {
-      return make_optional<Elem>(Decision::kNextLevel, kv);
+    const IKeyValue* c_kv = c_iter_.peek();
+    if (c_kv == nullptr) {
+      return p_iter_next();
     }
-    // Make sure that all versions of the same user key share the same decision.
-    if (previous_decision_ != Decision::kUndetermined &&
-        ucmp_->Compare(kv.ikey.user_key, Slice(previous_user_key_)) == 0) {
-      return make_optional<Elem>(previous_decision_, kv);
+    for (;;) {
+      int res = ucmp_->Compare(p_kv->ikey.user_key, c_kv->ikey.user_key);
+      if (res == 0) {
+        if (p_kv->ikey.sequence < c_kv->ikey.sequence) {
+          p_iter_next();
+          p_kv = p_iter_.peek();
+          if (p_kv == nullptr) {
+            return c_iter_next();
+          }
+        } else {
+          c_iter_next();
+          c_kv = c_iter_.peek();
+          if (c_kv == nullptr) {
+            return p_iter_next();
+          }
+        }
+      } else if (res < 0) {
+        return p_iter_next();
+      } else {
+        return c_iter_next();
+      }
     }
-    const rocksdb::Slice* hot = hot_iter_.peek();
-    while (hot != nullptr) {
-      if (ucmp_->Compare(*hot, kv.ikey.user_key) >= 0) break;
-      hot_iter_.next();
-      hot = hot_iter_.peek();
-    }
-    if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      hot_iter_.next();
-      previous_decision_ = Decision::kStartLevel;
-      promoted_or_retained_ += kv.ikey.user_key.size() + kv.value.size();
-    } else {
-      previous_decision_ = Decision::kNextLevel;
-    }
-    previous_user_key_ = kv.ikey.user_key.ToString();
-    return make_optional<Elem>(previous_decision_, kv);
   }
 
  private:
+  optional<Elem> c_iter_next() {
+    optional<IKeyValue> ret = c_iter_.next();
+    if (ret.has_value()) {
+      return make_optional<Elem>(Decision::kNextLevel, ret.value());
+    }
+    return nullopt;
+  }
+  optional<Elem> p_iter_next() {
+    optional<IKeyValue> ret = p_iter_.next();
+    if (ret.has_value()) {
+      RangeBounds range{
+          .start =
+              Bound{
+                  .user_key = start_,
+                  .excluded = false,
+              },
+          .end = end_,
+      };
+      Decision decision;
+      if (range.contains(ret.value().ikey.user_key, ucmp_))
+        decision = Decision::kStartLevel;
+      else
+        decision = Decision::kNextLevel;
+      return make_optional<Elem>(decision, ret.value());
+    }
+    return nullopt;
+  }
   const Compaction& c_;
   const Slice start_;
   const Bound end_;
 
   const Comparator* ucmp_;
-  Merge2Iterators<IKeyValue, IKeyValue::Compare> iter_;
-  Peekable<IgnoreStableHot<CompactionRouter::Iter>> hot_iter_;
-
-  Decision previous_decision_;
-  std::string previous_user_key_;
+  Peekable<CompactionIterWrapper> c_iter_;
+  VecIter p_iter_;
 
   size_t kvsize_promoted_;
   size_t promoted_or_retained_;
