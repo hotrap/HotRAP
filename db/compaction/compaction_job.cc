@@ -1398,7 +1398,7 @@ class CompactionIterWrapper : public TraitIterator<IKeyValue> {
     if (c_iter_.Valid())
       return make_optional<IKeyValue>(c_iter_);
     else
-      return optional<IKeyValue>();
+      return nullopt;
   }
 
  private:
@@ -1416,7 +1416,7 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
     if (ret.has_value())
       return make_optional<Elem>(Decision::kNextLevel, ret.value());
     else
-      return optional<Elem>();
+      return nullopt;
   }
 
  private:
@@ -1440,7 +1440,7 @@ class VecIter : public TraitPeekable<IKeyValue> {
       return nullptr;
   }
   optional<IKeyValue> next() override {
-    if (it_ == v_.end()) return optional<IKeyValue>();
+    if (it_ == v_.end()) return nullopt;
     auto ret = std::move(cur_);
     ++it_;
     if (it_ != v_.end()) {
@@ -1469,7 +1469,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
     auto stats = c.immutable_options()->stats;
     size_t kvsize = 0;
     for (const auto& kv : c.cached_records_to_promote()) {
-    kvsize += kv.first.user_key().size() + kv.second.size();
+      kvsize += kv.first.user_key().size() + kv.second.size();
     }
     RecordTick(stats, promotion_type, kvsize);
   }
@@ -1477,7 +1477,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   optional<Elem> next() override {
     optional<IKeyValue> kv = iter_.next();
     if (!kv.has_value()) {
-      return optional<Elem>();
+      return nullopt;
     }
     return make_optional<Elem>(Decision::kNextLevel, kv.value());
   }
@@ -1496,7 +1496,7 @@ class IgnoreStableHot : public TraitIterator<Slice> {
     for (;;) {
       optional<HotRecInfo> ret = iter_->next();
       if (!ret.has_value()) {
-        return optional<Slice>();
+        return nullopt;
       } else {
         return make_optional<Slice>(ret.value().key);
       }
@@ -1511,7 +1511,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
  public:
   RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
                       CompactionIterator& c_iter, Slice start, Bound end)
-      : start_(start),
+      : c_(c),
+        start_(start),
         end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(std::unique_ptr<Peekable<CompactionIterWrapper>>(
@@ -1522,20 +1523,31 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
               IKeyValue::Compare(ucmp_)),
         hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
             router.LowerBound(start_))),
-        previous_decision_(Decision::kUndetermined) {
-    auto stats = c.immutable_options()->stats;
-    size_t kvsize = 0;
-    for (const auto& kv : c.cached_records_to_promote()) {
-      kvsize += kv.first.user_key().size() + kv.second.size();
+        previous_decision_(Decision::kUndetermined),
+        kvsize_promoted_(0),
+        promoted_or_retained_(0) {
+    for (const auto& kv : c_.cached_records_to_promote()) {
+      kvsize_promoted_ += kv.first.user_key().size() + kv.second.size();
     }
+  }
+  ~RouterIteratorSD2CD() {
+    auto stats = c_.immutable_options()->stats;
     // PROMOTED_2SDLAST_BYTES may be slightly over-estimated, because some may
     // not be hot any more.
-    RecordTick(stats, Tickers::PROMOTED_2SDLAST_BYTES, kvsize);
+    RecordTick(stats, Tickers::PROMOTED_2SDLAST_BYTES, kvsize_promoted_);
+    // RETAINED_BYTES may be slightly over-estimated or under-estimated, because
+    // PROMOTED_2SDLAST_BYTES may be slightly over-estimated,
+    // and some keys that are not in promotion cache when compaction begins may
+    // get hot during the compaction.
+    if (promoted_or_retained_ >= kvsize_promoted_) {
+      RecordTick(stats, Tickers::RETAINED_BYTES,
+                 promoted_or_retained_ - kvsize_promoted_);
+    }
   }
   optional<Elem> next() override {
     optional<IKeyValue> kv_ret = iter_.next();
     if (!kv_ret.has_value()) {
-      return optional<Elem>();
+      return nullopt;
     }
     const IKeyValue& kv = kv_ret.value();
     RangeBounds range{
@@ -1563,6 +1575,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
       hot_iter_.next();
       previous_decision_ = Decision::kStartLevel;
+      promoted_or_retained_ += kv.ikey.user_key.size() + kv.value.size();
     } else {
       previous_decision_ = Decision::kNextLevel;
     }
@@ -1571,6 +1584,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   }
 
  private:
+  const Compaction& c_;
   const Slice start_;
   const Bound end_;
 
@@ -1580,6 +1594,9 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
 
   Decision previous_decision_;
   std::string previous_user_key_;
+
+  size_t kvsize_promoted_;
+  size_t promoted_or_retained_;
 };
 class RouterIterator {
  public:
