@@ -1469,7 +1469,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
     auto stats = c.immutable_options()->stats;
     size_t kvsize = 0;
     for (const auto& kv : c.cached_records_to_promote()) {
-    kvsize += kv.first.user_key().size() + kv.second.size();
+      kvsize += kv.first.user_key().size() + kv.second.size();
     }
     RecordTick(stats, promotion_type, kvsize);
   }
@@ -1477,7 +1477,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   optional<Elem> next() override {
     optional<IKeyValue> kv = iter_.next();
     if (!kv.has_value()) {
-    return nullopt;
+      return nullopt;
     }
     return make_optional<Elem>(Decision::kNextLevel, kv.value());
   }
