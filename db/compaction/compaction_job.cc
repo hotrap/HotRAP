@@ -1460,22 +1460,10 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   RouterIteratorIntraTier(CompactionRouter& router, const Compaction& c,
                           CompactionIterator& c_iter, Slice start, Bound end,
                           Tickers promotion_type)
-      : iter_(std::unique_ptr<Peekable<CompactionIterWrapper>>(
-                  new Peekable<CompactionIterWrapper>(
-                      CompactionIterWrapper(c_iter))),
-              std::unique_ptr<VecIter>(
-                  new VecIter(c.cached_records_to_promote())),
-              IKeyValue::Compare(c.column_family_data()->user_comparator())) {
-    auto stats = c.immutable_options()->stats;
-    size_t kvsize = 0;
-    for (const auto& kv : c.cached_records_to_promote()) {
-      kvsize += kv.first.user_key().size() + kv.second.size();
-    }
-    RecordTick(stats, promotion_type, kvsize);
-  }
+      : iter_(new CompactionIterWrapper(c_iter)) {}
   ~RouterIteratorIntraTier() override {}
   optional<Elem> next() override {
-    optional<IKeyValue> kv = iter_.next();
+    optional<IKeyValue> kv = iter_->next();
     if (!kv.has_value()) {
       return nullopt;
     }
@@ -1483,7 +1471,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   }
 
  private:
-  Merge2Iterators<IKeyValue, IKeyValue::Compare> iter_;
+  std::unique_ptr<TraitIterator<IKeyValue>> iter_;
 };
 
 template <typename Iter>

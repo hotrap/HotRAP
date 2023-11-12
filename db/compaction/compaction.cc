@@ -128,23 +128,6 @@ void Compaction::SetInputVersion(Version* _input_version) {
       }
     }
   }
-  auto it = caches->find(output_level_);
-  if (it != caches->end()) {
-    assert(it->first == output_level_);
-    auto records = it->second.TakeRange(smallest_user_key_, largest_user_key_);
-    // Future work: Handle the other case which is possible if the router
-    // changes.
-    assert(cached_records_to_promote_.empty());
-    for (auto& record : records) {
-      auto& user_key = record.first;
-      auto& value = record.second;
-      InternalKey key;
-      *key.rep() = std::move(user_key);
-      // Future work: Support other types and sequence number
-      key.ConvertFromUserKey(0, ValueType::kTypeValue);
-      cached_records_to_promote_.emplace_back(std::move(key), std::move(value));
-    }
-  }
 }
 
 void Compaction::GetBoundaryKeys(
