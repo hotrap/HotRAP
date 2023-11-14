@@ -40,6 +40,10 @@ struct ImmPromotionCacheList {
   std::list<ImmPromotionCache> list;
   size_t size = 0;
 };
+struct MutableCache {
+  std::map<std::string, std::string, UserKeyCompare> cache;
+  size_t size;
+};
 
 class PromotionCache {
  public:
@@ -57,6 +61,7 @@ class PromotionCache {
   // REQUIRES: DB mutex held
   void Flush();
 
+  const RWMutexProtected<MutableCache> &mut() const { return mut_; }
   const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
     return imm_list_;
   }
@@ -64,10 +69,6 @@ class PromotionCache {
   size_t max_size() const { return max_size_.load(std::memory_order_relaxed); }
 
  private:
-  struct MutableCache {
-    std::map<std::string, std::string, UserKeyCompare> cache;
-    size_t size;
-  };
   const int target_level_;
   const Comparator *ucmp_;
   RWMutexProtected<MutableCache> mut_;

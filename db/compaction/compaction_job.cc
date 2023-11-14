@@ -1283,358 +1283,6 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
 }
 #endif  // !ROCKSDB_LITE
 
-enum class MergeDecision {
-  SelectLeft,
-  SelectRight,
-  DropLeft,
-  DropRight,
-};
-template <typename T, typename Compare>
-class Merge2Iterators : public TraitIterator<T> {
- public:
-  Merge2Iterators(std::unique_ptr<TraitPeekable<T>> t1,
-                  std::unique_ptr<TraitPeekable<T>> t2, Compare&& compare)
-      : t1_(std::move(t1)), t2_(std::move(t2)), compare_(std::move(compare)) {}
-  optional<T> next() override {
-    const T* p1 = t1_.get()->peek();
-    if (p1 == nullptr) return t2_.get()->next();
-    const T* p2 = t2_.get()->peek();
-    if (p2 == nullptr) return t1_.get()->next();
-    for (;;) {
-      switch (compare_(*p1, *p2)) {
-        case MergeDecision::SelectLeft:
-          return t1_.get()->next();
-        case MergeDecision::SelectRight:
-          return t2_.get()->next();
-        case MergeDecision::DropLeft:
-          t1_.get()->next();
-          p1 = t1_.get()->peek();
-          if (p1 == nullptr) return t2_.get()->next();
-          break;
-        case MergeDecision::DropRight:
-          t2_.get()->next();
-          p2 = t2_.get()->peek();
-          if (p2 == nullptr) return t1_.get()->next();
-          break;
-      }
-    }
-  }
-
- private:
-  std::unique_ptr<TraitPeekable<T>> t1_;
-  std::unique_ptr<TraitPeekable<T>> t2_;
-  Compare compare_;
-};
-
-struct IKeyValue {
-  Slice key;
-  ParsedInternalKey ikey;
-  Slice value;
-
-  IKeyValue() = default;
-  IKeyValue(const InternalKey& internal_key, Slice arg_value)
-      : key(internal_key.Encode()), value(arg_value) {
-    ParseInternalKey(key, &ikey, true);
-  }
-  IKeyValue(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value)
-      : key(arg_key), ikey(arg_ikey), value(arg_value) {}
-  IKeyValue(CompactionIterator& c_iter)
-      : key(c_iter.key()), ikey(c_iter.ikey()), value(c_iter.value()) {}
-
-  class Compare {
-   public:
-    Compare(const Comparator* ucmp) : ucmp_(ucmp) {}
-    MergeDecision operator()(const IKeyValue& lhs, const IKeyValue& rhs) {
-      int res = ucmp_->Compare(lhs.ikey.user_key, rhs.ikey.user_key);
-      if (res == 0) {
-        return lhs.ikey.sequence < rhs.ikey.sequence ? MergeDecision::DropLeft
-                                                     : MergeDecision::DropRight;
-      } else {
-        return res < 0 ? MergeDecision::SelectLeft : MergeDecision::SelectRight;
-      }
-    }
-
-   private:
-    const Comparator* ucmp_;
-  };
-};
-
-enum class Decision {
-  kUndetermined,
-  kNextLevel,
-  kStartLevel,
-};
-
-struct Elem {
-  Decision decision;
-  IKeyValue kv;
-  Elem(const Elem&) = default;
-
-  Elem(Decision arg_decision, IKeyValue arg_kv)
-      : decision(arg_decision), kv(arg_kv) {}
-  Elem(Decision arg_decision, Slice key, ParsedInternalKey ikey, Slice value)
-      : decision(arg_decision), kv(key, ikey, value) {}
-  Elem(Decision arg_decision, const InternalKey& internal_key, Slice arg_value)
-      : decision(arg_decision), kv(internal_key, arg_value) {}
-};
-
-// Future work: The caller should ZeroOutSequenceIfPossible if the final
-// decision is kNextLevel
-class CompactionIterWrapper : public TraitIterator<IKeyValue> {
- public:
-  CompactionIterWrapper(CompactionIterator& c_iter)
-      : c_iter_(c_iter), first_(true) {}
-  CompactionIterWrapper(const CompactionIterWrapper& rhs) = delete;
-  CompactionIterWrapper& operator=(const CompactionIterWrapper& rhs) = delete;
-  CompactionIterWrapper(CompactionIterWrapper&& rhs)
-      : c_iter_(rhs.c_iter_), first_(rhs.first_) {}
-  CompactionIterWrapper& operator=(const CompactionIterWrapper&& rhs) = delete;
-  optional<IKeyValue> next() override {
-    if (first_) {
-      first_ = false;
-    } else {
-      c_iter_.Next();
-    }
-    if (c_iter_.Valid())
-      return make_optional<IKeyValue>(c_iter_);
-    else
-      return nullopt;
-  }
-
- private:
-  CompactionIterator& c_iter_;
-  bool first_;
-};
-
-class IteratorWithoutRouter : public TraitIterator<Elem> {
- public:
-  IteratorWithoutRouter(const Compaction& c, CompactionIterator& c_iter)
-      : c_iter_(c_iter),
-        timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {}
-  optional<Elem> next() override {
-    optional<IKeyValue> ret = c_iter_.next();
-    if (ret.has_value())
-      return make_optional<Elem>(Decision::kNextLevel, ret.value());
-    else
-      return nullopt;
-  }
-
- private:
-  CompactionIterWrapper c_iter_;
-
-  const TypedTimers<TimerType>& timers_;
-};
-
-class VecIter : public TraitPeekable<IKeyValue> {
- public:
-  VecIter(const std::vector<std::pair<InternalKey, std::string>>& v)
-      : v_(v), it_(v_.cbegin()) {
-    if (it_ != v_.end()) {
-      cur_ = IKeyValue(it_->first, it_->second);
-    }
-  }
-  const IKeyValue* peek() override {
-    if (it_ != v_.end())
-      return &cur_;
-    else
-      return nullptr;
-  }
-  optional<IKeyValue> next() override {
-    if (it_ == v_.end()) return nullopt;
-    auto ret = std::move(cur_);
-    ++it_;
-    if (it_ != v_.end()) {
-      cur_ = IKeyValue(it_->first, it_->second);
-    }
-    return ret;
-  }
-
- private:
-  const std::vector<std::pair<InternalKey, std::string>>& v_;
-  typename std::vector<std::pair<InternalKey, std::string>>::const_iterator it_;
-  IKeyValue cur_;
-};
-
-class RouterIteratorIntraTier : public TraitIterator<Elem> {
- public:
-  RouterIteratorIntraTier(CompactionRouter& router, const Compaction& c,
-                          CompactionIterator& c_iter, Slice start, Bound end,
-                          Tickers promotion_type)
-      : iter_(new CompactionIterWrapper(c_iter)) {}
-  ~RouterIteratorIntraTier() override {}
-  optional<Elem> next() override {
-    optional<IKeyValue> kv = iter_->next();
-    if (!kv.has_value()) {
-      return nullopt;
-    }
-    return make_optional<Elem>(Decision::kNextLevel, kv.value());
-  }
-
- private:
-  std::unique_ptr<TraitIterator<IKeyValue>> iter_;
-};
-
-template <typename Iter>
-class IgnoreStableHot : public TraitIterator<Slice> {
- public:
-  IgnoreStableHot(Iter&& iter) : iter_(std::move(iter)) {}
-  IgnoreStableHot(IgnoreStableHot<Iter>&& iter)
-      : iter_(std::move(iter.iter_)) {}
-  optional<Slice> next() override {
-    for (;;) {
-      optional<HotRecInfo> ret = iter_->next();
-      if (!ret.has_value()) {
-        return nullopt;
-      } else {
-        return make_optional<Slice>(ret.value().key);
-      }
-    }
-  }
-
- private:
-  Iter iter_;
-};
-
-class RouterIteratorSD2CD : public TraitIterator<Elem> {
- public:
-  RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
-                      CompactionIterator& c_iter, Slice start, Bound end)
-      : c_(c),
-        start_(start),
-        end_(end),
-        ucmp_(c.column_family_data()->user_comparator()),
-        iter_(std::unique_ptr<Peekable<CompactionIterWrapper>>(
-                  new Peekable<CompactionIterWrapper>(
-                      CompactionIterWrapper(c_iter))),
-              std::unique_ptr<VecIter>(
-                  new VecIter(c.cached_records_to_promote())),
-              IKeyValue::Compare(ucmp_)),
-        hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
-            router.LowerBound(start_))),
-        previous_decision_(Decision::kUndetermined),
-        kvsize_promoted_(0),
-        promoted_or_retained_(0) {
-    for (const auto& kv : c_.cached_records_to_promote()) {
-      kvsize_promoted_ += kv.first.user_key().size() + kv.second.size();
-    }
-  }
-  ~RouterIteratorSD2CD() {
-    auto stats = c_.immutable_options()->stats;
-    // PROMOTED_2SDLAST_BYTES may be slightly over-estimated, because some may
-    // not be hot any more.
-    RecordTick(stats, Tickers::PROMOTED_2SDLAST_BYTES, kvsize_promoted_);
-    // RETAINED_BYTES may be slightly over-estimated or under-estimated, because
-    // PROMOTED_2SDLAST_BYTES may be slightly over-estimated,
-    // and some keys that are not in promotion cache when compaction begins may
-    // get hot during the compaction.
-    if (promoted_or_retained_ >= kvsize_promoted_) {
-      RecordTick(stats, Tickers::RETAINED_BYTES,
-                 promoted_or_retained_ - kvsize_promoted_);
-    }
-  }
-  optional<Elem> next() override {
-    optional<IKeyValue> kv_ret = iter_.next();
-    if (!kv_ret.has_value()) {
-      return nullopt;
-    }
-    const IKeyValue& kv = kv_ret.value();
-    RangeBounds range{
-        .start =
-            Bound{
-                .user_key = start_,
-                .excluded = false,
-            },
-        .end = end_,
-    };
-    if (!range.contains(kv.ikey.user_key, ucmp_)) {
-      return make_optional<Elem>(Decision::kNextLevel, kv);
-    }
-    // Make sure that all versions of the same user key share the same decision.
-    if (previous_decision_ != Decision::kUndetermined &&
-        ucmp_->Compare(kv.ikey.user_key, Slice(previous_user_key_)) == 0) {
-      return make_optional<Elem>(previous_decision_, kv);
-    }
-    const rocksdb::Slice* hot = hot_iter_.peek();
-    while (hot != nullptr) {
-      if (ucmp_->Compare(*hot, kv.ikey.user_key) >= 0) break;
-      hot_iter_.next();
-      hot = hot_iter_.peek();
-    }
-    if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      hot_iter_.next();
-      previous_decision_ = Decision::kStartLevel;
-      promoted_or_retained_ += kv.ikey.user_key.size() + kv.value.size();
-    } else {
-      previous_decision_ = Decision::kNextLevel;
-    }
-    previous_user_key_ = kv.ikey.user_key.ToString();
-    return make_optional<Elem>(previous_decision_, kv);
-  }
-
- private:
-  const Compaction& c_;
-  const Slice start_;
-  const Bound end_;
-
-  const Comparator* ucmp_;
-  Merge2Iterators<IKeyValue, IKeyValue::Compare> iter_;
-  Peekable<IgnoreStableHot<CompactionRouter::Iter>> hot_iter_;
-
-  Decision previous_decision_;
-  std::string previous_user_key_;
-
-  size_t kvsize_promoted_;
-  size_t promoted_or_retained_;
-};
-class RouterIterator {
- public:
-  RouterIterator(CompactionRouter* router, const Compaction& c,
-                 CompactionIterator& c_iter, Slice start, Bound end)
-      : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
-    int start_level = c.level();
-    int latter_level = c.output_level();
-    if (router == NULL) {
-      // Future work: Handle the case that it's not empty, which is possible
-      // when router was not NULL but then is set to NULL.
-      assert(c.cached_records_to_promote().empty());
-      iter_ = std::unique_ptr<IteratorWithoutRouter>(
-          new IteratorWithoutRouter(c, c_iter));
-    } else {
-      size_t start_tier = router->Tier(start_level);
-      size_t latter_tier = router->Tier(latter_level);
-      if (start_tier != latter_tier) {
-        iter_ = std::unique_ptr<RouterIteratorSD2CD>(
-            new RouterIteratorSD2CD(*router, c, c_iter, start, end));
-      } else if (router->Tier(latter_level + 1) != latter_tier) {
-        iter_ = std::unique_ptr<RouterIteratorIntraTier>(
-            new RouterIteratorIntraTier(*router, c, c_iter, start, end,
-                                        Tickers::PROMOTED_2SDLAST_BYTES));
-      } else {
-        iter_ = std::unique_ptr<RouterIteratorIntraTier>(
-            new RouterIteratorIntraTier(*router, c, c_iter, start, end,
-                                        Tickers::PROMOTED_2CDFRONT_BYTES));
-      }
-    }
-    cur_ = iter_->next();
-  }
-  bool Valid() { return cur_.has_value(); }
-  void Next() {
-    assert(Valid());
-    cur_ = iter_->next();
-  }
-  Decision decision() { return cur_.value().decision; }
-  const Slice& key() const { return cur_.value().kv.key; }
-  const ParsedInternalKey& ikey() const { return cur_.value().kv.ikey; }
-  const Slice& user_key() const { return cur_.value().kv.ikey.user_key; }
-  const Slice& value() const { return cur_.value().kv.value; }
-
- private:
-  std::unique_ptr<TraitIterator<Elem>> iter_;
-  optional<Elem> cur_;
-
-  const TypedTimers<TimerType>& timers_;
-};
-
 void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   assert(sub_compact);
   assert(sub_compact->compaction);
@@ -1835,32 +1483,16 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   Slice start_level_smallest_user_key, start_level_largest_user_key;
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
                                      &start_level_largest_user_key);
-  Slice promotable_start =
-      start == NULL ? start_level_smallest_user_key
-                    : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
-                           ? start_level_smallest_user_key
-                           : *start);
-  Bound promotable_end =
-      end == NULL
-          ? Bound{.user_key = start_level_largest_user_key, .excluded = false}
-          : (ucmp->Compare(*end, start_level_largest_user_key) <= 0
-                 ? Bound{.user_key = *end, .excluded = true}
-                 : Bound{
-                       .user_key = start_level_largest_user_key,
-                       .excluded = false,
-                   });
-  RouterIterator router_iter(router, *c, *c_iter, promotable_start,
-                             promotable_end);
 
   std::string previous_user_key;
   auto compaction_start = rusty::time::Instant::now();
-  while (status.ok() && !cfd->IsDropped() && router_iter.Valid()) {
+  while (status.ok() && !cfd->IsDropped() && c_iter->Valid()) {
     // Invariant: router_iter.status() is guaranteed to be OK if
     // router_iter->Valid() returns true.
-    const Slice& key = router_iter.key();
-    const Slice& value = router_iter.value();
+    const Slice& key = c_iter->key();
+    const Slice& value = c_iter->value();
 
-    assert(!end || ucmp->Compare(router_iter.user_key(), *end) < 0);
+    assert(!end || ucmp->Compare(c_iter->user_key(), *end) < 0);
 
     if (c_iter_stats.num_input_records % kRecordStatsEvery ==
         kRecordStatsEvery - 1) {
@@ -1869,19 +1501,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       RecordCompactionIOStats();
     }
 
-    SubcompactionState::LevelOutput* level_output = NULL;
-    switch (router_iter.decision()) {
-      case Decision::kStartLevel:
-        level_output = &sub_compact->start_level_output;
-        break;
-      case Decision::kNextLevel:
-        level_output = &sub_compact->latter_level_output;
-        break;
-      case Decision::kUndetermined:
-        assert(false);
-        break;
-    }
-    assert(level_output != NULL);
+    SubcompactionState::LevelOutput* level_output =
+        &sub_compact->latter_level_output;
 
     // Open output file if necessary
     if (level_output->builder == nullptr) {
@@ -1902,7 +1523,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
     level_output->current_output_file_size =
         level_output->builder->EstimatedFileSize();
-    const ParsedInternalKey& ikey = router_iter.ikey();
+    const ParsedInternalKey& ikey = c_iter->ikey();
     level_output->current_output()->meta.UpdateBoundaries(
         key, value, ikey.sequence, ikey.type);
     sub_compact->num_output_records++;
@@ -1929,21 +1550,21 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         reinterpret_cast<void*>(
             const_cast<std::atomic<int>*>(manual_compaction_paused_)));
     if (partitioner.get()) {
-      last_key_for_partitioner.assign(router_iter.user_key().data_,
-                                      router_iter.user_key().size_);
+      last_key_for_partitioner.assign(c_iter->user_key().data_,
+                                      c_iter->user_key().size_);
     }
-    router_iter.Next();
+    c_iter->Next();
     if (c_iter->status().IsManualCompactionPaused()) {
       break;
     }
-    if (!output_file_ended && router_iter.Valid()) {
+    if (!output_file_ended && c_iter->Valid()) {
       if (((partitioner.get() &&
             partitioner->ShouldPartition(PartitionerRequest(
-                last_key_for_partitioner, router_iter.user_key(),
+                last_key_for_partitioner, c_iter->user_key(),
                 level_output->current_output_file_size)) == kRequired) ||
            (sub_compact->compaction->output_level() != 0 &&
             sub_compact->ShouldStopBefore(
-                router_iter.key(), level_output->current_output_file_size))) &&
+                c_iter->key(), level_output->current_output_file_size))) &&
           level_output->builder != nullptr) {
         // (2) this key belongs to the next file. For historical reasons, the
         // iterator status after advancing will be given to
@@ -1953,8 +1574,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     }
     if (output_file_ended) {
       const Slice* next_key = nullptr;
-      if (router_iter.Valid()) {
-        next_key = &router_iter.key();
+      if (c_iter->Valid()) {
+        next_key = &c_iter->key();
       }
       CompactionIterationStats range_del_out_stats;
       status = FinishCompactionOutputFile(input->status(), sub_compact,

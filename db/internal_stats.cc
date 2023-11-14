@@ -39,6 +39,7 @@ const char* timer_names[] = {
     "Compaction",
     "GetKeyValueFromLevelsBelow",
     "InvalidateOld",
+    "RemoveOld",
     "VersionGet",
     "TableCacheGet",
     "GetInFile",

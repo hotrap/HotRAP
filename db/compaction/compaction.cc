@@ -14,6 +14,8 @@
 
 #include "db/column_family.h"
 #include "db/dbformat.h"
+#include "db/forward_iterator.h"
+#include "db/internal_stats.h"
 #include "rocksdb/compaction_filter.h"
 #include "rocksdb/sst_partitioner.h"
 #include "test_util/sync_point.h"
@@ -107,24 +109,49 @@ void Compaction::SetInputVersion(Version* _input_version) {
       inputs_[i][j]->being_or_has_been_compacted = true;
     }
   }
-  if (cfd_->GetCurrentMutableCFOptions()->compaction_router == nullptr) return;
   if (start_level_ != output_level_) {
     // Future work: Handle other cases
     assert(output_level_ == start_level_ + 1);
     auto it = caches->find(start_level_);
     if (it != caches->end()) {
       assert(it->first == start_level_);
-      auto records =
-          it->second.TakeRange(smallest_user_key_, largest_user_key_);
-      for (auto& record : records) {
-        auto& user_key = record.first;
-        auto& value = record.second;
-        InternalKey key;
-        *key.rep() = std::move(user_key);
-        // Future work: Support other types and sequence number
-        key.ConvertFromUserKey(0, ValueType::kTypeValue);
-        cached_records_to_promote_.emplace_back(std::move(key),
-                                                std::move(value));
+      auto guard = cfd_->internal_stats()
+                       ->hotrap_timers()
+                       .timer(TimerType::kRemoveOld)
+                       .start();
+
+      const LevelFilesBrief* start_level_input = input_levels(0);
+      std::vector<FileMetaData*> file_meta_data;
+      for (size_t i = 0; i < start_level_input->num_files; ++i) {
+        file_meta_data.push_back(start_level_input->files[i].file_metadata);
+      }
+
+      const Comparator* ucmp = immutable_options_.user_comparator;
+      Slice start_level_smallest_user_key, start_level_largest_user_key;
+      inputs_[0].GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
+                                 &start_level_largest_user_key);
+
+      ReadOptions read_options;
+      read_options.verify_checksums = true;
+      read_options.fill_cache = false;
+      read_options.iterate_lower_bound = &start_level_smallest_user_key;
+
+      ForwardLevelIterator start_level_it(
+          cfd_, read_options, file_meta_data,
+          mutable_cf_options()->prefix_extractor.get(), false);
+      start_level_it.SetFileIndex(0);
+      start_level_it.Seek(start_level_smallest_user_key);
+
+      auto mut = it->second.mut().Write();
+      while (start_level_it.Valid() &&
+             ucmp->Compare(start_level_it.user_key(),
+                           start_level_largest_user_key) <= 0) {
+        auto mut_it = mut->cache.find(start_level_it.user_key().ToString());
+        if (mut_it != mut->cache.end()) {
+          mut->size -= mut_it->first.size() + mut_it->second.size();
+          mut->cache.erase(mut_it);
+        }
+        start_level_it.Next();
       }
     }
   }

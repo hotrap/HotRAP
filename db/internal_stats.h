@@ -107,6 +107,7 @@ enum class TimerType : size_t {
   kCompaction,
   kGetKeyValueFromLevelsBelow,
   kInvalidateOld,
+  kRemoveOld,
   kVersionGet,
   kTableCacheGet,
   kGetInFile,

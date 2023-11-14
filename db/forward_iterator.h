@@ -22,7 +22,6 @@ class DBImpl;
 class Env;
 struct SuperVersion;
 class ColumnFamilyData;
-class ForwardLevelIterator;
 class VersionStorageInfo;
 struct FileMetaData;
 
@@ -41,6 +40,152 @@ class MinIterComparator {
 using MinIterHeap =
     std::priority_queue<InternalIterator*, std::vector<InternalIterator*>,
                         MinIterComparator>;
+
+// Usage:
+//     ForwardLevelIterator iter;
+//     iter.SetFileIndex(file_index);
+//     iter.Seek(target); // or iter.SeekToFirst();
+//     iter.Next()
+class ForwardLevelIterator : public InternalIterator {
+ public:
+  ForwardLevelIterator(const ColumnFamilyData* const cfd,
+                       const ReadOptions& read_options,
+                       const std::vector<FileMetaData*>& files,
+                       const SliceTransform* prefix_extractor,
+                       bool allow_unprepared_value)
+      : cfd_(cfd),
+        read_options_(read_options),
+        files_(files),
+        valid_(false),
+        file_index_(std::numeric_limits<uint32_t>::max()),
+        file_iter_(nullptr),
+        pinned_iters_mgr_(nullptr),
+        prefix_extractor_(prefix_extractor),
+        allow_unprepared_value_(allow_unprepared_value) {
+    status_.PermitUncheckedError();  // Allow uninitialized status through
+  }
+
+  ~ForwardLevelIterator() override;
+
+  void SetFileIndex(uint32_t file_index) {
+    assert(file_index < files_.size());
+    status_ = Status::OK();
+    if (file_index != file_index_) {
+      file_index_ = file_index;
+      Reset();
+    }
+  }
+  void Reset();
+  void SeekToLast() override {
+    status_ = Status::NotSupported("ForwardLevelIterator::SeekToLast()");
+    valid_ = false;
+  }
+  void Prev() override {
+    status_ = Status::NotSupported("ForwardLevelIterator::Prev()");
+    valid_ = false;
+  }
+  bool Valid() const override { return valid_; }
+  void SeekToFirst() override {
+    assert(file_iter_ != nullptr);
+    if (!status_.ok()) {
+      assert(!valid_);
+      return;
+    }
+    file_iter_->SeekToFirst();
+    valid_ = file_iter_->Valid();
+  }
+  void Seek(const Slice& internal_key) override {
+    assert(file_iter_ != nullptr);
+
+    // This deviates from the usual convention for InternalIterator::Seek() in
+    // that it doesn't discard pre-existing error status. That's because this
+    // Seek() is only supposed to be called immediately after SetFileIndex()
+    // (which discards pre-existing error status), and SetFileIndex() may set
+    // an error status, which we shouldn't discard.
+    if (!status_.ok()) {
+      assert(!valid_);
+      return;
+    }
+
+    file_iter_->Seek(internal_key);
+    valid_ = file_iter_->Valid();
+  }
+  void SeekForPrev(const Slice& /*internal_key*/) override {
+    status_ = Status::NotSupported("ForwardLevelIterator::SeekForPrev()");
+    valid_ = false;
+  }
+  void Next() override {
+    assert(valid_);
+    file_iter_->Next();
+    for (;;) {
+      valid_ = file_iter_->Valid();
+      if (!file_iter_->status().ok()) {
+        assert(!valid_);
+        return;
+      }
+      if (valid_) {
+        return;
+      }
+      if (file_index_ + 1 >= files_.size()) {
+        valid_ = false;
+        return;
+      }
+      SetFileIndex(file_index_ + 1);
+      if (!status_.ok()) {
+        assert(!valid_);
+        return;
+      }
+      file_iter_->SeekToFirst();
+    }
+  }
+  Slice key() const override {
+    assert(valid_);
+    return file_iter_->key();
+  }
+  Slice value() const override {
+    assert(valid_);
+    return file_iter_->value();
+  }
+  Status status() const override {
+    if (!status_.ok()) {
+      return status_;
+    } else if (file_iter_) {
+      return file_iter_->status();
+    }
+    return Status::OK();
+  }
+  bool PrepareValue() override {
+    assert(valid_);
+    if (file_iter_->PrepareValue()) {
+      return true;
+    }
+
+    assert(!file_iter_->Valid());
+    valid_ = false;
+    return false;
+  }
+  bool IsKeyPinned() const override;
+  bool IsValuePinned() const override;
+  void SetPinnedItersMgr(PinnedIteratorsManager* pinned_iters_mgr) override {
+    pinned_iters_mgr_ = pinned_iters_mgr;
+    if (file_iter_) {
+      file_iter_->SetPinnedItersMgr(pinned_iters_mgr_);
+    }
+  }
+
+ private:
+  const ColumnFamilyData* const cfd_;
+  const ReadOptions& read_options_;
+  const std::vector<FileMetaData*>& files_;
+
+  bool valid_;
+  uint32_t file_index_;
+  Status status_;
+  InternalIterator* file_iter_;
+  PinnedIteratorsManager* pinned_iters_mgr_;
+  const SliceTransform* prefix_extractor_;
+  const bool allow_unprepared_value_;
+};
 
 /**
  * ForwardIterator is a special type of iterator that only supports Seek()

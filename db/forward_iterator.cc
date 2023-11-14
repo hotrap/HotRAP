@@ -26,194 +26,51 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-// Usage:
-//     ForwardLevelIterator iter;
-//     iter.SetFileIndex(file_index);
-//     iter.Seek(target); // or iter.SeekToFirst();
-//     iter.Next()
-class ForwardLevelIterator : public InternalIterator {
- public:
-  ForwardLevelIterator(const ColumnFamilyData* const cfd,
-                       const ReadOptions& read_options,
-                       const std::vector<FileMetaData*>& files,
-                       const SliceTransform* prefix_extractor,
-                       bool allow_unprepared_value)
-      : cfd_(cfd),
-        read_options_(read_options),
-        files_(files),
-        valid_(false),
-        file_index_(std::numeric_limits<uint32_t>::max()),
-        file_iter_(nullptr),
-        pinned_iters_mgr_(nullptr),
-        prefix_extractor_(prefix_extractor),
-        allow_unprepared_value_(allow_unprepared_value) {
-    status_.PermitUncheckedError();  // Allow uninitialized status through
+ForwardLevelIterator::~ForwardLevelIterator() {
+  // Reset current pointer
+  if (pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled()) {
+    pinned_iters_mgr_->PinIterator(file_iter_);
+  } else {
+    delete file_iter_;
+  }
+}
+void ForwardLevelIterator::Reset() {
+  assert(file_index_ < files_.size());
+
+  // Reset current pointer
+  if (pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled()) {
+    pinned_iters_mgr_->PinIterator(file_iter_);
+  } else {
+    delete file_iter_;
   }
 
-  ~ForwardLevelIterator() override {
-    // Reset current pointer
-    if (pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled()) {
-      pinned_iters_mgr_->PinIterator(file_iter_);
-    } else {
-      delete file_iter_;
-    }
+  ReadRangeDelAggregator range_del_agg(&cfd_->internal_comparator(),
+                                       kMaxSequenceNumber /* upper_bound */);
+  file_iter_ = cfd_->table_cache()->NewIterator(
+      read_options_, *(cfd_->soptions()), cfd_->internal_comparator(),
+      *files_[file_index_],
+      read_options_.ignore_range_deletions ? nullptr : &range_del_agg,
+      prefix_extractor_, /*table_reader_ptr=*/nullptr,
+      /*file_read_hist=*/nullptr, TableReaderCaller::kUserIterator,
+      /*arena=*/nullptr, /*skip_filters=*/false, /*level=*/-1,
+      /*max_file_size_for_l0_meta_pin=*/0,
+      /*smallest_compaction_key=*/nullptr,
+      /*largest_compaction_key=*/nullptr, allow_unprepared_value_);
+  file_iter_->SetPinnedItersMgr(pinned_iters_mgr_);
+  valid_ = false;
+  if (!range_del_agg.IsEmpty()) {
+    status_ = Status::NotSupported(
+        "Range tombstones unsupported with ForwardIterator");
   }
-
-  void SetFileIndex(uint32_t file_index) {
-    assert(file_index < files_.size());
-    status_ = Status::OK();
-    if (file_index != file_index_) {
-      file_index_ = file_index;
-      Reset();
-    }
-  }
-  void Reset() {
-    assert(file_index_ < files_.size());
-
-    // Reset current pointer
-    if (pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled()) {
-      pinned_iters_mgr_->PinIterator(file_iter_);
-    } else {
-      delete file_iter_;
-    }
-
-    ReadRangeDelAggregator range_del_agg(&cfd_->internal_comparator(),
-                                         kMaxSequenceNumber /* upper_bound */);
-    file_iter_ = cfd_->table_cache()->NewIterator(
-        read_options_, *(cfd_->soptions()), cfd_->internal_comparator(),
-        *files_[file_index_],
-        read_options_.ignore_range_deletions ? nullptr : &range_del_agg,
-        prefix_extractor_, /*table_reader_ptr=*/nullptr,
-        /*file_read_hist=*/nullptr, TableReaderCaller::kUserIterator,
-        /*arena=*/nullptr, /*skip_filters=*/false, /*level=*/-1,
-        /*max_file_size_for_l0_meta_pin=*/0,
-        /*smallest_compaction_key=*/nullptr,
-        /*largest_compaction_key=*/nullptr, allow_unprepared_value_);
-    file_iter_->SetPinnedItersMgr(pinned_iters_mgr_);
-    valid_ = false;
-    if (!range_del_agg.IsEmpty()) {
-      status_ = Status::NotSupported(
-          "Range tombstones unsupported with ForwardIterator");
-    }
-  }
-  void SeekToLast() override {
-    status_ = Status::NotSupported("ForwardLevelIterator::SeekToLast()");
-    valid_ = false;
-  }
-  void Prev() override {
-    status_ = Status::NotSupported("ForwardLevelIterator::Prev()");
-    valid_ = false;
-  }
-  bool Valid() const override {
-    return valid_;
-  }
-  void SeekToFirst() override {
-    assert(file_iter_ != nullptr);
-    if (!status_.ok()) {
-      assert(!valid_);
-      return;
-    }
-    file_iter_->SeekToFirst();
-    valid_ = file_iter_->Valid();
-  }
-  void Seek(const Slice& internal_key) override {
-    assert(file_iter_ != nullptr);
-
-    // This deviates from the usual convention for InternalIterator::Seek() in
-    // that it doesn't discard pre-existing error status. That's because this
-    // Seek() is only supposed to be called immediately after SetFileIndex()
-    // (which discards pre-existing error status), and SetFileIndex() may set
-    // an error status, which we shouldn't discard.
-    if (!status_.ok()) {
-      assert(!valid_);
-      return;
-    }
-
-    file_iter_->Seek(internal_key);
-    valid_ = file_iter_->Valid();
-  }
-  void SeekForPrev(const Slice& /*internal_key*/) override {
-    status_ = Status::NotSupported("ForwardLevelIterator::SeekForPrev()");
-    valid_ = false;
-  }
-  void Next() override {
-    assert(valid_);
-    file_iter_->Next();
-    for (;;) {
-      valid_ = file_iter_->Valid();
-      if (!file_iter_->status().ok()) {
-        assert(!valid_);
-        return;
-      }
-      if (valid_) {
-        return;
-      }
-      if (file_index_ + 1 >= files_.size()) {
-        valid_ = false;
-        return;
-      }
-      SetFileIndex(file_index_ + 1);
-      if (!status_.ok()) {
-        assert(!valid_);
-        return;
-      }
-      file_iter_->SeekToFirst();
-    }
-  }
-  Slice key() const override {
-    assert(valid_);
-    return file_iter_->key();
-  }
-  Slice value() const override {
-    assert(valid_);
-    return file_iter_->value();
-  }
-  Status status() const override {
-    if (!status_.ok()) {
-      return status_;
-    } else if (file_iter_) {
-      return file_iter_->status();
-    }
-    return Status::OK();
-  }
-  bool PrepareValue() override {
-    assert(valid_);
-    if (file_iter_->PrepareValue()) {
-      return true;
-    }
-
-    assert(!file_iter_->Valid());
-    valid_ = false;
-    return false;
-  }
-  bool IsKeyPinned() const override {
-    return pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled() &&
-           file_iter_->IsKeyPinned();
-  }
-  bool IsValuePinned() const override {
-    return pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled() &&
-           file_iter_->IsValuePinned();
-  }
-  void SetPinnedItersMgr(PinnedIteratorsManager* pinned_iters_mgr) override {
-    pinned_iters_mgr_ = pinned_iters_mgr;
-    if (file_iter_) {
-      file_iter_->SetPinnedItersMgr(pinned_iters_mgr_);
-    }
-  }
-
- private:
-  const ColumnFamilyData* const cfd_;
-  const ReadOptions& read_options_;
-  const std::vector<FileMetaData*>& files_;
-
-  bool valid_;
-  uint32_t file_index_;
-  Status status_;
-  InternalIterator* file_iter_;
-  PinnedIteratorsManager* pinned_iters_mgr_;
-  const SliceTransform* prefix_extractor_;
-  const bool allow_unprepared_value_;
-};
+}
+bool ForwardLevelIterator::IsKeyPinned() const {
+  return pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled() &&
+         file_iter_->IsKeyPinned();
+}
+bool ForwardLevelIterator::IsValuePinned() const {
+  return pinned_iters_mgr_ && pinned_iters_mgr_->PinningEnabled() &&
+         file_iter_->IsValuePinned();
+}
 
 ForwardIterator::ForwardIterator(DBImpl* db, const ReadOptions& read_options,
                                  ColumnFamilyData* cfd,
