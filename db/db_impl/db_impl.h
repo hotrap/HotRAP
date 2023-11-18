@@ -1392,9 +1392,7 @@ class DBImpl : public DB {
   friend class WriteUnpreparedTransactionTest_RecoveryTest_Test;
 #endif
 
-  friend void check_newer_version(DBImpl* db, SuperVersion* sv,
-                                  int target_level,
-                                  std::list<ImmPromotionCache>::iterator iter);
+  friend class PromotionCache;
 
   struct CompactionState;
   struct PrepickedCompaction;
