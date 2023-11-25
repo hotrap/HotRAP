@@ -264,6 +264,7 @@ static const std::string num_files_at_level_prefix = "num-files-at-level";
 static const std::string compression_ratio_at_level_prefix =
     "compression-ratio-at-level";
 static const std::string allstats = "stats";
+static const std::string compactions = "compactions";
 static const std::string sstables = "sstables";
 static const std::string cfstats = "cfstats";
 static const std::string cfstats_no_file_histogram =
@@ -336,6 +337,8 @@ const std::string DB::Properties::kNumFilesAtLevelPrefix =
 const std::string DB::Properties::kCompressionRatioAtLevelPrefix =
     rocksdb_prefix + compression_ratio_at_level_prefix;
 const std::string DB::Properties::kStats = rocksdb_prefix + allstats;
+const std::string DB::Properties::kCompactionStats =
+    rocksdb_prefix + compactions;
 const std::string DB::Properties::kSSTables = rocksdb_prefix + sstables;
 const std::string DB::Properties::kCFStats = rocksdb_prefix + cfstats;
 const std::string DB::Properties::kCFStatsNoFileHistogram =
@@ -443,6 +446,9 @@ const std::unordered_map<std::string, DBPropertyInfo>
          {false, &InternalStats::HandleLevelStats, nullptr, nullptr, nullptr}},
         {DB::Properties::kStats,
          {false, &InternalStats::HandleStats, nullptr, nullptr, nullptr}},
+        {DB::Properties::kCompactionStats,
+         {false, &InternalStats::HandleCompactionStats, nullptr, nullptr,
+          nullptr}},
         {DB::Properties::kCFStats,
          {false, &InternalStats::HandleCFStats, nullptr,
           &InternalStats::HandleCFMapStats, nullptr}},
@@ -917,6 +923,31 @@ bool InternalStats::HandleStats(std::string* value, Slice suffix) {
   }
   if (!HandleDBStats(value, suffix)) {
     return false;
+  }
+  return true;
+}
+
+bool InternalStats::HandleCompactionStats(std::string* value, Slice suffix) {
+  value->append("Level Read Write\n");
+  struct CStats {
+    size_t read = 0;
+    size_t write = 0;
+  };
+  std::vector<CStats> levels(number_levels_);
+  for (int level = 0; level < number_levels_; ++level) {
+    if (level > 0) {
+      levels[level - 1].read += comp_stats_[level].bytes_read_non_output_levels;
+    }
+    levels[level].read += comp_stats_[level].bytes_read_output_level;
+    levels[level].write += comp_stats_[level].bytes_written;
+    // No idea which level are them in
+    assert(comp_stats_[level].bytes_read_blob == 0);
+    assert(comp_stats_[level].bytes_written_blob == 0);
+  }
+  for (int level = 0; level < number_levels_; ++level) {
+    value->append("L" + std::to_string(level) + " " +
+                  std::to_string(levels[level].read) + " " +
+                  std::to_string(levels[level].write) + '\n');
   }
   return true;
 }

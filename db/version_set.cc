@@ -2000,7 +2000,7 @@ static void TryPromote(
     if (it == caches->end()) {
       auto ret = caches->emplace(
           std::piecewise_construct, std::make_tuple(target_level),
-          std::make_tuple(target_level, cfd.user_comparator()));
+          std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
       it = ret.first;
       assert(ret.second);
     }
