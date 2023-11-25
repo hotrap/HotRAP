@@ -771,6 +771,8 @@ class DB {
     //      described by kCFStats followed by the data described by kDBStats.
     static const std::string kStats;
 
+    static const std::string kCompactionStats;
+
     //  "rocksdb.sstables" - returns a multi-line string summarizing current
     //      SST files.
     static const std::string kSSTables;

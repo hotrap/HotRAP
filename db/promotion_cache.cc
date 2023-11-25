@@ -1,5 +1,14 @@
 #include "promotion_cache.h"
 
+#include <pthread.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <chrono>
+#include <ios>
+#include <mutex>
+#include <thread>
+
 #include "column_family.h"
 #include "db/db_impl/db_impl.h"
 #include "db/job_context.h"
@@ -24,13 +33,26 @@ T atomic_max_relaxed(std::atomic<T> &dst, T src) {
   return x;
 }
 
-PromotionCache::PromotionCache(int target_level, const Comparator *ucmp)
-    : target_level_(target_level),
+PromotionCache::PromotionCache(DBImpl &db, int target_level,
+                               const Comparator *ucmp)
+    : db_(db),
+      target_level_(target_level),
       ucmp_(ucmp),
       mut_{MutableCache{std::map<std::string, std::string, UserKeyCompare>{
                             UserKeyCompare(ucmp)},
                         0}},
-      max_size_(0) {}
+      max_size_(0),
+      should_stop_(false),
+      checker_([this] { this->checker(); }) {}
+
+PromotionCache::~PromotionCache() {
+  {
+    std::unique_lock<std::mutex> lock(checker_lock_);
+    should_stop_ = true;
+  }
+  signal_check_.notify_one();
+  checker_.join();
+}
 
 bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
                          PinnableSlice *value) const {
@@ -58,104 +80,150 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
   return false;
 }
 
+static inline uint64_t timestamp_ns() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+static void print_stats_in_bg(std::atomic<bool> *should_stop,
+                              std::string db_path, int target_level, int tid) {
+  std::string cputimes_path(db_path + "/checker-" +
+                            std::to_string(target_level) + "-cputimes");
+  std::string cputimes_command =
+      "ps -eT -o tid,cputimes | awk '{if ($1 == " + std::to_string(tid) +
+      ") print $2}' >> " + cputimes_path;
+  std::ofstream(cputimes_path) << "Timestamp(ns) cputime(s)\n";
+  while (!should_stop->load(std::memory_order_relaxed)) {
+    auto timestamp = timestamp_ns();
+
+    std::ofstream(cputimes_path, std::ios_base::app) << timestamp << ' ';
+    std::system(cputimes_command.c_str());
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+}
+
 static void mark_updated(ImmPromotionCache &cache,
                          const std::string &user_key) {
   auto updated = cache.updated.Lock();
   updated->insert(user_key);
 }
 // Will unref sv
-void check_newer_version(DBImpl *db, SuperVersion *sv, int target_level,
-                         std::list<ImmPromotionCache>::iterator iter) {
-  ColumnFamilyData *cfd = sv->cfd;
-  InternalStats &internal_stats = *cfd->internal_stats();
-  ImmPromotionCache &cache = *iter;
-  auto stats = cfd->ioptions()->stats;
-  TimerGuard check_newer_version_start =
-      internal_stats.hotrap_timers()
-          .timer(TimerType::kCheckNewerVersion)
-          .start();
-  for (const auto &item : cache.cache) {
-    const std::string &user_key = item.first;
-    LookupKey key(user_key, kMaxSequenceNumber);
-    Status s;
-    MergeContext merge_context;
-    SequenceNumber max_covering_tombstone_seq;
-    if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
-                     &max_covering_tombstone_seq, ReadOptions())) {
-      mark_updated(cache, user_key);
-      continue;
+void PromotionCache::checker() {
+  pthread_setname_np(pthread_self(), "checker");
+
+  std::atomic<bool> printer_should_stop(false);
+  std::thread printer(print_stats_in_bg, &printer_should_stop,
+                      db_.db_absolute_path_, target_level_, gettid());
+  for (;;) {
+    CheckerQueueElem elem;
+    {
+      std::unique_lock<std::mutex> lock(checker_lock_);
+      signal_check_.wait(
+          lock, [&] { return should_stop_ || !checker_queue_.empty(); });
+      if (should_stop_) break;
+      elem = checker_queue_.front();
+      checker_queue_.pop();
     }
-    if (!s.ok()) {
-      ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
-                      s.ToString().c_str());
-    }
-    sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
-                     &merge_context, &max_covering_tombstone_seq, nullptr,
-                     nullptr, nullptr, nullptr, nullptr, false, target_level);
-    if (!s.IsNotFound()) {
+    DBImpl *db = elem.db;
+    assert(db == &db_);
+    SuperVersion *sv = elem.sv;
+    auto iter = elem.iter;
+    ColumnFamilyData *cfd = sv->cfd;
+    InternalStats &internal_stats = *cfd->internal_stats();
+    ImmPromotionCache &cache = *iter;
+    auto stats = cfd->ioptions()->stats;
+    TimerGuard check_newer_version_start =
+        internal_stats.hotrap_timers()
+            .timer(TimerType::kCheckNewerVersion)
+            .start();
+    for (const auto &item : cache.cache) {
+      const std::string &user_key = item.first;
+      LookupKey key(user_key, kMaxSequenceNumber);
+      Status s;
+      MergeContext merge_context;
+      SequenceNumber max_covering_tombstone_seq;
+      if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
+                       &max_covering_tombstone_seq, ReadOptions())) {
+        mark_updated(cache, user_key);
+        continue;
+      }
       if (!s.ok()) {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                         s.ToString().c_str());
       }
-      mark_updated(cache, user_key);
-    }
-  }
-  // TODO: Is this really thread-safe?
-  MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
-  m->Ref();
-  autovector<MemTable *> memtables_to_free;
-  SuperVersionContext svc(true);
-
-  db->mutex()->Lock();
-  m->SetNextLogNumber(db->logfile_number_);
-  size_t flushed_bytes = 0;
-  {
-    auto updated = cache.updated.Lock();
-    for (const auto &item : cache.cache) {
-      const std::string &user_key = item.first;
-      const std::string &value = item.second;
-      if (updated->find(user_key) != updated->end()) {
-        RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
-                   user_key.size() + value.size());
-        continue;
+      sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
+                       &merge_context, &max_covering_tombstone_seq, nullptr,
+                       nullptr, nullptr, nullptr, nullptr, false,
+                       target_level_);
+      if (!s.IsNotFound()) {
+        if (!s.ok()) {
+          ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
+                          s.ToString().c_str());
+        }
+        mark_updated(cache, user_key);
       }
-      // It seems that sequence number 0 is treated specially. So we use 1 here.
-      Status s = m->Add(1, ValueType::kTypeValue, user_key, value, nullptr);
-      if (!s.ok()) {
-        ROCKS_LOG_FATAL(cfd->ioptions()->logger,
-                        "check_newer_version: Unexpected error: %s",
-                        s.ToString().c_str());
-      }
-      flushed_bytes += user_key.size() + value.size();
     }
-  }
-  cfd->imm()->Add(m, &memtables_to_free);
-  db->InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
-  DBImpl::FlushRequest flush_req;
-  db->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}), &flush_req);
-  db->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
-  db->MaybeScheduleFlushOrCompaction();
-  db->mutex()->Unlock();
+    // TODO: Is this really thread-safe?
+    MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
+    m->Ref();
+    autovector<MemTable *> memtables_to_free;
+    SuperVersionContext svc(true);
 
-  for (MemTable *table : memtables_to_free) delete table;
-  svc.Clean();
-  RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, flushed_bytes);
-
-  {
-    auto caches = cfd->promotion_caches().Read();
-    auto it = caches->find(target_level);
-    assert(it->first == target_level);
-    auto list = it->second.imm_list().Write();
-    list->size -= iter->size;
-    list->list.erase(iter);
-  }
-
-  if (sv->Unref()) {
     db->mutex()->Lock();
-    sv->Cleanup();
-    delete sv;
+    m->SetNextLogNumber(db->logfile_number_);
+    size_t flushed_bytes = 0;
+    {
+      auto updated = cache.updated.Lock();
+      for (const auto &item : cache.cache) {
+        const std::string &user_key = item.first;
+        const std::string &value = item.second;
+        if (updated->find(user_key) != updated->end()) {
+          RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
+                     user_key.size() + value.size());
+          continue;
+        }
+        // It seems that sequence number 0 is treated specially. So we use 1
+        // here.
+        Status s = m->Add(1, ValueType::kTypeValue, user_key, value, nullptr);
+        if (!s.ok()) {
+          ROCKS_LOG_FATAL(cfd->ioptions()->logger,
+                          "check_newer_version: Unexpected error: %s",
+                          s.ToString().c_str());
+        }
+        flushed_bytes += user_key.size() + value.size();
+      }
+    }
+    cfd->imm()->Add(m, &memtables_to_free);
+    db->InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
+    DBImpl::FlushRequest flush_req;
+    db->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}), &flush_req);
+    db->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
+    db->MaybeScheduleFlushOrCompaction();
     db->mutex()->Unlock();
+
+    for (MemTable *table : memtables_to_free) delete table;
+    svc.Clean();
+    RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, flushed_bytes);
+
+    {
+      auto caches = cfd->promotion_caches().Read();
+      auto it = caches->find(target_level_);
+      assert(it->first == target_level_);
+      auto list = it->second.imm_list().Write();
+      list->size -= iter->size;
+      list->list.erase(iter);
+    }
+
+    if (sv->Unref()) {
+      db->mutex()->Lock();
+      sv->Cleanup();
+      delete sv;
+      db->mutex()->Unlock();
+    }
   }
+  printer_should_stop.store(true, std::memory_order_relaxed);
+  printer.join();
 }
 void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
                              size_t write_buffer_size, std::string key,
@@ -191,8 +259,14 @@ void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
       cfd.ioptions()->user_comparator);
   mut->size = 0;
   db.mutex()->Unlock();
-  std::thread checker(check_newer_version, &db, sv, target_level_, iter);
-  checker.detach();
+
+  std::unique_lock<std::mutex> lock_(checker_lock_);
+  checker_queue_.emplace(CheckerQueueElem{
+      .db = &db,
+      .sv = sv,
+      .iter = iter,
+  });
+  signal_check_.notify_one();
 }
 // [begin, end)
 std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
