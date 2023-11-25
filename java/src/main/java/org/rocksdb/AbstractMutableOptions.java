@@ -53,25 +53,23 @@ public abstract class AbstractMutableOptions {
     return buffer.toString();
   }
 
-  public static abstract class AbstractMutableOptionsBuilder<
-      T extends AbstractMutableOptions,
-      U extends AbstractMutableOptionsBuilder<T, U, K>,
-      K extends MutableOptionKey> {
-
+  public abstract static class AbstractMutableOptionsBuilder<
+      T extends AbstractMutableOptions, U extends AbstractMutableOptionsBuilder<T, U, K>, K
+          extends MutableOptionKey> {
     private final Map<K, MutableOptionValue<?>> options = new LinkedHashMap<>();
     private final List<OptionString.Entry> unknown = new ArrayList<>();
 
     protected abstract U self();
 
     /**
-     * Get all of the possible keys
+     * Get all the possible keys
      *
      * @return A map of all keys, indexed by name.
      */
     protected abstract Map<String, K> allKeys();
 
     /**
-     * Construct a sub-class instance of {@link AbstractMutableOptions}.
+     * Construct a subclass instance of {@link AbstractMutableOptions}.
      *
      * @param keys the keys
      * @param values the values
@@ -81,8 +79,8 @@ public abstract class AbstractMutableOptions {
     protected abstract T build(final String[] keys, final String[] values);
 
     public T build() {
-      final String keys[] = new String[options.size()];
-      final String values[] = new String[options.size()];
+      final String[] keys = new String[options.size()];
+      final String[] values = new String[options.size()];
 
       int i = 0;
       for (final Map.Entry<K, MutableOptionValue<?>> option : options.entrySet()) {
@@ -224,10 +222,10 @@ public abstract class AbstractMutableOptions {
     private long parseAsLong(final String value) {
       try {
         return Long.parseLong(value);
-      } catch (NumberFormatException nfe) {
+      } catch (final NumberFormatException nfe) {
         final double doubleValue = Double.parseDouble(value);
         if (doubleValue != Math.round(doubleValue))
-          throw new IllegalArgumentException("Unable to parse or round " + value + " to int");
+          throw new IllegalArgumentException("Unable to parse or round " + value + " to long");
         return Math.round(doubleValue);
       }
     }
@@ -242,10 +240,10 @@ public abstract class AbstractMutableOptions {
     private int parseAsInt(final String value) {
       try {
         return Integer.parseInt(value);
-      } catch (NumberFormatException nfe) {
+      } catch (final NumberFormatException nfe) {
         final double doubleValue = Double.parseDouble(value);
         if (doubleValue != Math.round(doubleValue))
-          throw new IllegalArgumentException("Unable to parse or round " + value + " to long");
+          throw new IllegalArgumentException("Unable to parse or round " + value + " to int");
         return (int) Math.round(doubleValue);
       }
     }
@@ -271,7 +269,7 @@ public abstract class AbstractMutableOptions {
             throw new IllegalArgumentException("options string is invalid: " + option);
           }
           fromOptionString(option, ignoreUnknown);
-        } catch (NumberFormatException nfe) {
+        } catch (final NumberFormatException nfe) {
           throw new IllegalArgumentException(
               "" + option.key + "=" + option.value + " - not a valid value for its type", nfe);
         }
@@ -287,7 +285,7 @@ public abstract class AbstractMutableOptions {
      * @param ignoreUnknown if this is not set, throw an exception when a key is not in the known
      *     set
      * @return the same object, after adding options
-     * @throws IllegalArgumentException if the key is unkown, or a value has the wrong type/form
+     * @throws IllegalArgumentException if the key is unknown, or a value has the wrong type/form
      */
     private U fromOptionString(final OptionString.Entry option, final boolean ignoreUnknown)
         throws IllegalArgumentException {
@@ -299,7 +297,7 @@ public abstract class AbstractMutableOptions {
         unknown.add(option);
         return self();
       } else if (key == null) {
-        throw new IllegalArgumentException("Key: " + key + " is not a known option key");
+        throw new IllegalArgumentException("Key: " + null + " is not a known option key");
       }
 
       if (!option.value.isList()) {
@@ -341,8 +339,18 @@ public abstract class AbstractMutableOptions {
           return setIntArray(key, value);
 
         case ENUM:
-          final CompressionType compressionType = CompressionType.getFromInternal(valueStr);
-          return setEnum(key, compressionType);
+          final String optionName = key.name();
+          if (optionName.equals("prepopulate_blob_cache")) {
+            final PrepopulateBlobCache prepopulateBlobCache =
+                PrepopulateBlobCache.getFromInternal(valueStr);
+            return setEnum(key, prepopulateBlobCache);
+          } else if (optionName.equals("compression")
+              || optionName.equals("blob_compression_type")) {
+            final CompressionType compressionType = CompressionType.getFromInternal(valueStr);
+            return setEnum(key, compressionType);
+          } else {
+            throw new IllegalArgumentException("Unknown enum type: " + key.name());
+          }
 
         default:
           throw new IllegalStateException(key + " has unknown value type: " + key.getValueType());

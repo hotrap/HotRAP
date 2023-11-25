@@ -50,7 +50,7 @@ public interface WriteBatchInterface {
      *     Supports direct buffer only.
      * @param value the value associated with the specified key. It is using position and limit.
      *     Supports direct buffer only.
-     * @throws RocksDBException
+     * @throws RocksDBException thrown if error happens in underlying native library.
      */
     void put(final ByteBuffer key, final ByteBuffer value) throws RocksDBException;
 
@@ -64,7 +64,7 @@ public interface WriteBatchInterface {
      *     Supports direct buffer only.
      * @param value the value associated with the specified key. It is using position and limit.
      *     Supports direct buffer only.
-     * @throws RocksDBException
+     * @throws RocksDBException thrown if error happens in underlying native library.
      */
     void put(ColumnFamilyHandle columnFamilyHandle, final ByteBuffer key, final ByteBuffer value)
         throws RocksDBException;
@@ -91,54 +91,6 @@ public interface WriteBatchInterface {
      * @throws RocksDBException thrown if error happens in underlying native library.
      */
     void merge(ColumnFamilyHandle columnFamilyHandle, byte[] key, byte[] value)
-        throws RocksDBException;
-
-    /**
-     * <p>If the database contains a mapping for "key", erase it.  Else do nothing.</p>
-     *
-     * @param key Key to delete within database
-     *
-     * @deprecated Use {@link #delete(byte[])}
-     * @throws RocksDBException thrown if error happens in underlying native library.
-     */
-    @Deprecated
-    void remove(byte[] key) throws RocksDBException;
-
-    /**
-     * <p>If column family contains a mapping for "key", erase it.  Else do nothing.</p>
-     *
-     * @param columnFamilyHandle {@link ColumnFamilyHandle} instance
-     * @param key Key to delete within database
-     *
-     * @deprecated Use {@link #delete(ColumnFamilyHandle, byte[])}
-     * @throws RocksDBException thrown if error happens in underlying native library.
-     */
-    @Deprecated
-    void remove(ColumnFamilyHandle columnFamilyHandle, byte[] key) throws RocksDBException;
-
-    /**
-     * <p>If column family contains a mapping for "key", erase it.  Else do nothing.</p>
-     *
-     * @param key Key to delete within database. It is using position and limit.
-     *     Supports direct buffer only.
-     *
-     * @deprecated Use {@link #delete(ByteBuffer)}
-     * @throws RocksDBException thrown if error happens in underlying native library.
-     */
-    @Deprecated void remove(final ByteBuffer key) throws RocksDBException;
-
-    /**
-     * <p>If column family contains a mapping for "key", erase it.  Else do nothing.</p>
-     *
-     * @param columnFamilyHandle {@link ColumnFamilyHandle} instance
-     * @param key Key to delete within database. It is using position and limit.
-     *     Supports direct buffer only.
-     *
-     * @deprecated Use {@link #delete(ColumnFamilyHandle, ByteBuffer)}
-     * @throws RocksDBException thrown if error happens in underlying native library.
-     */
-    @Deprecated
-    void remove(ColumnFamilyHandle columnFamilyHandle, final ByteBuffer key)
         throws RocksDBException;
 
     /**
@@ -184,12 +136,12 @@ public interface WriteBatchInterface {
      * Remove the database entry for {@code key}. Requires that the key exists
      * and was not overwritten. It is not an error if the key did not exist
      * in the database.
-     *
+     * <p>
      * If a key is overwritten (by calling {@link #put(byte[], byte[])} multiple
      * times), then the result of calling SingleDelete() on this key is undefined.
      * SingleDelete() only behaves correctly if there has been only one Put()
      * for this key since the previous call to SingleDelete() for this key.
-     *
+     * <p>
      * This feature is currently an experimental performance optimization
      * for a very specific workload. It is up to the caller to ensure that
      * SingleDelete is only used for a key that is not deleted using Delete() or
@@ -208,12 +160,12 @@ public interface WriteBatchInterface {
      * Remove the database entry for {@code key}. Requires that the key exists
      * and was not overwritten. It is not an error if the key did not exist
      * in the database.
-     *
+     * <p>
      * If a key is overwritten (by calling {@link #put(byte[], byte[])} multiple
      * times), then the result of calling SingleDelete() on this key is undefined.
      * SingleDelete() only behaves correctly if there has been only one Put()
      * for this key since the previous call to SingleDelete() for this key.
-     *
+     * <p>
      * This feature is currently an experimental performance optimization
      * for a very specific workload. It is up to the caller to ensure that
      * SingleDelete is only used for a key that is not deleted using Delete() or
@@ -234,7 +186,7 @@ public interface WriteBatchInterface {
      * Removes the database entries in the range ["beginKey", "endKey"), i.e.,
      * including "beginKey" and excluding "endKey". a non-OK status on error. It
      * is not an error if no keys exist in the range ["beginKey", "endKey").
-     *
+     * <p>
      * Delete the database entry (if any) for "key". Returns OK on success, and a
      * non-OK status on error. It is not an error if "key" did not exist in the
      * database.
@@ -251,7 +203,7 @@ public interface WriteBatchInterface {
      * Removes the database entries in the range ["beginKey", "endKey"), i.e.,
      * including "beginKey" and excluding "endKey". a non-OK status on error. It
      * is not an error if no keys exist in the range ["beginKey", "endKey").
-     *
+     * <p>
      * Delete the database entry (if any) for "key". Returns OK on success, and a
      * non-OK status on error. It is not an error if "key" did not exist in the
      * database.
@@ -272,9 +224,9 @@ public interface WriteBatchInterface {
      * it will not be persisted to the SST files. When iterating over this
      * WriteBatch, WriteBatch::Handler::LogData will be called with the contents
      * of the blob as it is encountered. Blobs, puts, deletes, and merges will be
-     * encountered in the same order in thich they were inserted. The blob will
+     * encountered in the same order in which they were inserted. The blob will
      * NOT consume sequence number(s) and will NOT increase the count of the batch
-     *
+     * <p>
      * Example application: add timestamps to the transaction log for use in
      * replication.
      *
@@ -305,7 +257,7 @@ public interface WriteBatchInterface {
 
     /**
      * Pop the most recent save point.
-     *
+     * <p>
      * That is to say that it removes the last save point,
      * which was set by {@link #setSavePoint()}.
      *

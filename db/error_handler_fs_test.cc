@@ -6,16 +6,13 @@
 // Copyright (c) 2011 The LevelDB Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
-#ifndef ROCKSDB_LITE
 
 #include "db/db_test_util.h"
 #include "file/sst_file_manager_impl.h"
 #include "port/stack_trace.h"
 #include "rocksdb/io_status.h"
 #include "rocksdb/sst_file_manager.h"
-#if !defined(ROCKSDB_LITE)
 #include "test_util/sync_point.h"
-#endif
 #include "util/random.h"
 #include "utilities/fault_injection_env.h"
 #include "utilities/fault_injection_fs.h"
@@ -88,13 +85,6 @@ class ErrorHandlerFSListener : public EventListener {
     if (*auto_recovery && no_auto_recovery_) {
       *auto_recovery = false;
     }
-  }
-
-  void OnErrorRecoveryCompleted(Status old_bg_error) override {
-    InstrumentedMutexLock l(&mutex_);
-    recovery_complete_ = true;
-    cv_.SignalAll();
-    old_bg_error.PermitUncheckedError();
   }
 
   void OnErrorRecoveryEnd(const BackgroundErrorRecoveryInfo& info) override {
@@ -1315,6 +1305,10 @@ TEST_F(DBErrorHandlingFSTest, WALWriteError) {
     ASSERT_EQ(s, s.NoSpace());
   }
   SyncPoint::GetInstance()->DisableProcessing();
+  // `ClearAllCallBacks()` is needed in addition to `DisableProcessing()` to
+  // drain all callbacks. Otherwise, a pending callback in the background
+  // could re-disable `fault_fs_` after we enable it below.
+  SyncPoint::GetInstance()->ClearAllCallBacks();
   fault_fs_->SetFilesystemActive(true);
   ASSERT_EQ(listener->WaitForRecovery(5000000), true);
   for (auto i = 0; i < 199; ++i) {
@@ -1481,6 +1475,10 @@ TEST_F(DBErrorHandlingFSTest, MultiCFWALWriteError) {
     ASSERT_TRUE(s.IsNoSpace());
   }
   SyncPoint::GetInstance()->DisableProcessing();
+  // `ClearAllCallBacks()` is needed in addition to `DisableProcessing()` to
+  // drain all callbacks. Otherwise, a pending callback in the background
+  // could re-disable `fault_fs_` after we enable it below.
+  SyncPoint::GetInstance()->ClearAllCallBacks();
   fault_fs_->SetFilesystemActive(true);
   ASSERT_EQ(listener->WaitForRecovery(5000000), true);
 
@@ -1580,7 +1578,7 @@ TEST_F(DBErrorHandlingFSTest, MultiDBCompactionError) {
   }
 
   for (auto i = 0; i < kNumDbInstances; ++i) {
-    Status s = static_cast<DBImpl*>(db[i])->TEST_WaitForCompact(true);
+    Status s = static_cast<DBImpl*>(db[i])->TEST_WaitForCompact();
     ASSERT_EQ(s.severity(), Status::Severity::kSoftError);
     fault_fs[i]->SetFilesystemActive(true);
   }
@@ -1589,12 +1587,12 @@ TEST_F(DBErrorHandlingFSTest, MultiDBCompactionError) {
   for (auto i = 0; i < kNumDbInstances; ++i) {
     std::string prop;
     ASSERT_EQ(listener[i]->WaitForRecovery(5000000), true);
-    ASSERT_OK(static_cast<DBImpl*>(db[i])->TEST_WaitForCompact(true));
-    EXPECT_TRUE(
-        db[i]->GetProperty("rocksdb.num-files-at-level" + ToString(0), &prop));
+    ASSERT_OK(static_cast<DBImpl*>(db[i])->TEST_WaitForCompact());
+    EXPECT_TRUE(db[i]->GetProperty(
+        "rocksdb.num-files-at-level" + std::to_string(0), &prop));
     EXPECT_EQ(atoi(prop.c_str()), 0);
-    EXPECT_TRUE(
-        db[i]->GetProperty("rocksdb.num-files-at-level" + ToString(1), &prop));
+    EXPECT_TRUE(db[i]->GetProperty(
+        "rocksdb.num-files-at-level" + std::to_string(1), &prop));
     EXPECT_EQ(atoi(prop.c_str()), 1);
   }
 
@@ -1703,7 +1701,7 @@ TEST_F(DBErrorHandlingFSTest, MultiDBVariousErrors) {
   }
 
   for (auto i = 0; i < kNumDbInstances; ++i) {
-    Status s = static_cast<DBImpl*>(db[i])->TEST_WaitForCompact(true);
+    Status s = static_cast<DBImpl*>(db[i])->TEST_WaitForCompact();
     switch (i) {
       case 0:
         ASSERT_EQ(s.severity(), Status::Severity::kSoftError);
@@ -1725,13 +1723,13 @@ TEST_F(DBErrorHandlingFSTest, MultiDBVariousErrors) {
       ASSERT_EQ(listener[i]->WaitForRecovery(5000000), true);
     }
     if (i == 1) {
-      ASSERT_OK(static_cast<DBImpl*>(db[i])->TEST_WaitForCompact(true));
+      ASSERT_OK(static_cast<DBImpl*>(db[i])->TEST_WaitForCompact());
     }
-    EXPECT_TRUE(
-        db[i]->GetProperty("rocksdb.num-files-at-level" + ToString(0), &prop));
+    EXPECT_TRUE(db[i]->GetProperty(
+        "rocksdb.num-files-at-level" + std::to_string(0), &prop));
     EXPECT_EQ(atoi(prop.c_str()), 0);
-    EXPECT_TRUE(
-        db[i]->GetProperty("rocksdb.num-files-at-level" + ToString(1), &prop));
+    EXPECT_TRUE(db[i]->GetProperty(
+        "rocksdb.num-files-at-level" + std::to_string(1), &prop));
     EXPECT_EQ(atoi(prop.c_str()), 1);
   }
 
@@ -2475,6 +2473,210 @@ TEST_F(DBErrorHandlingFSTest, FLushWritRetryableErrorAbortRecovery) {
   Destroy(options);
 }
 
+TEST_F(DBErrorHandlingFSTest, FlushReadError) {
+  std::shared_ptr<ErrorHandlerFSListener> listener =
+      std::make_shared<ErrorHandlerFSListener>();
+  Options options = GetDefaultOptions();
+  options.env = fault_env_.get();
+  options.create_if_missing = true;
+  options.listeners.emplace_back(listener);
+  options.statistics = CreateDBStatistics();
+  Status s;
+
+  listener->EnableAutoRecovery(false);
+  DestroyAndReopen(options);
+
+  ASSERT_OK(Put(Key(0), "val"));
+  SyncPoint::GetInstance()->SetCallBack(
+      "BuildTable:BeforeOutputValidation", [&](void*) {
+        IOStatus st = IOStatus::IOError();
+        st.SetRetryable(true);
+        st.SetScope(IOStatus::IOErrorScope::kIOErrorScopeFile);
+        fault_fs_->SetFilesystemActive(false, st);
+      });
+  SyncPoint::GetInstance()->SetCallBack(
+      "BuildTable:BeforeDeleteFile",
+      [&](void*) { fault_fs_->SetFilesystemActive(true, IOStatus::OK()); });
+  SyncPoint::GetInstance()->EnableProcessing();
+  s = Flush();
+  ASSERT_EQ(s.severity(), ROCKSDB_NAMESPACE::Status::Severity::kSoftError);
+  SyncPoint::GetInstance()->DisableProcessing();
+  fault_fs_->SetFilesystemActive(true);
+  ASSERT_EQ(listener->WaitForRecovery(5000000), true);
+  ASSERT_EQ(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_BG_ERROR_COUNT));
+  ASSERT_EQ(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_BG_IO_ERROR_COUNT));
+  ASSERT_EQ(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_BG_RETRYABLE_IO_ERROR_COUNT));
+  ASSERT_LE(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_AUTORESUME_COUNT));
+  ASSERT_LE(0, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_AUTORESUME_RETRY_TOTAL_COUNT));
+  s = dbfull()->TEST_GetBGError();
+  ASSERT_OK(s);
+
+  Reopen(GetDefaultOptions());
+  ASSERT_EQ("val", Get(Key(0)));
+}
+
+TEST_F(DBErrorHandlingFSTest, AtomicFlushReadError) {
+  std::shared_ptr<ErrorHandlerFSListener> listener =
+      std::make_shared<ErrorHandlerFSListener>();
+  Options options = GetDefaultOptions();
+  options.env = fault_env_.get();
+  options.create_if_missing = true;
+  options.listeners.emplace_back(listener);
+  options.statistics = CreateDBStatistics();
+  Status s;
+
+  listener->EnableAutoRecovery(false);
+  options.atomic_flush = true;
+  CreateAndReopenWithCF({"pikachu"}, options);
+
+  ASSERT_OK(Put(0, Key(0), "val"));
+  ASSERT_OK(Put(1, Key(0), "val"));
+  SyncPoint::GetInstance()->SetCallBack(
+      "BuildTable:BeforeOutputValidation", [&](void*) {
+        IOStatus st = IOStatus::IOError();
+        st.SetRetryable(true);
+        st.SetScope(IOStatus::IOErrorScope::kIOErrorScopeFile);
+        fault_fs_->SetFilesystemActive(false, st);
+      });
+  SyncPoint::GetInstance()->SetCallBack(
+      "BuildTable:BeforeDeleteFile",
+      [&](void*) { fault_fs_->SetFilesystemActive(true, IOStatus::OK()); });
+  SyncPoint::GetInstance()->EnableProcessing();
+  s = Flush({0, 1});
+  ASSERT_EQ(s.severity(), ROCKSDB_NAMESPACE::Status::Severity::kSoftError);
+  SyncPoint::GetInstance()->DisableProcessing();
+  fault_fs_->SetFilesystemActive(true);
+  ASSERT_EQ(listener->WaitForRecovery(5000000), true);
+  ASSERT_EQ(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_BG_ERROR_COUNT));
+  ASSERT_EQ(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_BG_IO_ERROR_COUNT));
+  ASSERT_EQ(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_BG_RETRYABLE_IO_ERROR_COUNT));
+  ASSERT_LE(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_AUTORESUME_COUNT));
+  ASSERT_LE(0, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_AUTORESUME_RETRY_TOTAL_COUNT));
+  s = dbfull()->TEST_GetBGError();
+  ASSERT_OK(s);
+
+  ASSERT_OK(TryReopenWithColumnFamilies({kDefaultColumnFamilyName, "pikachu"},
+                                        GetDefaultOptions()));
+  ASSERT_EQ("val", Get(Key(0)));
+}
+
+TEST_F(DBErrorHandlingFSTest, AtomicFlushNoSpaceError) {
+  std::shared_ptr<ErrorHandlerFSListener> listener =
+      std::make_shared<ErrorHandlerFSListener>();
+  Options options = GetDefaultOptions();
+  options.env = fault_env_.get();
+  options.create_if_missing = true;
+  options.listeners.emplace_back(listener);
+  options.statistics = CreateDBStatistics();
+  Status s;
+
+  listener->EnableAutoRecovery(true);
+  options.atomic_flush = true;
+  CreateAndReopenWithCF({"pikachu"}, options);
+
+  ASSERT_OK(Put(0, Key(0), "val"));
+  ASSERT_OK(Put(1, Key(0), "val"));
+  SyncPoint::GetInstance()->SetCallBack("BuildTable:create_file", [&](void*) {
+    IOStatus st = IOStatus::NoSpace();
+    fault_fs_->SetFilesystemActive(false, st);
+  });
+  SyncPoint::GetInstance()->SetCallBack(
+      "BuildTable:BeforeDeleteFile",
+      [&](void*) { fault_fs_->SetFilesystemActive(true, IOStatus::OK()); });
+  SyncPoint::GetInstance()->EnableProcessing();
+  s = Flush({0, 1});
+  ASSERT_EQ(s.severity(), ROCKSDB_NAMESPACE::Status::Severity::kHardError);
+  SyncPoint::GetInstance()->DisableProcessing();
+  fault_fs_->SetFilesystemActive(true);
+  ASSERT_EQ(listener->WaitForRecovery(5000000), true);
+  ASSERT_LE(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_BG_ERROR_COUNT));
+  ASSERT_LE(1, options.statistics->getAndResetTickerCount(
+                   ERROR_HANDLER_BG_IO_ERROR_COUNT));
+  s = dbfull()->TEST_GetBGError();
+  ASSERT_OK(s);
+
+  ASSERT_OK(TryReopenWithColumnFamilies({kDefaultColumnFamilyName, "pikachu"},
+                                        GetDefaultOptions()));
+  ASSERT_EQ("val", Get(Key(0)));
+}
+
+TEST_F(DBErrorHandlingFSTest, CompactionReadRetryableErrorAutoRecover) {
+  // In this test, in the first round of compaction, the FS is set to error.
+  // So the first compaction fails due to retryable IO error and it is mapped
+  // to soft error. Then, compaction is rescheduled, in the second round of
+  // compaction, the FS is set to active and compaction is successful, so
+  // the test will hit the CompactionJob::FinishCompactionOutputFile1 sync
+  // point.
+  std::shared_ptr<ErrorHandlerFSListener> listener =
+      std::make_shared<ErrorHandlerFSListener>();
+  Options options = GetDefaultOptions();
+  options.env = fault_env_.get();
+  options.create_if_missing = true;
+  options.level0_file_num_compaction_trigger = 2;
+  options.listeners.emplace_back(listener);
+  BlockBasedTableOptions table_options;
+  table_options.no_block_cache = true;
+  options.table_factory.reset(NewBlockBasedTableFactory(table_options));
+  Status s;
+  std::atomic<bool> fail_first(false);
+  std::atomic<bool> fail_second(true);
+  Random rnd(301);
+  DestroyAndReopen(options);
+
+  IOStatus error_msg = IOStatus::IOError("Retryable IO Error");
+  error_msg.SetRetryable(true);
+
+  for (int i = 0; i < 100; ++i) {
+    ASSERT_OK(Put(Key(i), rnd.RandomString(1024)));
+  }
+  s = Flush();
+  ASSERT_OK(s);
+
+  listener->OverrideBGError(Status(error_msg, Status::Severity::kHardError));
+  listener->EnableAutoRecovery(false);
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->LoadDependency(
+      {{"DBImpl::FlushMemTable:FlushMemTableFinished",
+        "BackgroundCallCompaction:0"},
+       {"CompactionJob::FinishCompactionOutputFile1",
+        "CompactionWriteRetryableErrorAutoRecover0"}});
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "DBImpl::BackgroundCompaction:Start",
+      [&](void*) { fault_fs_->SetFilesystemActive(true); });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "BackgroundCallCompaction:0", [&](void*) { fail_first.store(true); });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->SetCallBack(
+      "CompactionJob::Run():PausingManualCompaction:2", [&](void*) {
+        if (fail_first.load() && fail_second.load()) {
+          fault_fs_->SetFilesystemActive(false, error_msg);
+          fail_second.store(false);
+        }
+      });
+  ROCKSDB_NAMESPACE::SyncPoint::GetInstance()->EnableProcessing();
+
+  ASSERT_OK(Put(Key(1), "val"));
+  s = Flush();
+  ASSERT_OK(s);
+
+  s = dbfull()->TEST_WaitForCompact();
+  ASSERT_OK(s);
+  TEST_SYNC_POINT("CompactionWriteRetryableErrorAutoRecover0");
+  SyncPoint::GetInstance()->ClearAllCallBacks();
+  SyncPoint::GetInstance()->DisableProcessing();
+
+  Reopen(GetDefaultOptions());
+}
+
 class DBErrorHandlingFencingTest : public DBErrorHandlingFSTest,
                                    public testing::WithParamInterface<bool> {};
 
@@ -2658,13 +2860,3 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
-
-#else
-#include <stdio.h>
-
-int main(int /*argc*/, char** /*argv*/) {
-  fprintf(stderr, "SKIPPED as Cuckoo table is not supported in ROCKSDB_LITE\n");
-  return 0;
-}
-
-#endif  // ROCKSDB_LITE
