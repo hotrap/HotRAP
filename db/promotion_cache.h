@@ -1,7 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <map>
+#include <mutex>
+#include <queue>
 #include <unordered_set>
 
 #include "monitoring/instrumented_mutex.h"
@@ -15,6 +18,7 @@ namespace ROCKSDB_NAMESPACE {
 class ColumnFamilyData;
 class DBImpl;
 class InternalStats;
+struct SuperVersion;
 
 class UserKeyCompare {
  public:
@@ -47,9 +51,10 @@ struct MutableCache {
 
 class PromotionCache {
  public:
-  PromotionCache(int target_level, const Comparator *ucmp);
+  PromotionCache(DBImpl &db, int target_level, const Comparator *ucmp);
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
+  ~PromotionCache();
   bool Get(InternalStats *internal_stats, Slice key,
            PinnableSlice *value) const;
   // REQUIRES: PromotionCaches mutex not held
@@ -69,10 +74,24 @@ class PromotionCache {
   size_t max_size() const { return max_size_.load(std::memory_order_relaxed); }
 
  private:
+  struct CheckerQueueElem {
+    DBImpl *db;
+    SuperVersion *sv;
+    std::list<ImmPromotionCache>::iterator iter;
+  };
+  void checker();
+
+  DBImpl &db_;
   const int target_level_;
   const Comparator *ucmp_;
   RWMutexProtected<MutableCache> mut_;
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
   std::atomic<size_t> max_size_;
+
+  std::mutex checker_lock_;
+  std::queue<CheckerQueueElem> checker_queue_;
+  std::condition_variable signal_check_;
+  bool should_stop_;
+  std::thread checker_;
 };
 }  // namespace ROCKSDB_NAMESPACE
