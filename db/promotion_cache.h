@@ -55,6 +55,8 @@ class PromotionCache {
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
   ~PromotionCache();
+  // Should be called with db mutex held
+  void Cleanup();
   bool Get(InternalStats *internal_stats, Slice key,
            PinnableSlice *value) const;
   // REQUIRES: PromotionCaches mutex not held
