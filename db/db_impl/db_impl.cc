@@ -507,8 +507,18 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
 
   shutting_down_.store(true, std::memory_order_release);
   bg_cv_.SignalAll();
+  for (ColumnFamilyData* cfd : *versions_->GetColumnFamilySet()) {
+    for (auto& level_cache : *cfd->promotion_caches().Write()) {
+      level_cache.second.stop_checker_no_wait();
+    }
+  }
   if (!wait) {
     return;
+  }
+  for (ColumnFamilyData* cfd : *versions_->GetColumnFamilySet()) {
+    for (auto& level_cache : *cfd->promotion_caches().Write()) {
+      level_cache.second.wait_for_checker_to_stop();
+    }
   }
   WaitForBackgroundWork();
 }
