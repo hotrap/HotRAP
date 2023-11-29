@@ -47,11 +47,11 @@ PromotionCache::PromotionCache(DBImpl &db, int target_level,
 
 PromotionCache::~PromotionCache() {
   assert(should_stop_);
-  assert(checker_.joinable());
-  checker_.join();
+  if (checker_.joinable()) checker_.join();
 }
 
-void PromotionCache::Cleanup() {
+void PromotionCache::stop_checker_no_wait() {
+  db_.mutex()->AssertHeld();
   {
     std::unique_lock<std::mutex> lock(checker_lock_);
     should_stop_ = true;
@@ -68,6 +68,7 @@ void PromotionCache::Cleanup() {
     }
   }
 }
+void PromotionCache::wait_for_checker_to_stop() { checker_.join(); }
 bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
                          PinnableSlice *value) const {
   auto timer_guard = internal_stats->hotrap_timers()

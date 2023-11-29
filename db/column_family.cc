@@ -677,7 +677,7 @@ bool ColumnFamilyData::UnrefAndTryDelete() {
   if (old_refs == 1) {
     assert(super_version_ == nullptr);
     for (auto& cache : *promotion_caches().Write()) {
-      cache.second.Cleanup();
+      cache.second.stop_checker_no_wait();
     }
     delete this;
     return true;
