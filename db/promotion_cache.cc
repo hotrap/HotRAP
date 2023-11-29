@@ -46,14 +46,28 @@ PromotionCache::PromotionCache(DBImpl &db, int target_level,
       checker_([this] { this->checker(); }) {}
 
 PromotionCache::~PromotionCache() {
+  assert(should_stop_);
+  assert(checker_.joinable());
+  checker_.join();
+}
+
+void PromotionCache::Cleanup() {
   {
     std::unique_lock<std::mutex> lock(checker_lock_);
     should_stop_ = true;
   }
   signal_check_.notify_one();
-  checker_.join();
+  // Checker won't read the queue any more, so no need to lock here
+  while (!checker_queue_.empty()) {
+    CheckerQueueElem elem = checker_queue_.front();
+    checker_queue_.pop();
+    SuperVersion *sv = elem.sv;
+    if (sv->Unref()) {
+      sv->Cleanup();
+      delete sv;
+    }
+  }
 }
-
 bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
                          PinnableSlice *value) const {
   auto timer_guard = internal_stats->hotrap_timers()
@@ -218,8 +232,8 @@ void PromotionCache::checker() {
     if (sv->Unref()) {
       db->mutex()->Lock();
       sv->Cleanup();
-      delete sv;
       db->mutex()->Unlock();
+      delete sv;
     }
   }
   printer_should_stop.store(true, std::memory_order_relaxed);
