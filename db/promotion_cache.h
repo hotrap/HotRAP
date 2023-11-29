@@ -52,7 +52,9 @@ class PromotionCache {
   PromotionCache &operator=(const PromotionCache &) = delete;
   ~PromotionCache();
   // Should be called with db mutex held
-  void Cleanup();
+  void stop_checker_no_wait();
+  // Not thread-safe
+  void wait_for_checker_to_stop();
   bool Get(InternalStats *internal_stats, Slice key,
            PinnableSlice *value) const;
   // REQUIRES: PromotionCaches mutex not held
