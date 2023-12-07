@@ -512,13 +512,15 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
       level_cache.second.stop_checker_no_wait();
     }
   }
-  if (!wait) {
-    return;
-  }
   for (ColumnFamilyData* cfd : *versions_->GetColumnFamilySet()) {
     for (auto& level_cache : *cfd->promotion_caches().Write()) {
+      // Enforce waiting to guarantee correctness.
+      // Not sure how RocksDB guarantees correctness without waiting.
       level_cache.second.wait_for_checker_to_stop();
     }
+  }
+  if (!wait) {
+    return;
   }
   WaitForBackgroundWork();
 }
