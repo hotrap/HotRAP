@@ -772,6 +772,8 @@ class DB {
     static const std::string kStats;
 
     static const std::string kCompactionStats;
+    static const std::string kRandReadBytes;
+    static const std::string kCompactionCPUMicros;
 
     //  "rocksdb.sstables" - returns a multi-line string summarizing current
     //      SST files.
