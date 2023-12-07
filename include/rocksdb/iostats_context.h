@@ -55,6 +55,8 @@ struct IOStatsContext {
   // number of bytes that has been read.
   uint64_t bytes_read;
 
+  uint64_t rand_read_bytes;
+
   // time spent in open() and fopen().
   uint64_t open_nanos;
   // time spent in fallocate().

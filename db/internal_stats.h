@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <string>
@@ -544,6 +545,11 @@ class InternalStats {
     comp_stats_[level].bytes_moved += amount;
   }
 
+  void IncRandReadBytes(size_t level, uint64_t n) {
+    assert(rand_read_bytes_.size() > level);
+    rand_read_bytes_[level].fetch_add(n, std::memory_order_relaxed);
+  }
+
   void AddCFStats(InternalCFStatsType type, uint64_t value) {
     has_cf_change_since_dump_ = true;
     cf_stats_value_[type] += value;
@@ -667,6 +673,8 @@ class InternalStats {
   uint64_t last_histogram_num = std::numeric_limits<uint64_t>::max();
   static const int kMaxNoChangePeriodSinceDump;
 
+  std::vector<std::atomic<uint64_t>> rand_read_bytes_;
+
   // Used to compute per-interval statistics
   struct CFStatsSnapshot {
     // ColumnFamily-level stats
@@ -762,6 +770,9 @@ class InternalStats {
   bool HandleLevelStats(std::string* value, Slice suffix);
   bool HandleStats(std::string* value, Slice suffix);
   bool HandleCompactionStats(std::string* value, Slice suffix);
+  bool HandleRandReadBytes(std::string* value, Slice suffix);
+  bool HandleCompactionCPUMicros(uint64_t* value, DBImpl* /*db*/,
+                                 Version* /*version*/);
   bool HandleCFMapStats(std::map<std::string, std::string>* compaction_stats,
                         Slice suffix);
   bool HandleCFStats(std::string* value, Slice suffix);

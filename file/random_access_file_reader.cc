@@ -203,6 +203,7 @@ IOStatus RandomAccessFileReader::Read(const IOOptions& opts, uint64_t offset,
         }
       }
       *result = Slice(scratch, res_len);
+      IOSTATS_ADD(rand_read_bytes, read_size);
     } else {
       size_t pos = 0;
       const char* res_scratch = nullptr;
