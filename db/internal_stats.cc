@@ -11,6 +11,7 @@
 #include "db/internal_stats.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cinttypes>
 #include <cstddef>
 #include <limits>
@@ -339,6 +340,8 @@ const std::string DB::Properties::kCompressionRatioAtLevelPrefix =
 const std::string DB::Properties::kStats = rocksdb_prefix + allstats;
 const std::string DB::Properties::kCompactionStats =
     rocksdb_prefix + compactions;
+const std::string DB::Properties::kRandReadBytes =
+    rocksdb_prefix + "randread.bytes";
 const std::string DB::Properties::kCompactionCPUMicros =
     rocksdb_prefix + compactions + ".cpu.micros";
 const std::string DB::Properties::kSSTables = rocksdb_prefix + sstables;
@@ -450,6 +453,9 @@ const std::unordered_map<std::string, DBPropertyInfo>
          {false, &InternalStats::HandleStats, nullptr, nullptr, nullptr}},
         {DB::Properties::kCompactionStats,
          {false, &InternalStats::HandleCompactionStats, nullptr, nullptr,
+          nullptr}},
+        {DB::Properties::kRandReadBytes,
+         {false, &InternalStats::HandleRandReadBytes, nullptr, nullptr,
           nullptr}},
         {DB::Properties::kCompactionCPUMicros,
          {false, nullptr, &InternalStats::HandleCompactionCPUMicros, nullptr,
@@ -609,11 +615,15 @@ InternalStats::InternalStats(int num_levels, SystemClock* clock,
       comp_stats_(num_levels),
       comp_stats_by_pri_(Env::Priority::TOTAL),
       file_read_latency_(num_levels),
+      rand_read_bytes_(num_levels),
       bg_error_count_(0),
       number_levels_(num_levels),
       clock_(clock),
       cfd_(cfd),
       started_at_(clock->NowMicros()) {
+  for (std::atomic<uint64_t>& x : rand_read_bytes_) {
+    x.store(0, std::memory_order_relaxed);
+  }
   Cache* block_cache = nullptr;
   bool ok = GetBlockCacheForStats(&block_cache);
   if (ok) {
@@ -962,6 +972,19 @@ bool InternalStats::HandleCompactionCPUMicros(uint64_t* value, DBImpl* /*db*/,
   *value = 0;
   for (int level = 0; level < number_levels_; ++level) {
     *value += comp_stats_[level].cpu_micros;
+  }
+  return true;
+}
+
+bool InternalStats::HandleRandReadBytes(std::string* value, Slice suffix) {
+  size_t num_levels = rand_read_bytes_.size();
+  assert(num_levels == (size_t)number_levels_);
+  for (size_t i = 0; i < num_levels; ++i) {
+    value->append(
+        std::to_string(rand_read_bytes_[i].load(std::memory_order_relaxed)));
+    if (i != num_levels - 1) {
+      value->push_back(' ');
+    }
   }
   return true;
 }
