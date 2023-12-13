@@ -512,6 +512,7 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
       level_cache.second.stop_checker_no_wait();
     }
   }
+  mutex_.Unlock();
   for (ColumnFamilyData* cfd : *versions_->GetColumnFamilySet()) {
     for (auto& level_cache : *cfd->promotion_caches().Write()) {
       // Enforce waiting to guarantee correctness.
@@ -519,6 +520,7 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
       level_cache.second.wait_for_checker_to_stop();
     }
   }
+  mutex_.Lock();
   if (!wait) {
     return;
   }
