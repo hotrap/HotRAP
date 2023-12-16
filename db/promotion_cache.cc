@@ -308,12 +308,18 @@ void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
   mut->size = 0;
   db.mutex()->Unlock();
 
-  std::unique_lock<std::mutex> lock_(checker_lock_);
-  checker_queue_.emplace(CheckerQueueElem{
-      .db = &db,
-      .sv = sv,
-      .iter = iter,
-  });
+  size_t queue_len;
+  {
+    std::unique_lock<std::mutex> lock_(checker_lock_);
+    checker_queue_.emplace(CheckerQueueElem{
+        .db = &db,
+        .sv = sv,
+        .iter = iter,
+    });
+    queue_len = checker_queue_.size();
+  }
+  ROCKS_LOG_INFO(db.immutable_db_options().logger, "Checker queue length %zu\n",
+                 queue_len);
   signal_check_.notify_one();
 }
 // [begin, end)
