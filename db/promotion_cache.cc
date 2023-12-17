@@ -1,10 +1,12 @@
 #include "promotion_cache.h"
 
+#include <bits/types/clockid_t.h>
 #include <pthread.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <functional>
 #include <ios>
 #include <mutex>
@@ -102,19 +104,27 @@ static inline uint64_t timestamp_ns() {
              std::chrono::system_clock::now().time_since_epoch())
       .count();
 }
+static inline time_t cpu_timestamp_ns(clockid_t clockid) {
+  struct timespec t;
+  if (-1 == clock_gettime(clockid, &t)) {
+    perror("clock_gettime");
+    return 0;
+  }
+  return t.tv_sec * 1000000000 + t.tv_nsec;
+}
 static void print_stats_in_bg(std::atomic<bool> *should_stop,
-                              std::string db_path, int target_level, int tid) {
+                              std::string db_path, int target_level,
+                              clockid_t clock_id) {
   std::string cputimes_path(db_path + "/checker-" +
-                            std::to_string(target_level) + "-cputimes");
-  std::string cputimes_command =
-      "ps -eT -o tid,cputimes | awk '{if ($1 == " + std::to_string(tid) +
-      ") print $2}' >> " + cputimes_path;
-  std::ofstream(cputimes_path) << "Timestamp(ns) cputime(s)\n";
+                            std::to_string(target_level) + "-cputime");
+  std::ofstream(cputimes_path) << "Timestamp(ns) cputime(ns)\n";
+  time_t start_cpu_ts = cpu_timestamp_ns(clock_id);
   while (!should_stop->load(std::memory_order_relaxed)) {
     auto timestamp = timestamp_ns();
 
-    std::ofstream(cputimes_path, std::ios_base::app) << timestamp << ' ';
-    std::system(cputimes_command.c_str());
+    std::ofstream(cputimes_path, std::ios_base::app)
+        << timestamp << ' ' << cpu_timestamp_ns(clock_id) - start_cpu_ts
+        << std::endl;
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
@@ -141,8 +151,10 @@ void PromotionCache::checker() {
     }
   };
   std::atomic<bool> printer_should_stop(false);
+  clockid_t clock_id;
+  pthread_getcpuclockid(pthread_self(), &clock_id);
   std::thread printer(print_stats_in_bg, &printer_should_stop,
-                      db_.db_absolute_path_, target_level_, gettid());
+                      db_.db_absolute_path_, target_level_, clock_id);
   for (;;) {
     CheckerQueueElem elem;
     {
