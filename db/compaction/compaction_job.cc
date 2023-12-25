@@ -1599,8 +1599,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       hot = hot_iter_.peek();
     }
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      hot_iter_.next();
       previous_decision_ = Decision::kStartLevel;
+      hot_iter_.next();
     } else {
       previous_decision_ = Decision::kNextLevel;
     }
