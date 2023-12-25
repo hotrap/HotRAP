@@ -1508,7 +1508,8 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
                       CompactionIterator& c_iter,
                       Slice start_level_smallest_user_key)
-      : c_(c),
+      : router_(router),
+        c_(c),
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(c_iter),
         hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
@@ -1532,8 +1533,12 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       hot = hot_iter_.peek();
     }
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
+      if (router_.IsStablyHot(*hot)) {
+        previous_decision_ = Decision::kStartLevel;
+      } else {
+        previous_decision_ = Decision::kNextLevel;
+      }
       hot_iter_.next();
-      previous_decision_ = Decision::kStartLevel;
     } else {
       previous_decision_ = Decision::kNextLevel;
     }
@@ -1559,6 +1564,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   }
 
  private:
+  CompactionRouter& router_;
   const Compaction& c_;
 
   const Comparator* ucmp_;
