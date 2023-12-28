@@ -1508,7 +1508,8 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   RouterIteratorIntraTier(CompactionRouter& router, const Compaction& c,
                           CompactionIterator& c_iter, Slice start, Bound end,
                           Tickers promotion_type)
-      : c_(c),
+      : router_(router),
+        c_(c),
         promotion_type_(promotion_type),
         promoted_bytes_(0),
         iter_(std::unique_ptr<Peekable<CompactionIterWrapper>>(
@@ -1523,18 +1524,24 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
     RecordTick(stats, promotion_type_, promoted_bytes_);
   }
   optional<Elem> next() override {
-    optional<IKeyValueLevel> ret = iter_.next();
-    if (!ret.has_value()) {
-      return nullopt;
+    for (;;) {
+      optional<IKeyValueLevel> ret = iter_.next();
+      if (!ret.has_value()) {
+        return nullopt;
+      }
+      IKeyValueLevel& kv = ret.value();
+      if (kv.level != -1) {
+        return make_optional<Elem>(Decision::kNextLevel, kv);
+      }
+      if (router_.IsStablyHot(kv.ikey.user_key)) {
+        promoted_bytes_ += kv.key.size() + kv.value.size();
+        return make_optional<Elem>(Decision::kNextLevel, kv);
+      }
     }
-    IKeyValueLevel& kv = ret.value();
-    if (kv.level == -1) {
-      promoted_bytes_ += kv.key.size() + kv.value.size();
-    }
-    return make_optional<Elem>(Decision::kNextLevel, kv);
   }
 
  private:
+  CompactionRouter& router_;
   const Compaction& c_;
   Tickers promotion_type_;
   size_t promoted_bytes_;
