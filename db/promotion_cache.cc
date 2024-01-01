@@ -42,9 +42,10 @@ PromotionCache::PromotionCache(DBImpl &db, int target_level,
     : db_(db),
       target_level_(target_level),
       ucmp_(ucmp),
-      mut_{MutableCache{std::map<std::string, std::string, UserKeyCompare>{
-                            UserKeyCompare(ucmp)},
-                        0}},
+      mut_{MutableCache{
+          std::map<std::string, PromotionCacheRecord, UserKeyCompare>{
+              UserKeyCompare(ucmp)},
+          0}},
       max_size_(0),
       should_stop_(false),
       checker_([this] { this->checker(); }) {}
@@ -83,7 +84,7 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
     // TODO: Avoid the copy here after upgrading to C++14
     auto it = mut->cache.find(key.ToString());
     if (it != mut->cache.end()) {
-      if (value) value->PinSelf(it->second);
+      if (value) value->PinSelf(it->second.value);
       return true;
     }
   }
@@ -92,7 +93,7 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
     // TODO: Avoid the copy here after upgrading to C++14
     auto it = imm.cache.find(key.ToString());
     if (it != imm.cache.end()) {
-      if (value) value->PinSelf(it->second);
+      if (value) value->PinSelf(it->second.value);
       return true;
     }
   }
@@ -187,10 +188,14 @@ void PromotionCache::checker() {
         const std::string &user_key = item.first;
         if (!router->IsStablyHot(user_key)) {
           RecordTick(stats, Tickers::NOT_STABLY_HOT_BYTES,
-                     user_key.size() + item.second.size());
+                     user_key.size() + item.second.value.size());
           continue;
         }
         stably_hot.insert(user_key);
+      }
+      for (const auto &item : cache.cache) {
+        router->Access(item.second.from_level, item.first,
+                       item.second.value.size());
       }
     }
     TimerGuard check_newer_version_start =
@@ -236,7 +241,7 @@ void PromotionCache::checker() {
       auto updated = cache.updated.Lock();
       for (const auto &item : cache.cache) {
         const std::string &user_key = item.first;
-        const std::string &value = item.second;
+        const std::string &value = item.second.value;
         if (stably_hot.find(user_key) == stably_hot.end()) continue;
         if (updated->find(user_key) != updated->end()) {
           RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
@@ -287,7 +292,7 @@ void PromotionCache::checker() {
 }
 void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
                              size_t write_buffer_size, std::string key,
-                             Slice value) {
+                             Slice value, int from_level) {
   {
     auto mut = mut_.Write();
     // TODO: Avoid requiring the ownership of key here after upgrading to C++14
@@ -296,8 +301,8 @@ void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
     mut->size += key.size() + value.size();
     size_t tot = mut->size + imm_list_.Read()->size;
     atomic_max_relaxed(max_size_, tot);
-    auto ret =
-        mut->cache.insert(std::make_pair(std::move(key), value.ToString()));
+    auto ret = mut->cache.insert(std::make_pair(
+        std::move(key), PromotionCacheRecord{value.ToString(), from_level}));
     (void)ret;
     assert(ret.second == true);
     if (mut->size < write_buffer_size) return;
@@ -315,7 +320,7 @@ void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
   imm_list->size += mut->size;
   auto iter = imm_list->list.emplace(imm_list->list.end(),
                                      std::move(mut->cache), mut->size);
-  mut->cache = std::map<std::string, std::string, UserKeyCompare>(
+  mut->cache = std::map<std::string, PromotionCacheRecord, UserKeyCompare>(
       cfd.ioptions()->user_comparator);
   mut->size = 0;
   db.mutex()->Unlock();
@@ -336,15 +341,18 @@ void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
 }
 // [begin, end)
 std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
-    Slice smallest, Slice largest) {
+    CompactionRouter *router, Slice smallest, Slice largest) {
   auto mut = mut_.Write();
   std::vector<std::pair<std::string, std::string>> ret;
   auto begin_it = mut->cache.lower_bound(smallest.ToString());
   auto it = begin_it;
   while (it != mut->cache.end() && ucmp_->Compare(it->first, largest) <= 0) {
-    // TODO: Is it possible to avoid copying here?
-    ret.emplace_back(it->first, it->second);
-    mut->size -= it->first.size() + it->second.size();
+    if (router->IsStablyHot(it->first)) {
+      // TODO: Is it possible to avoid copying here?
+      ret.emplace_back(it->first, it->second.value);
+    }
+    router->Access(it->second.from_level, it->first, it->second.value.size());
+    mut->size -= it->first.size() + it->second.value.size();
     ++it;
   }
   mut->cache.erase(begin_it, it);

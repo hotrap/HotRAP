@@ -107,7 +107,9 @@ void Compaction::SetInputVersion(Version* _input_version) {
       inputs_[i][j]->being_or_has_been_compacted = true;
     }
   }
-  if (cfd_->GetCurrentMutableCFOptions()->compaction_router == nullptr) return;
+  CompactionRouter* router =
+      cfd_->GetCurrentMutableCFOptions()->compaction_router;
+  if (router == nullptr) return;
   if (start_level_ != output_level_) {
     // Future work: Handle other cases
     assert(output_level_ == start_level_ + 1);
@@ -115,7 +117,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
     if (it != caches->end()) {
       assert(it->first == start_level_);
       auto records =
-          it->second.TakeRange(smallest_user_key_, largest_user_key_);
+          it->second.TakeRange(router, smallest_user_key_, largest_user_key_);
       for (auto& record : records) {
         auto& user_key = record.first;
         auto& value = record.second;
@@ -131,7 +133,8 @@ void Compaction::SetInputVersion(Version* _input_version) {
   auto it = caches->find(output_level_);
   if (it != caches->end()) {
     assert(it->first == output_level_);
-    auto records = it->second.TakeRange(smallest_user_key_, largest_user_key_);
+    auto records =
+        it->second.TakeRange(router, smallest_user_key_, largest_user_key_);
     // Future work: Handle the other case which is possible if the router
     // changes.
     assert(cached_records_to_promote_.empty());

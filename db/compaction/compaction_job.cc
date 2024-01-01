@@ -1524,20 +1524,16 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
     RecordTick(stats, promotion_type_, promoted_bytes_);
   }
   optional<Elem> next() override {
-    for (;;) {
-      optional<IKeyValueLevel> ret = iter_.next();
-      if (!ret.has_value()) {
-        return nullopt;
-      }
-      IKeyValueLevel& kv = ret.value();
-      if (kv.level != -1) {
-        return make_optional<Elem>(Decision::kNextLevel, kv);
-      }
-      if (router_.IsStablyHot(kv.ikey.user_key)) {
-        promoted_bytes_ += kv.key.size() + kv.value.size();
-        return make_optional<Elem>(Decision::kNextLevel, kv);
-      }
+    optional<IKeyValueLevel> ret = iter_.next();
+    if (!ret.has_value()) {
+      return nullopt;
     }
+    IKeyValueLevel& kv = ret.value();
+    if (kv.level != -1) {
+      return make_optional<Elem>(Decision::kNextLevel, kv);
+    }
+    promoted_bytes_ += kv.key.size() + kv.value.size();
+    return make_optional<Elem>(Decision::kNextLevel, kv);
   }
 
  private:
@@ -1607,11 +1603,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       hot = hot_iter_.peek();
     }
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      if (kv.level == c_.start_level() || router_.IsStablyHot(*hot)) {
-        previous_decision_ = Decision::kStartLevel;
-      } else {
-        previous_decision_ = Decision::kNextLevel;
-      }
+      previous_decision_ = Decision::kStartLevel;
       hot_iter_.next();
     } else {
       previous_decision_ = Decision::kNextLevel;
