@@ -1508,7 +1508,8 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   RouterIteratorIntraTier(CompactionRouter& router, const Compaction& c,
                           CompactionIterator& c_iter, Slice start, Bound end,
                           Tickers promotion_type)
-      : c_(c),
+      : router_(router),
+        c_(c),
         promotion_type_(promotion_type),
         promoted_bytes_(0),
         iter_(std::unique_ptr<Peekable<CompactionIterWrapper>>(
@@ -1528,13 +1529,15 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
       return nullopt;
     }
     IKeyValueLevel& kv = ret.value();
-    if (kv.level == -1) {
-      promoted_bytes_ += kv.key.size() + kv.value.size();
+    if (kv.level != -1) {
+      return make_optional<Elem>(Decision::kNextLevel, kv);
     }
+    promoted_bytes_ += kv.key.size() + kv.value.size();
     return make_optional<Elem>(Decision::kNextLevel, kv);
   }
 
  private:
+  CompactionRouter& router_;
   const Compaction& c_;
   Tickers promotion_type_;
   size_t promoted_bytes_;
@@ -1591,11 +1594,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       return previous_decision_;
     }
     if (kv.level == -1) {
-      if (router_.IsStablyHot(kv.ikey.user_key)) {
-        previous_decision_ = Decision::kStartLevel;
-      } else {
-        previous_decision_ = Decision::kNextLevel;
-      }
+      previous_decision_ = Decision::kStartLevel;
     } else {
       previous_decision_ = Decision::kNextLevel;
     }

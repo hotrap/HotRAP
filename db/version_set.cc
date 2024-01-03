@@ -1967,11 +1967,16 @@ static void TryPromote(
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value) return;
+  if (router->Tier(hit_level) == 0) {
+    auto timer_guard =
+        cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
+    router->Access(hit_level, user_key, value->size());
+    return;
+  }
   auto timer_guard = cfd.internal_stats()
                          ->hotrap_timers()
                          .timer(TimerType::kTryPromote)
                          .start();
-  if (router->Tier(hit_level) == 0) return;
   assert(hit_level > 0);
   int target_level = hit_level - 1;
   while (router->Tier(target_level) == 1) {
@@ -1996,7 +2001,7 @@ static void TryPromote(
     cache = &it->second;
   }
   cache->Promote(*db, cfd, mutable_cf_options.write_buffer_size,
-                 user_key.ToString(), *value);
+                 user_key.ToString(), *value, hit_level);
   return;
 }
 static void Access(DBImpl* db, ColumnFamilyData& cfd,
@@ -2147,8 +2152,6 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
       // TODO: How to update VisCnts?
       break;
     case GetContext::kFound:
-      Access(env_get.db, *cfd_, mutable_cf_options_, hit_level, user_key,
-             env_get.value);
       TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
                  hit_level, user_key, env_get.value);
       HandleFound(env_get.read_options, env_get.get_context, hit_level,

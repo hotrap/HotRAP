@@ -31,12 +31,17 @@ class UserKeyCompare {
   const Comparator *ucmp_;
 };
 
+struct PromotionCacheRecord {
+  std::string value;
+  int from_level;  // Needed by Access() interface
+};
+
 struct ImmPromotionCache {
-  std::map<std::string, std::string, UserKeyCompare> cache;
+  std::map<std::string, PromotionCacheRecord, UserKeyCompare> cache;
   size_t size;
   MutexProtected<std::unordered_set<std::string>> updated;
   ImmPromotionCache(
-      std::map<std::string, std::string, UserKeyCompare> &&arg_cache,
+      std::map<std::string, PromotionCacheRecord, UserKeyCompare> &&arg_cache,
       size_t arg_size)
       : cache(std::move(arg_cache)), size(arg_size) {}
 };
@@ -59,10 +64,10 @@ class PromotionCache {
            PinnableSlice *value) const;
   // REQUIRES: PromotionCaches mutex not held
   void Promote(DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size,
-               std::string key, Slice value);
+               std::string key, Slice value, int from_level);
   // [begin, end)
-  std::vector<std::pair<std::string, std::string>> TakeRange(Slice smallest,
-                                                             Slice largest);
+  std::vector<std::pair<std::string, std::string>> TakeRange(
+      CompactionRouter *router, Slice smallest, Slice largest);
   // REQUIRES: DB mutex held
   void Flush();
 
@@ -74,7 +79,7 @@ class PromotionCache {
 
  private:
   struct MutableCache {
-    std::map<std::string, std::string, UserKeyCompare> cache;
+    std::map<std::string, PromotionCacheRecord, UserKeyCompare> cache;
     size_t size;
   };
   struct CheckerQueueElem {
