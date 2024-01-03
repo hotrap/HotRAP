@@ -1523,18 +1523,16 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
     RecordTick(stats, promotion_type_, promoted_bytes_);
   }
   optional<Elem> next() override {
-    for (;;) {
-      optional<IKeyValueLevel> ret = iter_.next();
-      if (!ret.has_value()) {
-        return nullopt;
-      }
-      IKeyValueLevel& kv = ret.value();
-      if (kv.level != -1) {
-        return make_optional<Elem>(Decision::kNextLevel, kv);
-      }
-      promoted_bytes_ += kv.key.size() + kv.value.size();
+    optional<IKeyValueLevel> ret = iter_.next();
+    if (!ret.has_value()) {
+      return nullopt;
+    }
+    IKeyValueLevel& kv = ret.value();
+    if (kv.level != -1) {
       return make_optional<Elem>(Decision::kNextLevel, kv);
     }
+    promoted_bytes_ += kv.key.size() + kv.value.size();
+    return make_optional<Elem>(Decision::kNextLevel, kv);
   }
 
  private:
