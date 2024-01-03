@@ -104,6 +104,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
   for (size_t i = 0; i < num_input_levels(); i++) {
     for (size_t j = 0; j < inputs_[i].size(); j++) {
       assert(!inputs_[i][j]->being_or_has_been_compacted);
+      // Must hold promotion cache lock.
       inputs_[i][j]->being_or_has_been_compacted = true;
     }
   }
