@@ -1533,11 +1533,7 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
       hot = hot_iter_.peek();
     }
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      if (kv.level == c_.start_level() || router_.IsStablyHot(*hot)) {
-        previous_decision_ = Decision::kStartLevel;
-      } else {
-        previous_decision_ = Decision::kNextLevel;
-      }
+      previous_decision_ = Decision::kStartLevel;
       hot_iter_.next();
     } else {
       previous_decision_ = Decision::kNextLevel;
