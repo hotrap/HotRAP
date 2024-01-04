@@ -45,7 +45,6 @@ const char* timer_names[] = {
     "GetInFile",
     "HandleFound",
     "HandleNotFound",
-    "Access",
     "PromotionCacheGet",
     "TryPromote",
     "CheckStablyHot",

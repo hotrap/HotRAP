@@ -113,7 +113,6 @@ enum class TimerType : size_t {
   kGetInFile,
   kHandleFound,
   kHandleNotFound,
-  kAccess,
   kPromotionCacheGet,
   kTryPromote,
   kCheckStablyHot,
