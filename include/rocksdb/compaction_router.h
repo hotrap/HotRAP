@@ -176,10 +176,13 @@ class CompactionRouter : public Customizable {
                                  const CompactionRouter **result);
   const char *Name() const override = 0;
   virtual size_t Tier(int level) = 0;
-  virtual void Access(int level, Slice key, size_t vlen) = 0;
+  virtual void Access(Slice key, size_t vlen) = 0;
   virtual Iter LowerBound(Slice key) = 0;
   virtual size_t RangeHotSize(Slice smallest, Slice largest) = 0;
   virtual bool IsStablyHot(Slice key) = 0;
+
+  // For statistics
+  virtual void HitLevel(int level, rocksdb::Slice key) = 0;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

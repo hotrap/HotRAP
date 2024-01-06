@@ -149,7 +149,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
                            start_level_largest_user_key) <= 0) {
         auto mut_it = mut->cache.find(start_level_it.user_key().ToString());
         if (mut_it != mut->cache.end()) {
-          mut->size -= mut_it->first.size() + mut_it->second.value.size();
+          mut->size -= mut_it->first.size() + mut_it->second.size();
           mut->cache.erase(mut_it);
         }
         start_level_it.Next();
