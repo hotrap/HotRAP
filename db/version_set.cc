@@ -1968,9 +1968,7 @@ static void TryPromote(
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value) return;
   if (router->Tier(hit_level) == 0) {
-    auto timer_guard =
-        cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
-    router->Access(hit_level, user_key, value->size());
+    router->Access(user_key, value->size());
     return;
   }
   auto timer_guard = cfd.internal_stats()
@@ -2001,18 +1999,8 @@ static void TryPromote(
     cache = &it->second;
   }
   cache->Promote(*db, cfd, mutable_cf_options.write_buffer_size,
-                 user_key.ToString(), *value, hit_level);
+                 user_key.ToString(), *value);
   return;
-}
-static void Access(DBImpl* db, ColumnFamilyData& cfd,
-                   const MutableCFOptions& mutable_cf_options, int hit_level,
-                   Slice user_key, PinnableSlice* value) {
-  if (db == nullptr) return;
-  CompactionRouter* router = mutable_cf_options.compaction_router;
-  if (!router || !value) return;
-  auto timer_guard =
-      cfd.internal_stats()->hotrap_timers().timer(TimerType::kAccess).start();
-  router->Access(hit_level, user_key, value->size());
 }
 void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
@@ -2022,6 +2010,11 @@ void Version::HandleFound(const ReadOptions& read_options,
                          ->hotrap_timers()
                          .timer(TimerType::kHandleFound)
                          .start();
+
+  CompactionRouter* router = mutable_cf_options_.compaction_router;
+  if (!router) return;
+  router->HitLevel(hit_level, user_key);
+
   if (hit_level == 0) {
     RecordTick(db_statistics_, GET_HIT_L0);
   } else if (hit_level == 1) {
@@ -2260,8 +2253,10 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
       assert(it != caches->end());
       const auto& cache = it->second;
       if (cache.Get(cfd_->internal_stats(), k.user_key(), value)) {
-        Access(env_get.db, *cfd_, mutable_cf_options_, cache_level, user_key,
-               env_get.value);
+        CompactionRouter* router = mutable_cf_options_.compaction_router;
+        if (router) {
+          router->Access(k.user_key(), value->size());
+        }
         HandleFound(env_get.read_options, env_get.get_context,
                     fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
                     env_get.is_blob_index, env_get.do_merge);
