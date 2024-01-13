@@ -2088,7 +2088,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
   CompactionRouter* router = mutable_cf_options_.compaction_router;
-  if (router->Tier(hit_level) > 0) {
+  if (router && router->Tier(hit_level) > 0) {
     env_get.cd_files.push_back(*f.file_metadata);
   }
   if (env_get.max_covering_tombstone_seq > 0) {
