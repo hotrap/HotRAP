@@ -115,6 +115,7 @@ enum class TimerType : size_t {
   kHandleNotFound,
   kPromotionCacheGet,
   kTryPromote,
+  kPromoteToCache,
   kCheckStablyHot,
   kCheckNewerVersion,
   kEnd,

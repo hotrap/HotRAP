@@ -291,6 +291,10 @@ void PromotionCache::checker() {
 void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
                              size_t write_buffer_size, std::string key,
                              Slice value) {
+  auto guard = cfd.internal_stats()
+                   ->hotrap_timers()
+                   .timer(TimerType::kPromoteToCache)
+                   .start();
   {
     auto mut = mut_.Write();
     // TODO: Avoid requiring the ownership of key here after upgrading to C++14

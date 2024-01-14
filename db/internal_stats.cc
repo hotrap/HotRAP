@@ -47,6 +47,7 @@ const char* timer_names[] = {
     "HandleNotFound",
     "PromotionCacheGet",
     "TryPromote",
+    "PromoteToCache",
     "CheckStablyHot",
     "CheckNewerVersion",
 };
