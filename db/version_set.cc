@@ -2107,6 +2107,8 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   StopWatchNano timer(clock_, timer_enabled /* auto_start */);
   auto get_start = rusty::time::Instant::now();
   uint64_t prev_rand_read_bytes = IOSTATS(rand_read_bytes);
+  uint64_t prev_num_cache_data_miss =
+      env_get.get_context.get_context_stats_.num_cache_data_miss;
   env_get.status = table_cache_->Get(
       env_get.read_options, *internal_comparator(), *f.file_metadata, ikey,
       &env_get.get_context, mutable_cf_options_.prefix_extractor.get(),
@@ -2117,6 +2119,8 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   if (rand_read_bytes) {
     cfd_->internal_stats()->IncRandReadBytes(hit_level, rand_read_bytes);
   }
+  uint64_t num_cache_data_miss =
+      env_get.get_context.get_context_stats_.num_cache_data_miss;
   hotrap_timers.timer(TimerType::kTableCacheGet).add(get_start.elapsed());
   // TODO: examine the behavior for corrupted key
   if (timer_enabled) {
@@ -2145,8 +2149,10 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
       // TODO: How to update VisCnts?
       break;
     case GetContext::kFound:
-      TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
-                 hit_level, user_key, env_get.value);
+      if (num_cache_data_miss > prev_num_cache_data_miss) {
+        TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
+                   hit_level, user_key, env_get.value);
+      }
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
                   env_get.is_blob_index, env_get.do_merge);
