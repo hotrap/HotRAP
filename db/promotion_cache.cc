@@ -25,26 +25,12 @@
 #include "util/autovector.h"
 
 namespace ROCKSDB_NAMESPACE {
-// Returns the previous value
-template <typename T>
-T atomic_max_relaxed(std::atomic<T> &dst, T src) {
-  T x = dst.load(std::memory_order_relaxed);
-  while (src > x) {
-    T expected = x;
-    if (dst.compare_exchange_weak(expected, src)) break;
-    x = dst.load(std::memory_order_relaxed);
-  }
-  return x;
-}
 
 PromotionCache::PromotionCache(DBImpl &db, int target_level,
                                const Comparator *ucmp)
     : db_(db),
       target_level_(target_level),
-      ucmp_(ucmp),
-      mut_{MutableCache{std::map<std::string, std::string, UserKeyCompare>{
-                            UserKeyCompare(ucmp)},
-                        0}},
+      mut_(ucmp),
       max_size_(0),
       should_stop_(false),
       checker_([this] { this->checker(); }) {}
@@ -288,33 +274,22 @@ void PromotionCache::checker() {
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
-void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
-                             size_t write_buffer_size, std::string key,
-                             Slice value) {
+size_t MutablePromotionCache::Insert(std::string key, Slice value) {
+  // TODO: Avoid requiring the ownership of key here after upgrading to C++14
+  auto it = cache.find(key);
+  if (it != cache.end()) return size;
+  size += key.size() + value.size();
+  auto ret = cache.insert(std::make_pair(std::move(key), value.ToString()));
+  (void)ret;
+  assert(ret.second == true);
+  return size;
+}
+void PromotionCache::SwitchMutablePromotionCache(
+    DBImpl &db, ColumnFamilyData &cfd, MutablePromotionCache *mut) const {
   auto guard = cfd.internal_stats()
                    ->hotrap_timers()
-                   .timer(TimerType::kPromoteToCache)
+                   .timer(TimerType::kSwitchMutPromotionCache)
                    .start();
-  {
-    auto mut = mut_.Write();
-    // TODO: Avoid requiring the ownership of key here after upgrading to C++14
-    auto it = mut->cache.find(key);
-    if (it != mut->cache.end()) return;
-    mut->size += key.size() + value.size();
-    size_t tot = mut->size + imm_list_.Read()->size;
-    atomic_max_relaxed(max_size_, tot);
-    auto ret =
-        mut->cache.insert(std::make_pair(std::move(key), value.ToString()));
-    (void)ret;
-    assert(ret.second == true);
-    if (mut->size < write_buffer_size) return;
-  }
-  db.mutex()->Lock();
-  auto mut = mut_.Write();
-  if (mut->size < write_buffer_size) {
-    db.mutex()->Unlock();
-    return;
-  }
   SuperVersion *sv = cfd.GetSuperVersion();
   // check_newer_version is responsible to unref it
   sv->Ref();
@@ -342,22 +317,22 @@ void PromotionCache::Promote(DBImpl &db, ColumnFamilyData &cfd,
   signal_check_.notify_one();
 }
 // [begin, end)
-std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
-    CompactionRouter *router, Slice smallest, Slice largest) {
-  auto mut = mut_.Write();
+std::vector<std::pair<std::string, std::string>>
+MutablePromotionCache::TakeRange(CompactionRouter *router, Slice smallest,
+                                 Slice largest) {
   std::vector<std::pair<std::string, std::string>> ret;
-  auto begin_it = mut->cache.lower_bound(smallest.ToString());
+  auto begin_it = cache.lower_bound(smallest.ToString());
   auto it = begin_it;
-  while (it != mut->cache.end() && ucmp_->Compare(it->first, largest) <= 0) {
+  while (it != cache.end() && ucmp_->Compare(it->first, largest) <= 0) {
     if (router->IsStablyHot(it->first)) {
       // TODO: Is it possible to avoid copying here?
       ret.emplace_back(it->first, it->second);
     }
     router->Access(it->first, it->second.size());
-    mut->size -= it->first.size() + it->second.size();
+    size -= it->first.size() + it->second.size();
     ++it;
   }
-  mut->cache.erase(begin_it, it);
+  cache.erase(begin_it, it);
   return ret;
 }
 }  // namespace ROCKSDB_NAMESPACE

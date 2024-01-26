@@ -1980,26 +1980,49 @@ static void TryPromote(
   while (router->Tier(target_level) == 1) {
     target_level -= 1;
   }
-  PromotionCache* cache;
+  const PromotionCache* cache;
   {
-    auto caches = cfd.promotion_caches().Write();
-    for (auto f : cd_files) {
-      if (f.get().being_or_has_been_compacted) return;
-    }
+    auto caches = cfd.promotion_caches().Read();
     // The first whose level <= target_level
     auto it = caches->find(target_level);
     if (it == caches->end()) {
-      auto ret = caches->emplace(
-          std::piecewise_construct, std::make_tuple(target_level),
-          std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
-      it = ret.first;
-      assert(ret.second);
+      cache = nullptr;
+    } else {
+      cache = &it->second;
     }
+  }
+  if (cache == nullptr) {
+    auto caches = cfd.promotion_caches().Write();
+    auto ret = caches->emplace(
+        std::piecewise_construct, std::make_tuple(target_level),
+        std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
+    auto it = ret.first;
     assert(it->first == target_level);
     cache = &it->second;
   }
-  cache->Promote(*db, cfd, mutable_cf_options.write_buffer_size,
-                 user_key.ToString(), *value);
+  size_t mut_size;
+  {
+    auto guard = cfd.internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kInsertToCache)
+                     .start();
+    auto mut = cache->mut().Write();
+    for (auto f : cd_files) {
+      if (f.get().being_or_has_been_compacted) return;
+    }
+    mut_size = mut->Insert(user_key.ToString(), *value);
+    size_t tot = mut_size + cache->imm_list().Read()->size;
+    rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
+    if (mut_size < mutable_cf_options.write_buffer_size) return;
+  }
+  // SwitchMutablePromotionCache is responsible to unlock it.
+  db->mutex()->Lock();
+  auto mut = cache->mut().Write();
+  if (mut_size < mutable_cf_options.write_buffer_size) {
+    db->mutex()->Unlock();
+    return;
+  }
+  cache->SwitchMutablePromotionCache(*db, cfd, &*mut);
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,
