@@ -260,14 +260,16 @@ void PromotionCache::checker() {
     svc.Clean();
     RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, flushed_bytes);
 
+    std::list<ImmPromotionCache> tmp;
     {
       auto caches = cfd->promotion_caches().Read();
       auto it = caches->find(target_level_);
       assert(it->first == target_level_);
       auto list = it->second.imm_list().Write();
       list->size -= iter->size;
-      list->list.erase(iter);
+      tmp.splice(tmp.begin(), list->list, iter);
     }
+    // tmp will be freed without holding the lock of imm_list
 
     if (sv->Unref()) {
       db->mutex()->Lock();
