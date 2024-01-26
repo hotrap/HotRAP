@@ -2011,10 +2011,11 @@ static void TryPromote(
       if (f.get().being_or_has_been_compacted) return;
     }
     mut_size = mut->Insert(cfd.internal_stats(), user_key.ToString(), *value);
-    size_t tot = mut_size + cache->imm_list().Read()->size;
-    rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
-    if (mut_size < mutable_cf_options.write_buffer_size) return;
   }
+  size_t tot = mut_size + cache->imm_list().Read()->size;
+  rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
+  if (mut_size < mutable_cf_options.write_buffer_size) return;
+
   // SwitchMutablePromotionCache is responsible to unlock it.
   db->mutex()->Lock();
   auto mut = cache->mut().Write();
