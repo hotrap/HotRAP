@@ -303,10 +303,13 @@ void PromotionCache::SwitchMutablePromotionCache(
   SuperVersion *sv = cfd.GetSuperVersion();
   // check_newer_version is responsible to unref it
   sv->Ref();
-  auto imm_list = imm_list_.Write();
-  imm_list->size += mut->size;
-  auto iter = imm_list->list.emplace(imm_list->list.end(),
-                                     std::move(mut->cache), mut->size);
+  std::list<rocksdb::ImmPromotionCache>::iterator iter;
+  {
+    auto imm_list = imm_list_.Write();
+    imm_list->size += mut->size;
+    iter = imm_list->list.emplace(imm_list->list.end(), std::move(mut->cache),
+                                  mut->size);
+  }
   mut->cache = std::map<std::string, std::string, UserKeyCompare>(
       cfd.ioptions()->user_comparator);
   mut->size = 0;
