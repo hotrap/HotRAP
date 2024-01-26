@@ -52,6 +52,7 @@ const char* timer_names[] = {
     "InsertToCache",
     "MutPCInsert",
     "SwitchMutPromotionCache",
+    "TakeRange",
     "CheckStablyHot",
     "CheckNewerVersion",
 };

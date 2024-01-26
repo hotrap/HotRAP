@@ -326,8 +326,11 @@ void PromotionCache::SwitchMutablePromotionCache(
 }
 // [begin, end)
 std::vector<std::pair<std::string, std::string>>
-MutablePromotionCache::TakeRange(CompactionRouter *router, Slice smallest,
+MutablePromotionCache::TakeRange(InternalStats *internal_stats,
+                                 CompactionRouter *router, Slice smallest,
                                  Slice largest) {
+  auto guard =
+      internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<std::string, std::string>> ret;
   auto begin_it = cache.lower_bound(smallest.ToString());
   auto it = begin_it;

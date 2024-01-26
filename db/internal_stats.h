@@ -120,6 +120,7 @@ enum class TimerType : size_t {
   kInsertToCache,
   kMutPCInsert,
   kSwitchMutPromotionCache,
+  kTakeRange,
   kCheckStablyHot,
   kCheckNewerVersion,
   kEnd,

@@ -123,10 +123,13 @@ void Compaction::SetInputVersion(Version* _input_version) {
       mark_fn();
     } else {
       assert(it->first == start_level_);
-      auto mut = it->second.mut().Write();
-      mark_fn();
-      auto records =
-          mut->TakeRange(router, smallest_user_key_, largest_user_key_);
+      std::vector<std::pair<std::string, std::string>> records;
+      {
+        auto mut = it->second.mut().Write();
+        mark_fn();
+        records = mut->TakeRange(cfd_->internal_stats(), router,
+                                 smallest_user_key_, largest_user_key_);
+      }
       for (auto& record : records) {
         auto& user_key = record.first;
         auto& value = record.second;
@@ -144,7 +147,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
   if (it != caches->end()) {
     assert(it->first == output_level_);
     auto records = it->second.mut().Write()->TakeRange(
-        router, smallest_user_key_, largest_user_key_);
+        cfd_->internal_stats(), router, smallest_user_key_, largest_user_key_);
     // Future work: Handle the other case which is possible if the router
     // changes.
     assert(cached_records_to_promote_.empty());

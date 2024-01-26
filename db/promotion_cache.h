@@ -53,7 +53,8 @@ struct MutablePromotionCache {
   size_t Insert(InternalStats *internal_stats, std::string key, Slice value);
   // [begin, end)
   std::vector<std::pair<std::string, std::string>> TakeRange(
-      CompactionRouter *router, Slice smallest, Slice largest);
+      InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
+      Slice largest);
 
  private:
   const Comparator *ucmp_;
