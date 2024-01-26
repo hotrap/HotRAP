@@ -2010,7 +2010,7 @@ static void TryPromote(
     for (auto f : cd_files) {
       if (f.get().being_or_has_been_compacted) return;
     }
-    mut_size = mut->Insert(user_key.ToString(), *value);
+    mut_size = mut->Insert(cfd.internal_stats(), user_key.ToString(), *value);
     size_t tot = mut_size + cache->imm_list().Read()->size;
     rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
     if (mut_size < mutable_cf_options.write_buffer_size) return;

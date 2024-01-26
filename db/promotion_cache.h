@@ -50,7 +50,7 @@ struct MutablePromotionCache {
   MutablePromotionCache(const Comparator *ucmp)
       : ucmp_(ucmp), cache(UserKeyCompare(ucmp)), size(0) {}
   // Return the size of the mutable promotion cache
-  size_t Insert(std::string key, Slice value);
+  size_t Insert(InternalStats *internal_stats, std::string key, Slice value);
   // [begin, end)
   std::vector<std::pair<std::string, std::string>> TakeRange(
       CompactionRouter *router, Slice smallest, Slice largest);

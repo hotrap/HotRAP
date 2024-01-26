@@ -14,6 +14,7 @@
 
 #include "column_family.h"
 #include "db/db_impl/db_impl.h"
+#include "db/internal_stats.h"
 #include "db/job_context.h"
 #include "db/lookup_key.h"
 #include "db/version_set.h"
@@ -66,6 +67,8 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
                          .start();
   {
     auto mut = mut_.Read();
+    auto timer_guard_mut =
+        internal_stats->hotrap_timers().timer(TimerType::kMutPCGet).start();
     // TODO: Avoid the copy here after upgrading to C++14
     auto it = mut->cache.find(key.ToString());
     if (it != mut->cache.end()) {
@@ -75,6 +78,8 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
   }
   auto imm_list = imm_list_.Read();
   for (const ImmPromotionCache &imm : imm_list->list) {
+    auto timer_guard_imm =
+        internal_stats->hotrap_timers().timer(TimerType::kImmPCGet).start();
     // TODO: Avoid the copy here after upgrading to C++14
     auto it = imm.cache.find(key.ToString());
     if (it != imm.cache.end()) {
@@ -274,7 +279,10 @@ void PromotionCache::checker() {
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
-size_t MutablePromotionCache::Insert(std::string key, Slice value) {
+size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
+                                     std::string key, Slice value) {
+  auto guard =
+      internal_stats->hotrap_timers().timer(TimerType::kMutPCInsert).start();
   // TODO: Avoid requiring the ownership of key here after upgrading to C++14
   auto it = cache.find(key);
   if (it != cache.end()) return size;
