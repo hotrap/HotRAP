@@ -617,6 +617,11 @@ ColumnFamilyData::ColumnFamilyData(
 // DB mutex held
 ColumnFamilyData::~ColumnFamilyData() {
   assert(refs_.load(std::memory_order_relaxed) == 0);
+
+  for (auto& cache : *promotion_caches().Write()) {
+    cache.second.stop_checker_no_wait();
+  }
+
   // remove from linked list
   auto prev = prev_;
   auto next = next_;
@@ -676,9 +681,6 @@ bool ColumnFamilyData::UnrefAndTryDelete() {
 
   if (old_refs == 1) {
     assert(super_version_ == nullptr);
-    for (auto& cache : *promotion_caches().Write()) {
-      cache.second.stop_checker_no_wait();
-    }
     delete this;
     return true;
   }

@@ -20,6 +20,8 @@ class DBImpl;
 class InternalStats;
 struct SuperVersion;
 
+class PromotionCache;
+
 class UserKeyCompare {
  public:
   UserKeyCompare(const Comparator *ucmp) : ucmp_(ucmp) {}
@@ -44,6 +46,22 @@ struct ImmPromotionCacheList {
   std::list<ImmPromotionCache> list;
   size_t size = 0;
 };
+struct MutablePromotionCache {
+  MutablePromotionCache(const Comparator *ucmp)
+      : ucmp_(ucmp), cache(UserKeyCompare(ucmp)), size(0) {}
+  // Return the size of the mutable promotion cache
+  size_t Insert(InternalStats *internal_stats, std::string key, Slice value);
+  // [begin, end)
+  std::vector<std::pair<std::string, std::string>> TakeRange(
+      InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
+      Slice largest);
+
+ private:
+  const Comparator *ucmp_;
+  std::map<std::string, std::string, UserKeyCompare> cache;
+  size_t size;
+  friend class PromotionCache;
+};
 
 class PromotionCache {
  public:
@@ -57,26 +75,21 @@ class PromotionCache {
   void wait_for_checker_to_stop();
   bool Get(InternalStats *internal_stats, Slice key,
            PinnableSlice *value) const;
-  // REQUIRES: PromotionCaches mutex not held
-  void Promote(DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size,
-               std::string key, Slice value);
-  // [begin, end)
-  std::vector<std::pair<std::string, std::string>> TakeRange(
-      CompactionRouter *router, Slice smallest, Slice largest);
+  // REQUIRES: DB mutex held
+  // Will unlock the DB mutex.
+  void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
+                                   MutablePromotionCache *mut) const;
   // REQUIRES: DB mutex held
   void Flush();
 
+  const RWMutexProtected<MutablePromotionCache> &mut() const { return mut_; }
   const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
     return imm_list_;
   }
 
-  size_t max_size() const { return max_size_.load(std::memory_order_relaxed); }
+  std::atomic<size_t> &max_size() const { return max_size_; }
 
  private:
-  struct MutableCache {
-    std::map<std::string, std::string, UserKeyCompare> cache;
-    size_t size;
-  };
   struct CheckerQueueElem {
     DBImpl *db;
     SuperVersion *sv;
@@ -86,14 +99,13 @@ class PromotionCache {
 
   DBImpl &db_;
   const int target_level_;
-  const Comparator *ucmp_;
-  RWMutexProtected<MutableCache> mut_;
+  RWMutexProtected<MutablePromotionCache> mut_;
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
-  std::atomic<size_t> max_size_;
+  mutable std::atomic<size_t> max_size_;
 
-  std::mutex checker_lock_;
-  std::queue<CheckerQueueElem> checker_queue_;
-  std::condition_variable signal_check_;
+  mutable std::mutex checker_lock_;
+  mutable std::queue<CheckerQueueElem> checker_queue_;
+  mutable std::condition_variable signal_check_;
   bool should_stop_;
   std::thread checker_;
 };

@@ -46,7 +46,13 @@ const char* timer_names[] = {
     "HandleFound",
     "HandleNotFound",
     "PromotionCacheGet",
+    "MutPCGet",
+    "ImmPCGet",
     "TryPromote",
+    "InsertToCache",
+    "MutPCInsert",
+    "SwitchMutPromotionCache",
+    "TakeRange",
     "CheckStablyHot",
     "CheckNewerVersion",
 };
@@ -1928,7 +1934,9 @@ void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
   auto caches = cfd_->promotion_caches().Read();
   for (const auto& cache : *caches) {
     value->append("compaction_cache at level " + std::to_string(cache.first) +
-                  ": max_size " + std::to_string(cache.second.max_size()));
+                  ": max_size " +
+                  std::to_string(
+                      cache.second.max_size().load(std::memory_order_relaxed)));
   }
 }
 
