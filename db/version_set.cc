@@ -1980,26 +1980,50 @@ static void TryPromote(
   while (router->Tier(target_level) == 1) {
     target_level -= 1;
   }
-  PromotionCache* cache;
+  const PromotionCache* cache;
   {
-    auto caches = cfd.promotion_caches().Write();
-    for (auto f : cd_files) {
-      if (f.get().being_or_has_been_compacted) return;
-    }
+    auto caches = cfd.promotion_caches().Read();
     // The first whose level <= target_level
     auto it = caches->find(target_level);
     if (it == caches->end()) {
-      auto ret = caches->emplace(
-          std::piecewise_construct, std::make_tuple(target_level),
-          std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
-      it = ret.first;
-      assert(ret.second);
+      cache = nullptr;
+    } else {
+      cache = &it->second;
     }
+  }
+  if (cache == nullptr) {
+    auto caches = cfd.promotion_caches().Write();
+    auto ret = caches->emplace(
+        std::piecewise_construct, std::make_tuple(target_level),
+        std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
+    auto it = ret.first;
     assert(it->first == target_level);
     cache = &it->second;
   }
-  cache->Promote(*db, cfd, mutable_cf_options.write_buffer_size,
-                 user_key.ToString(), *value);
+  size_t mut_size;
+  {
+    auto guard = cfd.internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kInsertToCache)
+                     .start();
+    auto mut = cache->mut().Write();
+    for (auto f : cd_files) {
+      if (f.get().being_or_has_been_compacted) return;
+    }
+    mut_size = mut->Insert(cfd.internal_stats(), user_key.ToString(), *value);
+  }
+  size_t tot = mut_size + cache->imm_list().Read()->size;
+  rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
+  if (mut_size < mutable_cf_options.write_buffer_size) return;
+
+  // SwitchMutablePromotionCache is responsible to unlock it.
+  db->mutex()->Lock();
+  auto mut = cache->mut().Write();
+  if (mut_size < mutable_cf_options.write_buffer_size) {
+    db->mutex()->Unlock();
+    return;
+  }
+  cache->SwitchMutablePromotionCache(*db, cfd, &*mut);
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,
@@ -2088,7 +2112,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
   CompactionRouter* router = mutable_cf_options_.compaction_router;
-  if (router->Tier(hit_level) > 0) {
+  if (router && router->Tier(hit_level) > 0) {
     env_get.cd_files.push_back(*f.file_metadata);
   }
   if (env_get.max_covering_tombstone_seq > 0) {
@@ -2107,6 +2131,8 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   StopWatchNano timer(clock_, timer_enabled /* auto_start */);
   auto get_start = rusty::time::Instant::now();
   uint64_t prev_rand_read_bytes = IOSTATS(rand_read_bytes);
+  uint64_t prev_num_cache_data_miss =
+      env_get.get_context.get_context_stats_.num_cache_data_miss;
   env_get.status = table_cache_->Get(
       env_get.read_options, *internal_comparator(), *f.file_metadata, ikey,
       &env_get.get_context, mutable_cf_options_.prefix_extractor.get(),
@@ -2117,6 +2143,8 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   if (rand_read_bytes) {
     cfd_->internal_stats()->IncRandReadBytes(hit_level, rand_read_bytes);
   }
+  uint64_t num_cache_data_miss =
+      env_get.get_context.get_context_stats_.num_cache_data_miss;
   hotrap_timers.timer(TimerType::kTableCacheGet).add(get_start.elapsed());
   // TODO: examine the behavior for corrupted key
   if (timer_enabled) {
@@ -2145,8 +2173,10 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
       // TODO: How to update VisCnts?
       break;
     case GetContext::kFound:
-      TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
-                 hit_level, user_key, env_get.value);
+      if (num_cache_data_miss > prev_num_cache_data_miss) {
+        TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
+                   hit_level, user_key, env_get.value);
+      }
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
                   env_get.is_blob_index, env_get.do_merge);

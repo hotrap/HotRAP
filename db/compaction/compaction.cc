@@ -102,19 +102,25 @@ void Compaction::SetInputVersion(Version* _input_version) {
   input_version_->Ref();
   edit_.SetColumnFamily(cfd_->GetID());
 
-  auto caches = cfd_->promotion_caches().Write();
-  for (size_t i = 0; i < num_input_levels(); i++) {
-    for (size_t j = 0; j < inputs_[i].size(); j++) {
-      assert(!inputs_[i][j]->being_or_has_been_compacted);
-      // Must hold promotion cache lock.
-      inputs_[i][j]->being_or_has_been_compacted = true;
-    }
-  }
   if (start_level_ != output_level_) {
     // Future work: Handle other cases
     assert(output_level_ == start_level_ + 1);
+    auto mark_fn = [this]() {
+      for (size_t i = 0; i < num_input_levels(); i++) {
+        for (size_t j = 0; j < inputs_[i].size(); j++) {
+          assert(!inputs_[i][j]->being_or_has_been_compacted);
+          // Must hold promotion cache lock.
+          inputs_[i][j]->being_or_has_been_compacted = true;
+        }
+      }
+    };
+    auto caches = cfd_->promotion_caches().Read();
     auto it = caches->find(start_level_);
-    if (it != caches->end()) {
+    if (it == caches->end()) {
+      // We hold the read lock of caches so that the new cache won't be
+      // inserted.
+      mark_fn();
+    } else {
       assert(it->first == start_level_);
       auto guard = cfd_->internal_stats()
                        ->hotrap_timers()
