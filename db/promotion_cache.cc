@@ -69,24 +69,24 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
     auto mut = mut_.Read();
     auto timer_guard_mut =
         internal_stats->hotrap_timers().timer(TimerType::kMutPCGet).start();
-    // TODO: Avoid the copy here after upgrading to C++14
-    auto it = mut->cache.find(key.ToString());
-    if (it != mut->cache.end()) {
-      if (value) value->PinSelf(it->second);
+    PCHashTable::accessor it;
+    if (mut->cache.find(it, key.ToString())) {
+      if (value) value->PinSelf(it->second.value);
+      it->second.count += 1;
       return true;
     }
   }
-  auto imm_list = imm_list_.Read();
-  for (const ImmPromotionCache &imm : imm_list->list) {
-    auto timer_guard_imm =
-        internal_stats->hotrap_timers().timer(TimerType::kImmPCGet).start();
-    // TODO: Avoid the copy here after upgrading to C++14
-    auto it = imm.cache.find(key.ToString());
-    if (it != imm.cache.end()) {
-      if (value) value->PinSelf(it->second);
-      return true;
-    }
-  }
+  // auto imm_list = imm_list_.Read();
+  // for (const ImmPromotionCache &imm : imm_list->list) {
+  //   auto timer_guard_imm =
+  //       internal_stats->hotrap_timers().timer(TimerType::kImmPCGet).start();
+  //   // TODO: Avoid the copy here after upgrading to C++14
+  //   auto it = imm.cache.find(key.ToString());
+  //   if (it != imm.cache.end()) {
+  //     if (value) value->PinSelf(it->second);
+  //     return true;
+  //   }
+  // }
   return false;
 }
 
@@ -176,15 +176,15 @@ void PromotionCache::checker() {
                                               .start();
       for (const auto &item : cache.cache) {
         const std::string &user_key = item.first;
-        if (!router->IsStablyHot(user_key)) {
+        if (item.second.count <= 1 && !router->IsStablyHot(user_key)) {
           RecordTick(stats, Tickers::NOT_STABLY_HOT_BYTES,
-                     user_key.size() + item.second.size());
+                     user_key.size() + item.second.value.size());
           continue;
         }
         stably_hot.insert(user_key);
       }
       for (const auto &item : cache.cache) {
-        router->Access(item.first, item.second.size());
+        router->Access(item.first, item.second.value.size());
       }
     }
     TimerGuard check_newer_version_start =
@@ -230,7 +230,7 @@ void PromotionCache::checker() {
       auto updated = cache.updated.Lock();
       for (const auto &item : cache.cache) {
         const std::string &user_key = item.first;
-        const std::string &value = item.second;
+        const std::string &value = item.second.value;
         if (stably_hot.find(user_key) == stably_hot.end()) continue;
         if (updated->find(user_key) != updated->end()) {
           RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
@@ -282,17 +282,16 @@ void PromotionCache::checker() {
   printer.join();
 }
 size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
-                                     std::string key, Slice value) {
+                                     const std::string& key, Slice value) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kMutPCInsert).start();
-  // TODO: Avoid requiring the ownership of key here after upgrading to C++14
-  auto it = cache.find(key);
-  if (it != cache.end()) return size;
-  size += key.size() + value.size();
-  auto ret = cache.insert(std::make_pair(std::move(key), value.ToString()));
-  (void)ret;
-  assert(ret.second == true);
-  return size;
+  PCHashTable::accessor it;
+  if(cache.insert(it, key)) {
+    it->second.value = value.ToString();
+    it->second.count = 1;
+    *size += key.size() + value.size();
+  }
+  return *size;
 }
 void PromotionCache::SwitchMutablePromotionCache(
     DBImpl &db, ColumnFamilyData &cfd, MutablePromotionCache *mut) const {
@@ -306,13 +305,12 @@ void PromotionCache::SwitchMutablePromotionCache(
   std::list<rocksdb::ImmPromotionCache>::iterator iter;
   {
     auto imm_list = imm_list_.Write();
-    imm_list->size += mut->size;
-    iter = imm_list->list.emplace(imm_list->list.end(), std::move(mut->cache),
-                                  mut->size);
+    imm_list->size += *(mut->size);
+    iter = imm_list->list.emplace(imm_list->list.end(), std::move(mut->cache), mut->ucmp_, 
+                                  *(mut->size));
   }
-  mut->cache = std::map<std::string, std::string, UserKeyCompare>(
-      cfd.ioptions()->user_comparator);
-  mut->size = 0;
+  mut->cache = PCHashTable();
+  *(mut->size) = 0;
   db.mutex()->Unlock();
 
   size_t queue_len;
@@ -337,18 +335,23 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<std::string, std::string>> ret;
-  auto begin_it = cache.lower_bound(smallest.ToString());
+  auto begin_it = cache.begin();
   auto it = begin_it;
-  while (it != cache.end() && ucmp_->Compare(it->first, largest) <= 0) {
-    if (router->IsStablyHot(it->first)) {
-      // TODO: Is it possible to avoid copying here?
-      ret.emplace_back(it->first, it->second);
+  while (it != cache.end()) {
+    if (ucmp_->Compare(it->first, largest) < 0 && ucmp_->Compare(it->first, smallest) >= 0) {
+      if (it->second.count > 1 || router->IsStablyHot(it->first)) {
+        // TODO: Is it possible to avoid copying here?
+        ret.emplace_back(it->first, it->second.value);
+      }
+      router->Access(it->first, it->second.value.size());
+      *size -= it->first.size() + it->second.value.size();
     }
-    router->Access(it->first, it->second.size());
-    size -= it->first.size() + it->second.size();
     ++it;
   }
-  cache.erase(begin_it, it);
+  for (auto& kv : ret) {
+    cache.erase(kv.first);
+  }
+  std::sort(ret.begin(), ret.end());
   return ret;
 }
 }  // namespace ROCKSDB_NAMESPACE
