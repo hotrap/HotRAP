@@ -284,11 +284,11 @@ void PromotionCache::checker() {
   printer.join();
 }
 size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
-                                     const std::string& key, Slice value) {
+                                     const std::string &key, Slice value) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kMutPCInsert).start();
   PCHashTable::accessor it;
-  if(cache.insert(it, key)) {
+  if (cache.insert(it, key)) {
     it->second.value = value.ToString();
     it->second.count = 1;
     *size += key.size() + value.size();
@@ -296,23 +296,38 @@ size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
   return *size;
 }
 void PromotionCache::SwitchMutablePromotionCache(
-    DBImpl &db, ColumnFamilyData &cfd, MutablePromotionCache *mut) const {
+    DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
   auto guard = cfd.internal_stats()
                    ->hotrap_timers()
                    .timer(TimerType::kSwitchMutPromotionCache)
                    .start();
-  SuperVersion *sv = cfd.GetSuperVersion();
-  // check_newer_version is responsible to unref it
-  sv->Ref();
+  std::unordered_map<std::string, PCData> cache;
+  size_t mut_size;
+  {
+    auto mut = mut_.Write();
+    mut_size = mut->size->load();
+    if (mut_size < write_buffer_size) {
+      db.mutex()->Unlock();
+      return;
+    }
+    for (auto &&a : mut->cache) {
+      // Don't move keys in case that the hash map still needs it in clear().
+      cache.emplace(a.first, std::move(a.second));
+    }
+    mut->cache.clear();
+    *(mut->size) = 0;
+  }
+  db.mutex()->Lock();
   std::list<rocksdb::ImmPromotionCache>::iterator iter;
   {
     auto imm_list = imm_list_.Write();
-    imm_list->size += *(mut->size);
-    iter = imm_list->list.emplace(imm_list->list.end(), std::move(mut->cache), mut->ucmp_, 
-                                  *(mut->size));
+    imm_list->size += mut_size;
+    iter = imm_list->list.emplace(imm_list->list.end(), std::move(cache),
+                                  mut_size);
   }
-  mut->cache.clear();
-  *(mut->size) = 0;
+  SuperVersion *sv = cfd.GetSuperVersion();
+  // check_newer_version is responsible to unref it
+  sv->Ref();
   db.mutex()->Unlock();
 
   size_t queue_len;
@@ -340,7 +355,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
   auto begin_it = cache.begin();
   auto it = begin_it;
   while (it != cache.end()) {
-    if (ucmp_->Compare(it->first, largest) < 0 && ucmp_->Compare(it->first, smallest) >= 0) {
+    if (ucmp_->Compare(it->first, largest) < 0 &&
+        ucmp_->Compare(it->first, smallest) >= 0) {
       if (it->second.count > 1 || router->IsStablyHot(it->first)) {
         // TODO: Is it possible to avoid copying here?
         ret.emplace_back(it->first, it->second.value);
@@ -349,8 +365,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     }
     ++it;
   }
-  for (auto& kv : ret) {
-    if(cache.erase(kv.first)) {
+  for (auto &kv : ret) {
+    if (cache.erase(kv.first)) {
       *size -= kv.first.size() + kv.second.size();
     }
   }

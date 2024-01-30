@@ -125,9 +125,9 @@ void Compaction::SetInputVersion(Version* _input_version) {
       assert(it->first == start_level_);
       std::vector<std::pair<std::string, std::string>> records;
       {
-        auto mut = it->second.mut().Read();
+        auto mut = it->second.mut().Write();
         mark_fn();
-        records = const_cast<MutablePromotionCache&>(*mut).TakeRange(cfd_->internal_stats(), router,
+        records = mut->TakeRange(cfd_->internal_stats(), router,
                                  smallest_user_key_, largest_user_key_);
       }
       for (auto& record : records) {

@@ -2019,14 +2019,8 @@ static void TryPromote(
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
   if (mut_size < mutable_cf_options.write_buffer_size) return;
 
-  // SwitchMutablePromotionCache is responsible to unlock it.
-  db->mutex()->Lock();
-  auto mut = cache->mut().Write();
-  if (mut_size < mutable_cf_options.write_buffer_size) {
-    db->mutex()->Unlock();
-    return;
-  }
-  cache->SwitchMutablePromotionCache(*db, cfd, &*mut);
+  cache->SwitchMutablePromotionCache(*db, cfd,
+                                     mutable_cf_options.write_buffer_size);
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,

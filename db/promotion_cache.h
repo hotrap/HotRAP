@@ -11,8 +11,8 @@
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
-#include "util/mutexlock.h"
 #include "tbb/concurrent_hash_map.h"
+#include "util/mutexlock.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -40,22 +40,12 @@ class UserKeyCompare {
 };
 
 struct ImmPromotionCache {
-  std::map<std::string, PCData, UserKeyCompare> cache;
+  std::unordered_map<std::string, PCData> cache;
   size_t size;
   MutexProtected<std::unordered_set<std::string>> updated;
-  ImmPromotionCache(
-      std::map<std::string, PCData, UserKeyCompare> &&arg_cache,
-      size_t arg_size)
+  ImmPromotionCache(std::unordered_map<std::string, PCData> &&arg_cache,
+                    size_t arg_size)
       : cache(std::move(arg_cache)), size(arg_size) {}
-  ImmPromotionCache(
-      PCHashTable &&arg_cache,
-      const Comparator* ucmp,
-      size_t arg_size)
-      : cache(UserKeyCompare(ucmp)), size(arg_size) {
-        for (auto&& a : arg_cache) {
-          cache.insert(std::make_pair(a.first, a.second));
-        }
-      }
 };
 struct ImmPromotionCacheList {
   std::list<ImmPromotionCache> list;
@@ -65,7 +55,8 @@ struct MutablePromotionCache {
   MutablePromotionCache(const Comparator *ucmp)
       : ucmp_(ucmp), size(new std::atomic<size_t>(0)) {}
   // Return the size of the mutable promotion cache
-  size_t Insert(InternalStats *internal_stats, const std::string& key, Slice value);
+  size_t Insert(InternalStats *internal_stats, const std::string &key,
+                Slice value);
   // [begin, end)
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
@@ -90,10 +81,8 @@ class PromotionCache {
   void wait_for_checker_to_stop();
   bool Get(InternalStats *internal_stats, Slice key,
            PinnableSlice *value) const;
-  // REQUIRES: DB mutex held
-  // Will unlock the DB mutex.
   void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
-                                   MutablePromotionCache *mut) const;
+                                   size_t write_buffer_size) const;
   // REQUIRES: DB mutex held
   void Flush();
 
