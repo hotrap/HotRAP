@@ -66,7 +66,9 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
                          .timer(TimerType::kPromotionCacheGet)
                          .start();
   {
-    auto mut = mut_.Read();
+    auto res = mut_.TryRead();
+    if (!res.has_value()) return false;
+    const auto &mut = res.value();
     auto timer_guard_mut =
         internal_stats->hotrap_timers().timer(TimerType::kMutPCGet).start();
     PCHashTable::accessor it;
