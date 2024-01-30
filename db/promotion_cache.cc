@@ -309,7 +309,7 @@ void PromotionCache::SwitchMutablePromotionCache(
     iter = imm_list->list.emplace(imm_list->list.end(), std::move(mut->cache), mut->ucmp_, 
                                   *(mut->size));
   }
-  mut->cache = PCHashTable();
+  mut->cache.clear();
   *(mut->size) = 0;
   db.mutex()->Unlock();
 
@@ -344,12 +344,13 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
         ret.emplace_back(it->first, it->second.value);
       }
       router->Access(it->first, it->second.value.size());
-      *size -= it->first.size() + it->second.value.size();
     }
     ++it;
   }
   for (auto& kv : ret) {
-    cache.erase(kv.first);
+    if(cache.erase(kv.first)) {
+      *size -= kv.first.size() + kv.second.size();
+    }
   }
   std::sort(ret.begin(), ret.end());
   return ret;
