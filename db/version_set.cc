@@ -1971,10 +1971,6 @@ static void TryPromote(
     router->Access(user_key, value->size());
     return;
   }
-  auto timer_guard = cfd.internal_stats()
-                         ->hotrap_timers()
-                         .timer(TimerType::kTryPromote)
-                         .start();
   assert(hit_level > 0);
   int target_level = hit_level - 1;
   while (router->Tier(target_level) == 1) {
@@ -2002,10 +1998,6 @@ static void TryPromote(
   }
   size_t mut_size;
   {
-    auto guard = cfd.internal_stats()
-                     ->hotrap_timers()
-                     .timer(TimerType::kInsertToCache)
-                     .start();
     auto res = cache->mut().TryRead();
     if (!res.has_value()) return;
     const auto& mut = res.value();
@@ -2027,11 +2019,6 @@ void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
                           Slice user_key, PinnableSlice* value, Status& status,
                           bool is_blob_index, bool do_merge) {
-  auto timer_guard = cfd_->internal_stats()
-                         ->hotrap_timers()
-                         .timer(TimerType::kHandleFound)
-                         .start();
-
   CompactionRouter* router = mutable_cf_options_.compaction_router;
   if (!router) return;
   router->HitLevel(hit_level, user_key);
@@ -2066,10 +2053,6 @@ void Version::HandleNotFound(GetContext& get_context, Slice user_key,
                              PinnableSlice* value, Status& status,
                              MergeContext& merge_context, bool* key_exists,
                              bool do_merge) {
-  auto timer_guard = cfd_->internal_stats()
-                         ->hotrap_timers()
-                         .timer(TimerType::kHandleNotFound)
-                         .start();
   if (db_statistics_ != nullptr) {
     get_context.ReportCounters();
   }
@@ -2104,8 +2087,6 @@ void Version::HandleNotFound(GetContext& get_context, Slice user_key,
 // Return stop searching or not
 bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
                         bool is_hit_file_last_in_level) {
-  auto& hotrap_timers = cfd_->internal_stats()->hotrap_timers();
-  auto timer_guard = hotrap_timers.timer(TimerType::kGetInFile).start();
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
   CompactionRouter* router = mutable_cf_options_.compaction_router;
@@ -2126,7 +2107,6 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   bool timer_enabled = GetPerfLevel() >= PerfLevel::kEnableTimeExceptForMutex &&
                        get_perf_context()->per_level_perf_context_enabled;
   StopWatchNano timer(clock_, timer_enabled /* auto_start */);
-  auto get_start = rusty::time::Instant::now();
   uint64_t prev_rand_read_bytes = IOSTATS(rand_read_bytes);
   uint64_t prev_num_cache_data_miss =
       env_get.get_context.get_context_stats_.num_cache_data_miss;
@@ -2142,7 +2122,6 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   }
   uint64_t num_cache_data_miss =
       env_get.get_context.get_context_stats_.num_cache_data_miss;
-  hotrap_timers.timer(TimerType::kTableCacheGet).add(get_start.elapsed());
   // TODO: examine the behavior for corrupted key
   if (timer_enabled) {
     PERF_COUNTER_BY_LEVEL_ADD(get_from_table_nanos, timer.ElapsedNanos(),
@@ -2203,10 +2182,6 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                   SequenceNumber* max_covering_tombstone_seq, bool* value_found,
                   bool* key_exists, SequenceNumber* seq, ReadCallback* callback,
                   bool* is_blob, bool do_merge, int last_level) {
-  auto timer_guard = cfd_->internal_stats()
-                         ->hotrap_timers()
-                         .timer(TimerType::kVersionGet)
-                         .start();
   Slice ikey = k.internal_key();
   Slice user_key = k.user_key();
 
