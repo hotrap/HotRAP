@@ -200,6 +200,7 @@ class ReadGuard {
   ReadGuard &operator=(ReadGuard<T> &&rhs) {
     data_ = rhs.data_;
     lock_ = std::move(rhs.lock_);
+    return *this;
   }
   const T &operator*() const { return *data_; }
   const T *operator->() const { return data_; }
@@ -220,6 +221,7 @@ class WriteGuard {
   WriteGuard<T> &operator=(WriteGuard<T> &&rhs) {
     data_ = rhs.data_;
     lock_ = std::move(rhs.lock_);
+    return *this;
   }
   T &operator*() const { return *data_; }
   T *operator->() const { return data_; }
