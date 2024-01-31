@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cinttypes>
 #include <cstdio>
+#include <functional>
 #include <list>
 #include <map>
 #include <set>
@@ -2091,7 +2092,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   Slice user_key = env_get.k.user_key();
   CompactionRouter* router = mutable_cf_options_.compaction_router;
   if (router && router->Tier(hit_level) > 0) {
-    env_get.cd_files.push_back(*f.file_metadata);
+    env_get.cd_files.push_back(std::ref(*f.file_metadata));
   }
   if (env_get.max_covering_tombstone_seq > 0) {
     // The remaining files we look at will only contain covered keys, so we
@@ -2235,26 +2236,22 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .key_exists = key_exists,
                  .is_blob_index = is_blob_index,
                  .do_merge = do_merge};
-  std::vector<int> cache_levels;
+  autovector<std::map<int, rocksdb::PromotionCache>::const_iterator> level_pcs;
   {
     auto caches = cfd_->promotion_caches().Read();
     for (auto it = caches->cbegin(); it != caches->cend(); ++it)
-      cache_levels.push_back(it->first);
+      level_pcs.push_back(it);
   }
-  for (int cache_level : cache_levels) {
-    while (f != nullptr && (int)fp.GetHitFileLevel() <= cache_level) {
+  for (auto level_pc : level_pcs) {
+    while (f != nullptr && (int)fp.GetHitFileLevel() <= level_pc->first) {
       bool should_stop = GetInFile(env_get, *f, fp.GetHitFileLevel(),
                                    fp.IsHitFileLastInLevel());
       if (should_stop) return;
       f = fp.GetNextFile();
     }
     if (db != nullptr) {
-      assert(cache_level < last_level);
-      auto caches = cfd_->promotion_caches().Read();
-      auto it = caches->find(cache_level);
-      assert(it != caches->end());
-      const auto& cache = it->second;
-      if (cache.Get(cfd_->internal_stats(), k.user_key(), value)) {
+      assert(level_pc->first < last_level);
+      if (level_pc->second.Get(cfd_->internal_stats(), k.user_key(), value)) {
         CompactionRouter* router = mutable_cf_options_.compaction_router;
         if (router) {
           router->Access(k.user_key(), value->size());
