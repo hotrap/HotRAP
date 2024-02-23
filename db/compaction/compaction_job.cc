@@ -1565,9 +1565,9 @@ class IgnoreStableHot : public TraitIterator<Slice> {
   Iter iter_;
 };
 
-class RouterIteratorSD2CD : public TraitIterator<Elem> {
+class RouterIteratorFD2SD : public TraitIterator<Elem> {
  public:
-  RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
+  RouterIteratorFD2SD(CompactionRouter& router, const Compaction& c,
                       CompactionIterator& c_iter, Slice start, Bound end)
       : router_(router),
         c_(c),
@@ -1585,9 +1585,9 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         previous_decision_(Decision::kUndetermined),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
-  ~RouterIteratorSD2CD() {
+  ~RouterIteratorFD2SD() {
     auto stats = c_.immutable_options()->stats;
-    RecordTick(stats, Tickers::PROMOTED_2SDLAST_BYTES, kvsize_promoted_);
+    RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
     RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
   }
   Decision route(const IKeyValueLevel& kv) {
@@ -1676,16 +1676,16 @@ class RouterIterator {
       size_t start_tier = router->Tier(start_level);
       size_t latter_tier = router->Tier(latter_level);
       if (start_tier != latter_tier) {
-        iter_ = std::unique_ptr<RouterIteratorSD2CD>(
-            new RouterIteratorSD2CD(*router, c, c_iter, start, end));
+        iter_ = std::unique_ptr<RouterIteratorFD2SD>(
+            new RouterIteratorFD2SD(*router, c, c_iter, start, end));
       } else if (router->Tier(latter_level + 1) != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorIntraTier>(
             new RouterIteratorIntraTier(*router, c, c_iter, start, end,
-                                        Tickers::PROMOTED_2SDLAST_BYTES));
+                                        Tickers::PROMOTED_2FDLAST_BYTES));
       } else {
         iter_ = std::unique_ptr<RouterIteratorIntraTier>(
             new RouterIteratorIntraTier(*router, c, c_iter, start, end,
-                                        Tickers::PROMOTED_2CDFRONT_BYTES));
+                                        Tickers::PROMOTED_2SDFRONT_BYTES));
       }
     }
     cur_ = iter_->next();
