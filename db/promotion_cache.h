@@ -11,6 +11,7 @@
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
+#include "tbb/concurrent_hash_map.h"
 #include "util/mutexlock.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -21,6 +22,11 @@ class InternalStats;
 struct SuperVersion;
 
 class PromotionCache;
+struct PCData {
+  std::string value;
+  int count{0};
+};
+using PCHashTable = tbb::concurrent_hash_map<std::string, PCData>;
 
 class UserKeyCompare {
  public:
@@ -34,12 +40,11 @@ class UserKeyCompare {
 };
 
 struct ImmPromotionCache {
-  std::map<std::string, std::string, UserKeyCompare> cache;
+  std::unordered_map<std::string, PCData> cache;
   size_t size;
   MutexProtected<std::unordered_set<std::string>> updated;
-  ImmPromotionCache(
-      std::map<std::string, std::string, UserKeyCompare> &&arg_cache,
-      size_t arg_size)
+  ImmPromotionCache(std::unordered_map<std::string, PCData> &&arg_cache,
+                    size_t arg_size)
       : cache(std::move(arg_cache)), size(arg_size) {}
 };
 struct ImmPromotionCacheList {
@@ -48,17 +53,18 @@ struct ImmPromotionCacheList {
 };
 struct MutablePromotionCache {
   MutablePromotionCache(const Comparator *ucmp)
-      : ucmp_(ucmp), cache(UserKeyCompare(ucmp)), size(0) {}
+      : ucmp_(ucmp), size(new std::atomic<size_t>(0)) {}
   // Return the size of the mutable promotion cache
-  size_t Insert(InternalStats *internal_stats, std::string key, Slice value);
+  size_t Insert(InternalStats *internal_stats, const std::string &key,
+                Slice value);
   // [begin, end)
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
       Slice largest);
 
   const Comparator *ucmp_;
-  std::map<std::string, std::string, UserKeyCompare> cache;
-  size_t size;
+  PCHashTable cache;
+  std::unique_ptr<std::atomic<size_t>> size;
   friend class PromotionCache;
 };
 
@@ -74,10 +80,8 @@ class PromotionCache {
   void wait_for_checker_to_stop();
   bool Get(InternalStats *internal_stats, Slice key,
            PinnableSlice *value) const;
-  // REQUIRES: DB mutex held
-  // Will unlock the DB mutex.
   void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
-                                   MutablePromotionCache *mut) const;
+                                   size_t write_buffer_size) const;
   // REQUIRES: DB mutex held
   void Flush();
 

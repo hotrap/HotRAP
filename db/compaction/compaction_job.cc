@@ -1503,9 +1503,9 @@ class IgnoreStableHot : public TraitIterator<Slice> {
   Iter iter_;
 };
 
-class RouterIteratorSD2CD : public TraitIterator<Elem> {
+class RouterIteratorFD2SD : public TraitIterator<Elem> {
  public:
-  RouterIteratorSD2CD(CompactionRouter& router, const Compaction& c,
+  RouterIteratorFD2SD(CompactionRouter& router, const Compaction& c,
                       CompactionIterator& c_iter,
                       Slice start_level_smallest_user_key)
       : router_(router),
@@ -1514,32 +1514,28 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
         iter_(c_iter),
         hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
             router.LowerBound(start_level_smallest_user_key))),
-        previous_decision_(Decision::kUndetermined),
         kvsize_retained_(0) {}
-  ~RouterIteratorSD2CD() {
+  ~RouterIteratorFD2SD() {
     auto stats = c_.immutable_options()->stats;
     RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
   }
   Decision route(const IKeyValueLevel& kv) {
-    // Make sure that all versions of the same user key share the same decision.
-    if (previous_decision_ != Decision::kUndetermined &&
-        ucmp_->Compare(kv.ikey.user_key, Slice(previous_user_key_)) == 0) {
-      return previous_decision_;
-    }
+    // It is guaranteed that all versions of the same user key share the same
+    // decision.
     const rocksdb::Slice* hot = hot_iter_.peek();
     while (hot != nullptr) {
       if (ucmp_->Compare(*hot, kv.ikey.user_key) >= 0) break;
       hot_iter_.next();
       hot = hot_iter_.peek();
     }
+    Decision decision;
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      previous_decision_ = Decision::kStartLevel;
+      decision = Decision::kStartLevel;
       hot_iter_.next();
     } else {
-      previous_decision_ = Decision::kNextLevel;
+      decision = Decision::kNextLevel;
     }
-    previous_user_key_ = kv.ikey.user_key.ToString();
-    return previous_decision_;
+    return decision;
   }
   optional<Elem> next() override {
     optional<IKeyValueLevel> kv_ret = iter_.next();
@@ -1567,9 +1563,6 @@ class RouterIteratorSD2CD : public TraitIterator<Elem> {
   CompactionIterWrapper iter_;
   Peekable<IgnoreStableHot<CompactionRouter::Iter>> hot_iter_;
 
-  Decision previous_decision_;
-  std::string previous_user_key_;
-
   size_t kvsize_retained_;
 };
 
@@ -1591,7 +1584,7 @@ class RouterIterator {
       size_t start_tier = router->Tier(start_level);
       size_t latter_tier = router->Tier(latter_level);
       if (start_tier != latter_tier) {
-        iter_ = std::unique_ptr<RouterIteratorSD2CD>(new RouterIteratorSD2CD(
+        iter_ = std::unique_ptr<RouterIteratorFD2SD>(new RouterIteratorFD2SD(
             *router, c, c_iter, start_level_smallest_user_key));
       } else {
         iter_ = std::unique_ptr<IteratorWithoutRouter>(

@@ -9,6 +9,8 @@
 
 #include "db/compaction/compaction.h"
 
+#include <tbb/concurrent_hash_map.h>
+
 #include <cinttypes>
 #include <vector>
 
@@ -122,10 +124,6 @@ void Compaction::SetInputVersion(Version* _input_version) {
       mark_fn();
     } else {
       assert(it->first == start_level_);
-      auto guard = cfd_->internal_stats()
-                       ->hotrap_timers()
-                       .timer(TimerType::kRemoveOld)
-                       .start();
 
       const LevelFilesBrief* start_level_input = input_levels(0);
       std::vector<FileMetaData*> file_meta_data;
@@ -153,9 +151,11 @@ void Compaction::SetInputVersion(Version* _input_version) {
       while (start_level_it.Valid() &&
              ucmp->Compare(start_level_it.user_key(),
                            start_level_largest_user_key) <= 0) {
-        auto mut_it = mut->cache.find(start_level_it.user_key().ToString());
-        if (mut_it != mut->cache.end()) {
-          mut->size -= mut_it->first.size() + mut_it->second.size();
+        decltype(mut->cache)::const_accessor mut_it;
+        bool found =
+            mut->cache.find(mut_it, start_level_it.user_key().ToString());
+        if (found) {
+          *mut->size -= mut_it->first.size() + mut_it->second.value.size();
           mut->cache.erase(mut_it);
         }
         start_level_it.Next();
