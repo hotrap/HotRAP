@@ -142,9 +142,11 @@ class RWMutex {
 
   void ReadLock() const;
   void WriteLock() const;
+  bool TryReadLock() const;
+  bool TryWriteLock() const;
   void ReadUnlock() const;
   void WriteUnlock() const;
-  void AssertHeld() {}
+  void AssertHeld() const {}
 
  private:
   mutable pthread_rwlock_t mu_;  // the underlying platform mutex
