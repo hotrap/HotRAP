@@ -1582,7 +1582,6 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
               IKeyValueLevel::Compare(ucmp_)),
         hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
             router.LowerBound(start_))),
-        previous_decision_(Decision::kUndetermined),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
   ~RouterIteratorFD2SD() {
@@ -1591,25 +1590,22 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
   }
   Decision route(const IKeyValueLevel& kv) {
-    // Make sure that all versions of the same user key share the same decision.
-    if (previous_decision_ != Decision::kUndetermined &&
-        ucmp_->Compare(kv.ikey.user_key, Slice(previous_user_key_)) == 0) {
-      return previous_decision_;
-    }
+    // It is guaranteed that all versions of the same user key share the same
+    // decision.
     const rocksdb::Slice* hot = hot_iter_.peek();
     while (hot != nullptr) {
       if (ucmp_->Compare(*hot, kv.ikey.user_key) >= 0) break;
       hot_iter_.next();
       hot = hot_iter_.peek();
     }
+    Decision decision;
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      previous_decision_ = Decision::kStartLevel;
+      decision = Decision::kStartLevel;
       hot_iter_.next();
     } else {
-      previous_decision_ = Decision::kNextLevel;
+      decision = Decision::kNextLevel;
     }
-    previous_user_key_ = kv.ikey.user_key.ToString();
-    return previous_decision_;
+    return decision;
   }
   optional<Elem> next() override {
     optional<IKeyValueLevel> kv_ret = iter_.next();
@@ -1652,9 +1648,6 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   const Comparator* ucmp_;
   Merge2Iterators<IKeyValueLevel, IKeyValueLevel::Compare> iter_;
   Peekable<IgnoreStableHot<CompactionRouter::Iter>> hot_iter_;
-
-  Decision previous_decision_;
-  std::string previous_user_key_;
 
   size_t kvsize_promoted_;
   size_t kvsize_retained_;
