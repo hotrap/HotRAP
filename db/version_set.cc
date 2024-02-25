@@ -1990,10 +1990,19 @@ static void TryPromote(
   }
   if (cache == nullptr) {
     auto caches = cfd.promotion_caches().Write();
-    auto ret = caches->emplace(
-        std::piecewise_construct, std::make_tuple(target_level),
-        std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
-    auto it = ret.first;
+    // It seems that even if the key already exists, emplace still construct
+    // PromotionCache then destruct it. However, PromotionCache should only be
+    // destructed when shutting down the database. Therefore we firstly make
+    // sure that the key does not exist to avoid destructing PromotionCache
+    // here.
+    auto it = caches->find(target_level);
+    if (it == caches->end()) {
+      auto ret = caches->emplace(
+          std::piecewise_construct, std::make_tuple(target_level),
+          std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
+      assert(ret.second);
+      it = ret.first;
+    }
     assert(it->first == target_level);
     cache = &it->second;
   }
