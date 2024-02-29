@@ -296,7 +296,6 @@ void PromotionCache::SwitchMutablePromotionCache(
     auto mut = mut_.Write();
     mut_size = mut->size->load();
     if (mut_size < write_buffer_size) {
-      db.mutex()->Unlock();
       return;
     }
     for (auto &&a : mut->cache) {
