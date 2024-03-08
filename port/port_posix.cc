@@ -88,6 +88,7 @@ void Mutex::Lock() const {
 
 void Mutex::Unlock() const {
 #ifndef NDEBUG
+  assert(locked_);
   locked_ = false;
 #endif
   PthreadCall("unlock", pthread_mutex_unlock(&mu_));
