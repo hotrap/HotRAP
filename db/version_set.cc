@@ -2261,6 +2261,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
     if (db != nullptr) {
       assert(level_pc->first < last_level);
       if (level_pc->second.Get(cfd_->internal_stats(), k.user_key(), value)) {
+        RecordTick(cfd_->ioptions()->stats, Tickers::GET_HIT_PROMOTION_CACHE);
         CompactionRouter* router = mutable_cf_options_.compaction_router;
         if (router) {
           router->Access(k.user_key(), value->size());
