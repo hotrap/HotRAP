@@ -62,10 +62,15 @@ void PromotionCache::stop_checker_no_wait() {
 void PromotionCache::wait_for_checker_to_stop() { checker_.join(); }
 bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
                          PinnableSlice *value) const {
+  auto timer_guard = internal_stats->hotrap_timers()
+                         .timer(TimerType::kPromotionCacheGet)
+                         .start();
   {
     auto res = mut_.TryRead();
     if (!res.has_value()) return false;
     const auto &mut = res.value();
+    auto timer_guard_mut =
+        internal_stats->hotrap_timers().timer(TimerType::kMutPCGet).start();
     PCHashTable::accessor it;
     if (mut->cache.find(it, key.ToString())) {
       if (value) value->PinSelf(it->second.value);
@@ -280,6 +285,8 @@ void PromotionCache::checker() {
 }
 size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
                                      const std::string &key, Slice value) {
+  auto guard =
+      internal_stats->hotrap_timers().timer(TimerType::kMutPCInsert).start();
   PCHashTable::accessor it;
   if (cache.insert(it, key)) {
     it->second.value = value.ToString();
@@ -290,6 +297,10 @@ size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
 }
 void PromotionCache::SwitchMutablePromotionCache(
     DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
+  auto guard = cfd.internal_stats()
+                   ->hotrap_timers()
+                   .timer(TimerType::kSwitchMutPromotionCache)
+                   .start();
   std::unordered_map<std::string, PCData> cache;
   size_t mut_size;
   {
