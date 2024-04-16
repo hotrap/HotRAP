@@ -91,15 +91,24 @@ class ReadLock {
 //
 class ReadUnlock {
  public:
-  explicit ReadUnlock(port::RWMutex *mu) : mu_(mu) { mu->AssertHeld(); }
+  explicit ReadUnlock(const port::RWMutex *mu) : mu_(mu) { mu->AssertHeld(); }
   // No copying allowed
   ReadUnlock(const ReadUnlock &) = delete;
   ReadUnlock &operator=(const ReadUnlock &) = delete;
+  ReadUnlock(ReadUnlock &&rhs) : mu_(rhs.mu_) { rhs.mu_ = nullptr; }
+  ReadUnlock &operator=(ReadUnlock &&rhs) {
+    this->~ReadUnlock();
+    mu_ = rhs.mu_;
+    rhs.mu_ = nullptr;
+    return *this;
+  }
 
-  ~ReadUnlock() { mu_->ReadUnlock(); }
+  ~ReadUnlock() {
+    if (mu_ != nullptr) mu_->ReadUnlock();
+  }
 
  private:
-  port::RWMutex *const mu_;
+  const port::RWMutex *mu_;
 };
 
 //
@@ -131,6 +140,29 @@ class WriteLock {
   const port::RWMutex *mu_;
 };
 
+class WriteUnlock {
+ public:
+  explicit WriteUnlock(const port::RWMutex *mu) : mu_(mu) {}
+
+  // No copying allowed
+  WriteUnlock(const WriteUnlock &) = delete;
+  WriteUnlock &operator=(const WriteUnlock &) = delete;
+  WriteUnlock(WriteUnlock &&rhs) : mu_(rhs.mu_) { rhs.mu_ = nullptr; }
+  WriteUnlock &operator=(WriteUnlock &&rhs) {
+    this->~WriteUnlock();
+    mu_ = rhs.mu_;
+    rhs.mu_ = nullptr;
+    return *this;
+  }
+
+  ~WriteUnlock() {
+    if (mu_ != nullptr) mu_->WriteUnlock();
+  }
+
+ private:
+  const port::RWMutex *mu_;
+};
+
 template <typename T>
 class MutexProtected;
 template <typename T>
@@ -138,11 +170,6 @@ class MutexGuard {
  public:
   MutexGuard(MutexGuard &&rhs)
       : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
-  MutexGuard &operator=(MutexGuard &&rhs) {
-    data_ = rhs.data_;
-    lock_ = std::move(rhs.lock_);
-    return *this;
-  }
   T &operator*() const { return data_; }
   T *operator->() const { return &data_; }
 
@@ -173,32 +200,35 @@ class ReadGuard {
   ReadGuard &operator=(ReadGuard<T> &&rhs) {
     data_ = rhs.data_;
     lock_ = std::move(rhs.lock_);
+    return *this;
   }
   const T &operator*() const { return *data_; }
   const T *operator->() const { return data_; }
 
-  void drop() { lock_.drop(); }
-
  private:
   const T *data_;
-  ReadLock lock_;
+  ReadUnlock lock_;
 };
 
 template <typename T>
 class WriteGuard {
  public:
-  WriteGuard(T &data, const port::RWMutex *mu) : data_(data), lock_(mu) {}
+  WriteGuard(T &data, const port::RWMutex *mu) : data_(&data), lock_(mu) {}
   WriteGuard(const WriteGuard &) = delete;
   WriteGuard<T> &operator=(const WriteGuard &) = delete;
   WriteGuard(WriteGuard<T> &&rhs)
       : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
-  WriteGuard<T> &operator=(WriteGuard<T> &&) = delete;
-  T &operator*() const { return data_; }
-  T *operator->() const { return &data_; }
+  WriteGuard<T> &operator=(WriteGuard<T> &&rhs) {
+    data_ = rhs.data_;
+    lock_ = std::move(rhs.lock_);
+    return *this;
+  }
+  T &operator*() const { return *data_; }
+  T *operator->() const { return data_; }
 
  private:
-  T &data_;
-  WriteLock lock_;
+  T *data_;
+  WriteUnlock lock_;
 };
 
 template <typename T>
@@ -207,8 +237,26 @@ class RWMutexProtected {
   RWMutexProtected() = default;
   RWMutexProtected(T &&rhs) : data_(std::move(rhs)) {}
 
-  ReadGuard<T> Read() const { return ReadGuard<T>(data_, &lock_); }
-  WriteGuard<T> Write() const { return WriteGuard<T>(data_, &lock_); }
+  ReadGuard<T> Read() const {
+    lock_.ReadLock();
+    return ReadGuard<T>(data_, &lock_);
+  }
+  WriteGuard<T> Write() const {
+    lock_.WriteLock();
+    return WriteGuard<T>(data_, &lock_);
+  }
+  optional<ReadGuard<T>> TryRead() const {
+    if (lock_.TryReadLock())
+      return ReadGuard<T>(data_, &lock_);
+    else
+      return nullopt;
+  }
+  optional<WriteGuard<T>> TryWrite() const {
+    if (lock_.TryWriteLock())
+      return WriteGuard<T>(data_, &lock_);
+    else
+      return nullopt;
+  }
 
  private:
   mutable T data_;

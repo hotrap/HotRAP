@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <string>
@@ -107,23 +108,14 @@ enum class TimerType : size_t {
   kCompaction,
   kGetKeyValueFromLevelsBelow,
   kInvalidateOld,
-  kVersionGet,
-  kTableCacheGet,
-  kGetInFile,
-  kHandleFound,
-  kHandleNotFound,
-  kAccess,
-  kPromotionCacheGet,
-  kTryPromote,
+  kTakeRange,
   kCheckStablyHot,
   kCheckNewerVersion,
   kRouterIteratorNext,
   kWithoutRouterNext,
-  k2SDLastLevelNext,
-  kSD2CDNext,
+  kIntraIterNext,
+  kFD2SDNext,
   kHotIterNext,
-  kSD2CDCompIterNext,
-  kWithoutRouterCompIterNext,
   kAddToBuilder,
   kEnd,
 };
@@ -461,6 +453,11 @@ class InternalStats {
     comp_stats_[level].bytes_moved += amount;
   }
 
+  void IncRandReadBytes(size_t level, uint64_t n) {
+    assert(rand_read_bytes_.size() > level);
+    rand_read_bytes_[level].fetch_add(n, std::memory_order_relaxed);
+  }
+
   void AddCFStats(InternalCFStatsType type, uint64_t value) {
     cf_stats_value_[type] += value;
     ++cf_stats_count_[type];
@@ -563,6 +560,8 @@ class InternalStats {
   std::vector<HistogramImpl> file_read_latency_;
   HistogramImpl blob_file_read_latency_;
 
+  std::vector<std::atomic<uint64_t>> rand_read_bytes_;
+
   // Used to compute per-interval statistics
   struct CFStatsSnapshot {
     // ColumnFamily-level stats
@@ -657,6 +656,10 @@ class InternalStats {
   bool HandleCompressionRatioAtLevelPrefix(std::string* value, Slice suffix);
   bool HandleLevelStats(std::string* value, Slice suffix);
   bool HandleStats(std::string* value, Slice suffix);
+  bool HandleCompactionStats(std::string* value, Slice suffix);
+  bool HandleRandReadBytes(std::string* value, Slice suffix);
+  bool HandleCompactionCPUMicros(uint64_t* value, DBImpl* /*db*/,
+                                 Version* /*version*/);
   bool HandleCFMapStats(std::map<std::string, std::string>* compaction_stats,
                         Slice suffix);
   bool HandleCFStats(std::string* value, Slice suffix);

@@ -2216,9 +2216,8 @@ Status DBImpl::WaitUntilFlushWouldNotStallWrites(ColumnFamilyData* cfd,
       // cause write stalling mode to be entered. It could still enter stall
       // mode due to pending compaction bytes, but that's less common
       write_stall_condition = ColumnFamilyData::GetWriteStallConditionAndCause(
-                                  cfd->imm()->NumNotFlushed() + 1,
+                                  vstorage, cfd->imm()->NumNotFlushed() + 1,
                                   vstorage->l0_delay_trigger_count() + 1,
-                                  vstorage->estimated_compaction_needed_bytes(),
                                   mutable_cf_options, *cfd->ioptions())
                                   .first;
     } while (write_stall_condition != WriteStallCondition::kNormal);

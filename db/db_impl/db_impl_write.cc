@@ -1939,27 +1939,28 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
 
   cfd->mem()->SetNextLogNumber(logfile_number_);
 
-  auto invalidate_old_start = rusty::time::Instant::now();
-  Arena arena;
-  ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
-  auto caches = cfd->promotion_caches().Read();
-  while (mem_it->Valid()) {
-    std::string user_key = mem_it->user_key().ToString();
-    for (const auto& level_cache : *caches) {
-      const PromotionCache& cache = level_cache.second;
-      auto imm_list_guard = cache.imm_list().Read();
-      const std::list<ImmPromotionCache>& imm_list = imm_list_guard->list;
-      for (const ImmPromotionCache& imm : imm_list) {
-        // TODO: Avoid requiring ownership after upgrading to C++14
-        auto it = imm.cache.find(user_key);
-        if (it != imm.cache.end()) imm.updated.Lock()->insert(user_key);
+  {
+    auto guard = cfd->internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kInvalidateOld)
+                     .start();
+    Arena arena;
+    ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
+    auto caches = cfd->promotion_caches().Read();
+    while (mem_it->Valid()) {
+      std::string user_key = mem_it->user_key().ToString();
+      for (const auto& level_cache : *caches) {
+        const PromotionCache& cache = level_cache.second;
+        auto imm_list_guard = cache.imm_list().Read();
+        const std::list<ImmPromotionCache>& imm_list = imm_list_guard->list;
+        for (const ImmPromotionCache& imm : imm_list) {
+          // TODO: Avoid requiring ownership after upgrading to C++14
+          auto it = imm.cache.find(user_key);
+          if (it != imm.cache.end()) imm.updated.Lock()->insert(user_key);
+        }
       }
     }
   }
-  cfd->internal_stats()
-      ->hotrap_timers()
-      .timer(TimerType::kInvalidateOld)
-      .add(invalidate_old_start.elapsed());
 
   assert(new_mem != nullptr);
   cfd->imm()->Add(cfd->mem(), &context->memtables_to_free_);

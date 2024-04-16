@@ -11,6 +11,7 @@
 #include "db/internal_stats.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cinttypes>
 #include <cstddef>
 #include <limits>
@@ -39,23 +40,14 @@ const char* timer_names[] = {
     "Compaction",
     "GetKeyValueFromLevelsBelow",
     "InvalidateOld",
-    "VersionGet",
-    "TableCacheGet",
-    "GetInFile",
-    "HandleFound",
-    "HandleNotFound",
-    "Access",
-    "PromotionCacheGet",
-    "TryPromote",
+    "TakeRange",
     "CheckStablyHot",
     "CheckNewerVersion",
     "RouterIteratorNext",
     "WithoutRouterNext",
-    "2SDLastLevelNext",
-    "SD2CDNext",
+    "IntraTierNext",
+    "FD2SDNext",
     "HotIterNext",
-    "SD2CDCompIterNext",
-    "WithoutRouterCompIterNext",
     "AddToBuilder",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
@@ -272,6 +264,7 @@ static const std::string num_files_at_level_prefix = "num-files-at-level";
 static const std::string compression_ratio_at_level_prefix =
     "compression-ratio-at-level";
 static const std::string allstats = "stats";
+static const std::string compactions = "compactions";
 static const std::string sstables = "sstables";
 static const std::string cfstats = "cfstats";
 static const std::string cfstats_no_file_histogram =
@@ -344,6 +337,12 @@ const std::string DB::Properties::kNumFilesAtLevelPrefix =
 const std::string DB::Properties::kCompressionRatioAtLevelPrefix =
     rocksdb_prefix + compression_ratio_at_level_prefix;
 const std::string DB::Properties::kStats = rocksdb_prefix + allstats;
+const std::string DB::Properties::kCompactionStats =
+    rocksdb_prefix + compactions;
+const std::string DB::Properties::kRandReadBytes =
+    rocksdb_prefix + "randread.bytes";
+const std::string DB::Properties::kCompactionCPUMicros =
+    rocksdb_prefix + compactions + ".cpu.micros";
 const std::string DB::Properties::kSSTables = rocksdb_prefix + sstables;
 const std::string DB::Properties::kCFStats = rocksdb_prefix + cfstats;
 const std::string DB::Properties::kCFStatsNoFileHistogram =
@@ -451,6 +450,15 @@ const std::unordered_map<std::string, DBPropertyInfo>
          {false, &InternalStats::HandleLevelStats, nullptr, nullptr, nullptr}},
         {DB::Properties::kStats,
          {false, &InternalStats::HandleStats, nullptr, nullptr, nullptr}},
+        {DB::Properties::kCompactionStats,
+         {false, &InternalStats::HandleCompactionStats, nullptr, nullptr,
+          nullptr}},
+        {DB::Properties::kRandReadBytes,
+         {false, &InternalStats::HandleRandReadBytes, nullptr, nullptr,
+          nullptr}},
+        {DB::Properties::kCompactionCPUMicros,
+         {false, nullptr, &InternalStats::HandleCompactionCPUMicros, nullptr,
+          nullptr}},
         {DB::Properties::kCFStats,
          {false, &InternalStats::HandleCFStats, nullptr,
           &InternalStats::HandleCFMapStats, nullptr}},
@@ -606,11 +614,15 @@ InternalStats::InternalStats(int num_levels, SystemClock* clock,
       comp_stats_(num_levels),
       comp_stats_by_pri_(Env::Priority::TOTAL),
       file_read_latency_(num_levels),
+      rand_read_bytes_(num_levels),
       bg_error_count_(0),
       number_levels_(num_levels),
       clock_(clock),
       cfd_(cfd),
       started_at_(clock->NowMicros()) {
+  for (std::atomic<uint64_t>& x : rand_read_bytes_) {
+    x.store(0, std::memory_order_relaxed);
+  }
   Cache* block_cache = nullptr;
   bool ok = GetBlockCacheForStats(&block_cache);
   if (ok) {
@@ -925,6 +937,53 @@ bool InternalStats::HandleStats(std::string* value, Slice suffix) {
   }
   if (!HandleDBStats(value, suffix)) {
     return false;
+  }
+  return true;
+}
+
+bool InternalStats::HandleCompactionStats(std::string* value, Slice suffix) {
+  value->append("Level Read Write\n");
+  struct CStats {
+    size_t read = 0;
+    size_t write = 0;
+  };
+  std::vector<CStats> levels(number_levels_);
+  for (int level = 0; level < number_levels_; ++level) {
+    if (level > 0) {
+      levels[level - 1].read += comp_stats_[level].bytes_read_non_output_levels;
+    }
+    levels[level].read += comp_stats_[level].bytes_read_output_level;
+    levels[level].write += comp_stats_[level].bytes_written;
+    // No idea which level are them in
+    assert(comp_stats_[level].bytes_read_blob == 0);
+    assert(comp_stats_[level].bytes_written_blob == 0);
+  }
+  for (int level = 0; level < number_levels_; ++level) {
+    value->append("L" + std::to_string(level) + " " +
+                  std::to_string(levels[level].read) + " " +
+                  std::to_string(levels[level].write) + '\n');
+  }
+  return true;
+}
+
+bool InternalStats::HandleCompactionCPUMicros(uint64_t* value, DBImpl* /*db*/,
+                                              Version* /*version*/) {
+  *value = 0;
+  for (int level = 0; level < number_levels_; ++level) {
+    *value += comp_stats_[level].cpu_micros;
+  }
+  return true;
+}
+
+bool InternalStats::HandleRandReadBytes(std::string* value, Slice suffix) {
+  size_t num_levels = rand_read_bytes_.size();
+  assert(num_levels == (size_t)number_levels_);
+  for (size_t i = 0; i < num_levels; ++i) {
+    value->append(
+        std::to_string(rand_read_bytes_[i].load(std::memory_order_relaxed)));
+    if (i != num_levels - 1) {
+      value->push_back(' ');
+    }
   }
   return true;
 }
@@ -1869,7 +1928,9 @@ void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
   auto caches = cfd_->promotion_caches().Read();
   for (const auto& cache : *caches) {
     value->append("compaction_cache at level " + std::to_string(cache.first) +
-                  ": max_size " + std::to_string(cache.second.max_size()));
+                  ": max_size " +
+                  std::to_string(
+                      cache.second.max_size().load(std::memory_order_relaxed)));
   }
 }
 

@@ -7,6 +7,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include <pthread.h>
 #if !defined(OS_WIN)
 
 #include "port/port_posix.h"
@@ -87,6 +88,7 @@ void Mutex::Lock() const {
 
 void Mutex::Unlock() const {
 #ifndef NDEBUG
+  assert(locked_);
   locked_ = false;
 #endif
   PthreadCall("unlock", pthread_mutex_unlock(&mu_));
@@ -166,6 +168,16 @@ void RWMutex::ReadLock() const {
 
 void RWMutex::WriteLock() const {
   PthreadCall("write lock", pthread_rwlock_wrlock(&mu_));
+}
+
+bool RWMutex::TryReadLock() const {
+  int result = PthreadCall("try read lock", pthread_rwlock_tryrdlock(&mu_));
+  return result == 0;
+}
+
+bool RWMutex::TryWriteLock() const {
+  int result = PthreadCall("try write lock", pthread_rwlock_trywrlock(&mu_));
+  return result == 0;
 }
 
 void RWMutex::ReadUnlock() const {

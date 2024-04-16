@@ -100,35 +100,63 @@ void Compaction::SetInputVersion(Version* _input_version) {
   input_version_->Ref();
   edit_.SetColumnFamily(cfd_->GetID());
 
-  auto caches = cfd_->promotion_caches().Write();
-  for (size_t i = 0; i < num_input_levels(); i++) {
-    for (size_t j = 0; j < inputs_[i].size(); j++) {
-      assert(!inputs_[i][j]->being_or_has_been_compacted);
-      inputs_[i][j]->being_or_has_been_compacted = true;
-    }
-  }
-  if (cfd_->GetCurrentMutableCFOptions()->compaction_router == nullptr) return;
+  CompactionRouter* router =
+      cfd_->GetCurrentMutableCFOptions()->compaction_router;
+  if (router == nullptr) return;
   if (start_level_ != output_level_) {
-    // TODO: Handle other cases
+    // Future work: Handle other cases
     assert(output_level_ == start_level_ + 1);
+    auto mark_fn = [this]() {
+      for (size_t i = 0; i < num_input_levels(); i++) {
+        for (size_t j = 0; j < inputs_[i].size(); j++) {
+          assert(!inputs_[i][j]->being_or_has_been_compacted);
+          // Must hold promotion cache lock.
+          inputs_[i][j]->being_or_has_been_compacted = true;
+        }
+      }
+    };
+    auto caches = cfd_->promotion_caches().Read();
     auto it = caches->find(start_level_);
-    if (it != caches->end()) {
+    if (it == caches->end()) {
+      // We hold the read lock of caches so that the new cache won't be
+      // inserted.
+      mark_fn();
+    } else {
       assert(it->first == start_level_);
-      it->second.TakeRange(smallest_user_key_, largest_user_key_);
+      std::vector<std::pair<std::string, std::string>> records;
+      {
+        auto mut = it->second.mut().Write();
+        mark_fn();
+        records = mut->TakeRange(cfd_->internal_stats(), router,
+                                 smallest_user_key_, largest_user_key_);
+      }
+      for (auto& record : records) {
+        auto& user_key = record.first;
+        auto& value = record.second;
+        InternalKey key;
+        *key.rep() = std::move(user_key);
+        // Future work: Support other types and sequence number
+        key.ConvertFromUserKey(0, ValueType::kTypeValue);
+        cached_records_to_promote_.emplace_back(std::move(key),
+                                                std::move(value));
+      }
     }
   }
-  // it->first > output_level_ is not supported yet, which requires looking
-  // for the newer versions in smaller levels.
+  auto caches = cfd_->promotion_caches().Read();
   auto it = caches->find(output_level_);
   if (it != caches->end()) {
     assert(it->first == output_level_);
-    auto records = it->second.TakeRange(smallest_user_key_, largest_user_key_);
+    auto records = it->second.mut().Write()->TakeRange(
+        cfd_->internal_stats(), router, smallest_user_key_, largest_user_key_);
+    // Future work: Handle the other case which is possible if the router
+    // changes.
+    assert(cached_records_to_promote_.empty());
     for (auto& record : records) {
       auto& user_key = record.first;
       auto& value = record.second;
       InternalKey key;
       *key.rep() = std::move(user_key);
-      // TODO: Support other types and sequence number
+      // Future work: Support other types and sequence number
       key.ConvertFromUserKey(0, ValueType::kTypeValue);
       cached_records_to_promote_.emplace_back(std::move(key), std::move(value));
     }

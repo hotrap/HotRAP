@@ -8,6 +8,7 @@
 #include "rocksdb/comparator.h"
 #include "rocksdb/customizable.h"
 #include "rocksdb/rocksdb_namespace.h"
+#include "rocksdb/utilities/backports.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -20,74 +21,46 @@ class TraitIterator {
   TraitIterator &operator=(const TraitIterator &) = delete;
   virtual ~TraitIterator() = default;
   // TODO: Return std::optional<T> if upgrade to C++17
-  virtual std::unique_ptr<T> next() = 0;
+  virtual optional<T> next() = 0;
 };
-template <typename T>
-class TraitObjIterator : public TraitIterator<T> {
- public:
-  using Item = T;
-  TraitObjIterator(const TraitObjIterator<T> &) = delete;
-  TraitObjIterator<T> &operator=(const TraitObjIterator<T> &) = delete;
-  TraitObjIterator(TraitObjIterator<T> &&rhs) : iter_(std::move(rhs.iter_)) {}
-  TraitObjIterator<T> &operator=(TraitObjIterator<T> &&rhs) {
-    iter_ = std::move(rhs.iter_);
-    return *this;
-  }
-  TraitObjIterator(std::unique_ptr<TraitIterator<Item>> &&iter)
-      : iter_(std::move(iter)) {}
-  std::unique_ptr<T> next() override { return iter_->next(); }
 
- private:
-  std::unique_ptr<TraitIterator<Item>> iter_;
+template <typename T>
+class TraitPeekable : public TraitIterator<T> {
+ public:
+  virtual const T *peek() = 0;
 };
 
 template <typename Iter>
-class Peekable : TraitIterator<typename Iter::Item> {
+class Peekable : public TraitPeekable<typename Iter::Item> {
  public:
   using Item = typename Iter::Item;
-  Peekable(Iter &&iter) : iter_(std::move(iter)), cur_(iter_.next()) {}
+  Peekable(Iter &&iter) : iter_(std::move(iter)) {}
   Peekable(const Peekable &) = delete;
   Peekable &operator=(const Peekable &) = delete;
   Peekable(Peekable &&rhs)
-      : iter_(std::move(rhs.iter_)), cur_(std::move(rhs.cur_)) {}
+      : iter_(std::move(rhs.iter_)), peeked_(std::move(rhs.peeked_)) {}
   Peekable &operator=(Peekable &&rhs) {
     iter_ = std::move(rhs.iter_);
-    cur_ = std::move(rhs.cur_);
+    peeked_ = std::move(rhs.peeked_);
     return *this;
   }
   ~Peekable() override = default;
-  const Item *peek() const { return cur_.get(); }
-  std::unique_ptr<Item> next() override {
-    std::unique_ptr<Item> ret = std::move(cur_);
-    cur_ = iter_.next();
+  const Item *peek() override {
+    if (peeked_.has_value()) return &peeked_.value();
+    peeked_ = next();
+    if (peeked_.has_value()) return &peeked_.value();
+    return nullptr;
+  }
+  optional<Item> next() override {
+    if (!peeked_.has_value()) return iter_.next();
+    optional<Item> ret(std::move(peeked_.value()));
+    peeked_.reset();
     return ret;
   }
 
  private:
   Iter iter_;
-  std::unique_ptr<Item> cur_;
-};
-
-template <typename T>
-class VecIter {
- public:
-  VecIter(const std::vector<T> &v) : v_(v), it_(v_.cbegin()) {}
-  const T *next() {
-    if (it_ == v_.end()) return nullptr;
-    const T *ret = &*it_;
-    ++it_;
-    return ret;
-  }
-  const T *peek() {
-    if (it_ == v_.end())
-      return nullptr;
-    else
-      return &*it_;
-  }
-
- private:
-  const std::vector<T> &v_;
-  typename std::vector<T>::const_iterator it_;
+  optional<Item> peeked_;
 };
 
 struct Bound {
@@ -121,7 +94,7 @@ struct HotRecInfo {
 
 class CompactionRouter : public Customizable {
  public:
-  using Iter = TraitObjIterator<HotRecInfo>;
+  using Iter = std::unique_ptr<TraitIterator<HotRecInfo>>;
   virtual ~CompactionRouter() {}
   static const char *Type() { return "CompactionRouter"; }
   static Status CreateFromString(const ConfigOptions &config_options,
@@ -129,10 +102,13 @@ class CompactionRouter : public Customizable {
                                  const CompactionRouter **result);
   const char *Name() const override = 0;
   virtual size_t Tier(int level) = 0;
-  virtual void Access(int level, Slice key, size_t vlen) = 0;
+  virtual void Access(Slice key, size_t vlen) = 0;
   virtual Iter LowerBound(Slice key) = 0;
   virtual size_t RangeHotSize(Slice smallest, Slice largest) = 0;
   virtual bool IsStablyHot(Slice key) = 0;
+
+  // For statistics
+  virtual void HitLevel(int level, rocksdb::Slice key) = 0;
 };
 
 }  // namespace ROCKSDB_NAMESPACE
