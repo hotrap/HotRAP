@@ -2261,13 +2261,14 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
     if (db != nullptr) {
       assert(level_pc->first < last_level);
       if (level_pc->second.Get(cfd_->internal_stats(), k.user_key(), value)) {
+        RecordTick(cfd_->ioptions()->stats, Tickers::GET_HIT_PROMOTION_CACHE);
         CompactionRouter* router = mutable_cf_options_.compaction_router;
         if (router) {
           router->Access(k.user_key(), value->size());
         }
-        HandleFound(env_get.read_options, env_get.get_context,
-                    fp.GetHitFileLevel(), k.user_key(), value, env_get.status,
-                    env_get.is_blob_index, env_get.do_merge);
+        HandleFound(env_get.read_options, env_get.get_context, level_pc->first,
+                    k.user_key(), value, env_get.status, env_get.is_blob_index,
+                    env_get.do_merge);
         return;
       }
     }
