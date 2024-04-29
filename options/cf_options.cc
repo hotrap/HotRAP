@@ -387,6 +387,12 @@ static std::unordered_map<std::string, OptionTypeInfo>
                       max_bytes_for_level_multiplier_additional),
              OptionVerificationType::kNormal, OptionTypeFlags::kMutable,
              {0, OptionType::kDouble})},
+        {"db_paths_soft_size_limit_multiplier",
+         OptionTypeInfo::Vector<double>(
+             offsetof(struct MutableCFOptions,
+                      db_paths_soft_size_limit_multiplier),
+             OptionVerificationType::kNormal, OptionTypeFlags::kMutable,
+             {0, OptionType::kDouble})},
         {"max_sequential_skip_in_iterations",
          {offsetof(struct MutableCFOptions, max_sequential_skip_in_iterations),
           OptionType::kUInt64T, OptionVerificationType::kNormal,

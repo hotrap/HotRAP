@@ -866,20 +866,75 @@ int GetL0ThresholdSpeedupCompaction(int level0_file_num_compaction_trigger,
 }
 }  // anonymous namespace
 
+/*
+ * Find the optimal path to place a file
+ * Given a level, finds the path where levels up to it will fit in levels
+ * up to and including this path
+ */
+static uint32_t GetPathId(const ImmutableCFOptions& ioptions,
+                          const MutableCFOptions& mutable_cf_options,
+                          int level) {
+  uint32_t p = 0;
+  assert(!ioptions.cf_paths.empty());
+
+  // size remaining in the most recent path
+  uint64_t current_path_size = ioptions.cf_paths[0].target_size;
+
+  uint64_t level_size;
+  int cur_level = 0;
+
+  // max_bytes_for_level_base denotes L1 size.
+  // We estimate L0 size to be the same as L1.
+  level_size = mutable_cf_options.max_bytes_for_level_base;
+
+  // Last path is the fallback
+  while (p < ioptions.cf_paths.size() - 1) {
+    if (level_size <= current_path_size) {
+      if (cur_level == level) {
+        // Does desired level fit in this path?
+        return p;
+      } else {
+        current_path_size -= level_size;
+        if (cur_level > 0) {
+          if (ioptions.level_compaction_dynamic_level_bytes) {
+            // Currently, level_compaction_dynamic_level_bytes is ignored when
+            // multiple db paths are specified. https://github.com/facebook/
+            // rocksdb/blob/main/db/column_family.cc.
+            // Still, adding this check to avoid accidentally using
+            // max_bytes_for_level_multiplier_additional
+            level_size = static_cast<uint64_t>(
+                level_size * mutable_cf_options.max_bytes_for_level_multiplier);
+          } else {
+            level_size = static_cast<uint64_t>(
+                level_size * mutable_cf_options.max_bytes_for_level_multiplier *
+                mutable_cf_options.MaxBytesMultiplerAdditional(cur_level));
+          }
+        }
+        cur_level++;
+        continue;
+      }
+    }
+    p++;
+    current_path_size = ioptions.cf_paths[p].target_size;
+  }
+  return p;
+}
+
 std::pair<WriteStallCondition, WriteStallCause>
 ColumnFamilyData::GetWriteStallConditionAndCause(
-    int num_unflushed_memtables, int num_l0_files,
-    uint64_t num_compaction_needed_bytes,
+    const VersionStorageInfo* vstorage, int num_unflushed_memtables,
+    int num_l0_files, uint64_t num_compaction_needed_bytes,
     const MutableCFOptions& mutable_cf_options,
     const ImmutableCFOptions& immutable_cf_options) {
   if (num_unflushed_memtables >= mutable_cf_options.max_write_buffer_number) {
     return {WriteStallCondition::kStopped, WriteStallCause::kMemtableLimit};
   } else if (!mutable_cf_options.disable_auto_compactions &&
-             num_l0_files >= mutable_cf_options.level0_stop_writes_trigger) {
+             vstorage->l0_delay_trigger_count() >=
+                 mutable_cf_options.level0_stop_writes_trigger) {
     return {WriteStallCondition::kStopped, WriteStallCause::kL0FileCountLimit};
   } else if (!mutable_cf_options.disable_auto_compactions &&
              mutable_cf_options.hard_pending_compaction_bytes_limit > 0 &&
-             num_compaction_needed_bytes >=
+             vstorage->estimated_compaction_needed_bytes() >=
                  mutable_cf_options.hard_pending_compaction_bytes_limit) {
     return {WriteStallCondition::kStopped,
             WriteStallCause::kPendingCompactionBytes};
@@ -896,10 +951,34 @@ ColumnFamilyData::GetWriteStallConditionAndCause(
     return {WriteStallCondition::kDelayed, WriteStallCause::kL0FileCountLimit};
   } else if (!mutable_cf_options.disable_auto_compactions &&
              mutable_cf_options.soft_pending_compaction_bytes_limit > 0 &&
-             num_compaction_needed_bytes >=
+             vstorage->estimated_compaction_needed_bytes() >=
                  mutable_cf_options.soft_pending_compaction_bytes_limit) {
     return {WriteStallCondition::kDelayed,
             WriteStallCause::kPendingCompactionBytes};
+  }
+  if (!mutable_cf_options.db_paths_soft_size_limit_multiplier.empty()) {
+    uint32_t current_path_id = 0;
+    size_t used_size = 0;
+    for (int level = 0; level < vstorage->num_levels(); ++level) {
+      uint32_t path_id =
+          GetPathId(immutable_cf_options, mutable_cf_options, level);
+      if (current_path_id != path_id) {
+        if (used_size >=
+            immutable_cf_options.cf_paths[current_path_id].target_size *
+                mutable_cf_options
+                    .db_paths_soft_size_limit_multiplier[current_path_id]) {
+          return {WriteStallCondition::kDelayed,
+                  WriteStallCause::kDbPathsSizeLimit};
+        }
+        if (mutable_cf_options.db_paths_soft_size_limit_multiplier.size() - 1 <
+            path_id) {
+          break;
+        }
+        current_path_id = path_id;
+        used_size = 0;
+      }
+      used_size += vstorage->NumLevelBytes(level);
+    }
   }
   return {WriteStallCondition::kNormal, WriteStallCause::kNone};
 }
@@ -914,7 +993,7 @@ WriteStallCondition ColumnFamilyData::RecalculateWriteStallConditions(
         vstorage->estimated_compaction_needed_bytes();
 
     auto write_stall_condition_and_cause = GetWriteStallConditionAndCause(
-        imm()->NumNotFlushed(), vstorage->l0_delay_trigger_count(),
+        vstorage, imm()->NumNotFlushed(), vstorage->l0_delay_trigger_count(),
         vstorage->estimated_compaction_needed_bytes(), mutable_cf_options,
         *ioptions());
     write_stall_condition = write_stall_condition_and_cause.first;
@@ -1016,6 +1095,16 @@ WriteStallCondition ColumnFamilyData::RecalculateWriteStallConditions(
           "bytes %" PRIu64 " rate %" PRIu64,
           name_.c_str(), vstorage->estimated_compaction_needed_bytes(),
           write_controller->delayed_write_rate());
+    } else if (write_stall_condition == WriteStallCondition::kDelayed &&
+               write_stall_cause == WriteStallCause::kDbPathsSizeLimit) {
+      write_controller_token_ =
+          SetupDelay(write_controller, compaction_needed_bytes,
+                     prev_compaction_needed_bytes_, was_stopped,
+                     mutable_cf_options.disable_auto_compactions);
+      ROCKS_LOG_WARN(ioptions_.logger,
+                     "[%s] Stalling writes because DB paths size exceeds "
+                     "limit. rate %" PRIu64,
+                     name_.c_str(), write_controller->delayed_write_rate());
     } else {
       assert(write_stall_condition == WriteStallCondition::kNormal);
       if (vstorage->l0_delay_trigger_count() >=

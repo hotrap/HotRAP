@@ -93,6 +93,7 @@ bool DBImpl::ShouldRescheduleFlushRequestToRetainUDT(
   // Write stall entered because of the accumulation of write buffers can be
   // alleviated if we continue with the flush instead of postponing it.
   const auto& mutable_cf_options = *cfd->GetLatestMutableCFOptions();
+  const auto* vstorage = cfd->current()->storage_info();
 
   // Taking the status of the active Memtable into consideration so that we are
   // not just checking if DB is currently already in write stall mode.
@@ -102,7 +103,8 @@ bool DBImpl::ShouldRescheduleFlushRequestToRetainUDT(
                          : 0;
   WriteStallCondition write_stall =
       ColumnFamilyData::GetWriteStallConditionAndCause(
-          cfd->imm()->NumNotFlushed() + mem_to_flush, /*num_l0_files=*/0,
+          vstorage, cfd->imm()->NumNotFlushed() + mem_to_flush,
+          /*num_l0_files=*/0,
           /*num_compaction_needed_bytes=*/0, mutable_cf_options,
           *cfd->ioptions())
           .first;
@@ -2599,12 +2601,13 @@ Status DBImpl::WaitUntilFlushWouldNotStallWrites(ColumnFamilyData* cfd,
       // No extra immutable Memtable will be created if the current Memtable is
       // empty.
       int mem_to_flush = cfd->mem()->IsEmpty() ? 0 : 1;
-      write_stall_condition = ColumnFamilyData::GetWriteStallConditionAndCause(
-                                  cfd->imm()->NumNotFlushed() + mem_to_flush,
-                                  vstorage->l0_delay_trigger_count() + 1,
-                                  vstorage->estimated_compaction_needed_bytes(),
-                                  mutable_cf_options, *cfd->ioptions())
-                                  .first;
+      write_stall_condition =
+          ColumnFamilyData::GetWriteStallConditionAndCause(
+              vstorage, cfd->imm()->NumNotFlushed() + mem_to_flush,
+              vstorage->l0_delay_trigger_count() + 1,
+              vstorage->estimated_compaction_needed_bytes(), mutable_cf_options,
+              *cfd->ioptions())
+              .first;
     } while (write_stall_condition != WriteStallCondition::kNormal);
   }
   return Status::OK();
