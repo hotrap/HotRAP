@@ -1968,6 +1968,10 @@ static void TryPromote(
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value) return;
+  // I don't think we can get the block size in this context. So I hard code
+  // the promotion threshold. Maybe we should make it an option of compaction
+  // router.
+  if (user_key.size() + value->size() >= 16 * 1024) return;
   if (router->Tier(hit_level) == 0) {
     router->Access(user_key, value->size());
     return;
