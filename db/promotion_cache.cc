@@ -339,23 +339,20 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
                                  Slice largest) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
-  std::vector<std::pair<std::string, std::string>> ret;
-  auto begin_it = cache.begin();
-  auto it = begin_it;
-  while (it != cache.end()) {
-    if (ucmp_->Compare(it->first, largest) < 0 &&
-        ucmp_->Compare(it->first, smallest) >= 0) {
-      if (it->second.count > 1 || router->IsStablyHot(it->first)) {
-        // TODO: Is it possible to avoid copying here?
-        ret.emplace_back(it->first, it->second.value);
-      }
-      router->Access(it->first, it->second.value.size());
+  std::vector<std::pair<std::string, PCData>> records_in_range;
+  for (const auto &record : cache) {
+    if (ucmp_->Compare(record.first, largest) < 0 &&
+        ucmp_->Compare(record.first, smallest) >= 0) {
+      records_in_range.emplace_back(record.first, record.second);
     }
-    ++it;
   }
-  for (auto &kv : ret) {
-    if (cache.erase(kv.first)) {
-      *size -= kv.first.size() + kv.second.size();
+  std::vector<std::pair<std::string, std::string>> ret;
+  for (auto &record : records_in_range) {
+    assert(cache.erase(record.first));
+    *size -= record.first.size() + record.second.value.size();
+    router->Access(record.first, record.second.value.size());
+    if (record.second.count > 1 || router->IsStablyHot(record.first)) {
+      ret.emplace_back(std::move(record.first), std::move(record.second.value));
     }
   }
   std::sort(ret.begin(), ret.end());
