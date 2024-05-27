@@ -279,14 +279,19 @@ void PromotionCache::checker() {
   printer.join();
 }
 size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
-                                     const std::string &key, Slice value) {
+                                     const std::string &key,
+                                     Slice value) const {
+  size_t size;
   PCHashTable::accessor it;
   if (cache.insert(it, key)) {
     it->second.value = value.ToString();
     it->second.count = 1;
-    *size += key.size() + value.size();
+    size_t add = key.size() + value.size();
+    size = size_.fetch_add(add, std::memory_order_relaxed) + add;
+  } else {
+    size = size_.load(std::memory_order_relaxed);
   }
-  return *size;
+  return size;
 }
 void PromotionCache::SwitchMutablePromotionCache(
     DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
@@ -294,7 +299,7 @@ void PromotionCache::SwitchMutablePromotionCache(
   size_t mut_size;
   {
     auto mut = mut_.Write();
-    mut_size = mut->size->load();
+    mut_size = mut->size_.load(std::memory_order_relaxed);
     if (mut_size < write_buffer_size) {
       return;
     }
@@ -303,7 +308,7 @@ void PromotionCache::SwitchMutablePromotionCache(
       cache.emplace(a.first, std::move(a.second));
     }
     mut->cache.clear();
-    *(mut->size) = 0;
+    mut->size_.store(0, std::memory_order_relaxed);
   }
   db.mutex()->Lock();
   std::list<rocksdb::ImmPromotionCache>::iterator iter;
@@ -349,7 +354,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
   std::vector<std::pair<std::string, std::string>> ret;
   for (auto &record : records_in_range) {
     assert(cache.erase(record.first));
-    *size -= record.first.size() + record.second.value.size();
+    size_.fetch_sub(record.first.size() + record.second.value.size(),
+                    std::memory_order_relaxed);
     router->Access(record.first, record.second.value.size());
     if (record.second.count > 1 || router->IsStablyHot(record.first)) {
       ret.emplace_back(std::move(record.first), std::move(record.second.value));

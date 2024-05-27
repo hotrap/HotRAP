@@ -52,11 +52,15 @@ struct ImmPromotionCacheList {
   size_t size = 0;
 };
 struct MutablePromotionCache {
-  MutablePromotionCache(const Comparator *ucmp)
-      : ucmp_(ucmp), size(new std::atomic<size_t>(0)) {}
+  MutablePromotionCache(const Comparator *ucmp) : ucmp_(ucmp), size_(0) {}
+  MutablePromotionCache(const MutablePromotionCache &&rhs)
+      : ucmp_(rhs.ucmp_),
+        cache(std::move(rhs.cache)),
+        size_(rhs.size_.load(std::memory_order_relaxed)) {}
+
   // Return the size of the mutable promotion cache
   size_t Insert(InternalStats *internal_stats, const std::string &key,
-                Slice value);
+                Slice value) const;
   // [begin, end)
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
@@ -64,8 +68,8 @@ struct MutablePromotionCache {
 
  private:
   const Comparator *ucmp_;
-  PCHashTable cache;
-  std::unique_ptr<std::atomic<size_t>> size;
+  mutable PCHashTable cache;
+  mutable std::atomic<size_t> size_;
   friend class PromotionCache;
 };
 
