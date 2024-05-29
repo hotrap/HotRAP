@@ -173,8 +173,8 @@ void PromotionCache::checker() {
                                               .start();
       for (const auto &item : cache.cache) {
         const std::string &user_key = item.first;
-        if (item.second.count <= 1 && !router->IsStablyHot(user_key)) {
-          RecordTick(stats, Tickers::NOT_STABLY_HOT_BYTES,
+        if (item.second.count <= 1 && !router->IsHot(user_key)) {
+          RecordTick(stats, Tickers::ACCESSED_COLD_BYTES,
                      user_key.size() + item.second.value.size());
           continue;
         }
@@ -356,8 +356,9 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     assert(cache.erase(record.first));
     size_.fetch_sub(record.first.size() + record.second.value.size(),
                     std::memory_order_relaxed);
+    bool is_hot = router->IsHot(record.first);
     router->Access(record.first, record.second.value.size());
-    if (record.second.count > 1 || router->IsStablyHot(record.first)) {
+    if (record.second.count > 1 || is_hot) {
       ret.emplace_back(std::move(record.first), std::move(record.second.value));
     }
   }
