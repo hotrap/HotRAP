@@ -6058,6 +6058,48 @@ void VersionSet::AddLiveFiles(std::vector<uint64_t>* live_table_files,
   }
 }
 
+class VecIter : public InternalIterator {
+ public:
+  VecIter(const Comparator* ucmp,
+          const std::vector<std::pair<std::string, std::string>>& v)
+      : cmp_(ucmp), v_(v), it_(v_.end()) {}
+
+  bool Valid() const final override { return it_ != v_.end(); }
+  Slice key() const final override { return it_->first; }
+  Status status() const final override { return Status::OK(); }
+
+  void Seek(const Slice& key) final override { assert(false); }
+  void SeekToLast() final override { assert(false); }
+  void SeekForPrev(const Slice& target) final override { assert(false); }
+  void Prev() final override { assert(false); }
+
+  // void Seek(const Slice& key) final override {
+  //   it_ = lower_bound(v_.begin(), v_.end(), key, cmp_);
+  // }
+  void SeekToFirst() final override { it_ = v_.begin(); }
+
+  Slice value() const final override { return it_->second; }
+
+  void Next() final override { ++it_; }
+
+ private:
+  class Compare {
+   public:
+    Compare(const Comparator* ucmp) : icmp_(ucmp) {}
+    bool operator()(const std::pair<std::string, std::string>& a,
+                    const Slice& b) const {
+      return icmp_.Compare(a.first, b) < 0;
+    }
+
+   private:
+    InternalKeyComparator icmp_;
+  };
+
+  Compare cmp_;
+  const std::vector<std::pair<std::string, std::string>>& v_;
+  typename std::vector<std::pair<std::string, std::string>>::const_iterator it_;
+};
+
 class InternalIterAppendLevel : public InternalIterator {
  public:
   InternalIterAppendLevel(int level, InternalIterator* iter) : iter_(iter) {
@@ -6112,12 +6154,23 @@ InternalIterator* VersionSet::MakeInputIterator(
     RangeDelAggregator* range_del_agg,
     const FileOptions& file_options_compactions) {
   auto cfd = c->column_family_data();
+
+  InternalIterAppendLevel* promotion_cache_iter = nullptr;
+  if (!c->cached_records_to_promote().empty()) {
+    InternalIterator* iter =
+        new VecIter(cfd->user_comparator(), c->cached_records_to_promote());
+    promotion_cache_iter = new InternalIterAppendLevel(-1, iter);
+  }
+
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
-  const size_t space = (c->level() == 0 ? c->input_levels(0)->num_files +
-                                              c->num_input_levels() - 1
-                                        : c->num_input_levels());
+  size_t space = (c->level() == 0 ? c->input_levels(0)->num_files +
+                                        c->num_input_levels() - 1
+                                  : c->num_input_levels());
+  if (promotion_cache_iter) {
+    space += 1;
+  }
   InternalIterator** list = new InternalIterator*[space];
   size_t num = 0;
   for (size_t which = 0; which < c->num_input_levels(); which++) {
@@ -6154,6 +6207,11 @@ InternalIterator* VersionSet::MakeInputIterator(
                 TableReaderCaller::kCompaction, /*skip_filters=*/false,
                 /*level=*/static_cast<int>(c->level(which)), range_del_agg,
                 c->boundaries(which)));
+      }
+      if (promotion_cache_iter != nullptr &&
+          c->level(which) == c->target_level_to_promote()) {
+        list[num++] = promotion_cache_iter;
+        promotion_cache_iter = nullptr;
       }
     }
   }

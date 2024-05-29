@@ -103,6 +103,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
   CompactionRouter* router =
       cfd_->GetCurrentMutableCFOptions()->compaction_router;
   if (router == nullptr) return;
+  target_level_to_promote_ = -1;
   if (start_level_ != output_level_) {
     // Future work: Handle other cases
     assert(output_level_ == start_level_ + 1);
@@ -137,9 +138,10 @@ void Compaction::SetInputVersion(Version* _input_version) {
         *key.rep() = std::move(user_key);
         // Future work: Support other types and sequence number
         key.ConvertFromUserKey(0, ValueType::kTypeValue);
-        cached_records_to_promote_.emplace_back(std::move(key),
+        cached_records_to_promote_.emplace_back(std::move(*key.rep()),
                                                 std::move(value));
       }
+      target_level_to_promote_ = start_level_;
     }
   }
   auto caches = cfd_->promotion_caches().Read();
@@ -158,8 +160,10 @@ void Compaction::SetInputVersion(Version* _input_version) {
       *key.rep() = std::move(user_key);
       // Future work: Support other types and sequence number
       key.ConvertFromUserKey(0, ValueType::kTypeValue);
-      cached_records_to_promote_.emplace_back(std::move(key), std::move(value));
+      cached_records_to_promote_.emplace_back(std::move(*key.rep()),
+                                              std::move(value));
     }
+    target_level_to_promote_ = output_level_;
   }
 }
 
