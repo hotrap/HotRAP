@@ -63,6 +63,33 @@ class Peekable : public TraitPeekable<typename Iter::Item> {
   optional<Item> peeked_;
 };
 
+template <typename Item>
+class Peekable<std::unique_ptr<TraitIterator<Item>>>
+    : public TraitPeekable<Item> {
+ public:
+  Peekable(std::unique_ptr<TraitIterator<Item>> &&iter)
+      : iter_(std::move(iter)) {}
+
+  ~Peekable() override = default;
+
+  optional<Item> next() final override {
+    if (!peeked_.has_value()) return iter_->next();
+    optional<Item> ret(std::move(peeked_.value()));
+    peeked_.reset();
+    return ret;
+  }
+  const Item *peek() final override {
+    if (peeked_.has_value()) return &peeked_.value();
+    peeked_ = next();
+    if (peeked_.has_value()) return &peeked_.value();
+    return nullptr;
+  }
+
+ private:
+  std::unique_ptr<TraitIterator<Item>> iter_;
+  optional<Item> peeked_;
+};
+
 struct Bound {
   Slice user_key;
   bool excluded;
@@ -87,10 +114,7 @@ struct RangeBounds {
   }
 };
 
-struct HotRecInfo {
-  Slice key;
-  bool stable;
-};
+using HotRecInfo = Slice;
 
 class CompactionRouter : public Customizable {
  public:

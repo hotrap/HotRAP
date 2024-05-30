@@ -1425,27 +1425,6 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   CompactionIterWrapper iter_;
 };
 
-template <typename Iter>
-class IgnoreStableHot : public TraitIterator<Slice> {
- public:
-  IgnoreStableHot(Iter&& iter) : iter_(std::move(iter)) {}
-  IgnoreStableHot(IgnoreStableHot<Iter>&& iter)
-      : iter_(std::move(iter.iter_)) {}
-  optional<Slice> next() override {
-    for (;;) {
-      optional<HotRecInfo> ret = iter_->next();
-      if (!ret.has_value()) {
-        return nullopt;
-      } else {
-        return make_optional<Slice>(ret.value().key);
-      }
-    }
-  }
-
- private:
-  Iter iter_;
-};
-
 class RouterIteratorFD2SD : public TraitIterator<Elem> {
  public:
   RouterIteratorFD2SD(CompactionRouter& router, const Compaction& c,
@@ -1456,8 +1435,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
         end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(c_iter),
-        hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
-            router.LowerBound(start_))),
+        hot_iter_(router.LowerBound(start_)),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
   ~RouterIteratorFD2SD() {
@@ -1523,7 +1501,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
-  Peekable<IgnoreStableHot<CompactionRouter::Iter>> hot_iter_;
+  Peekable<CompactionRouter::Iter> hot_iter_;
 
   size_t kvsize_promoted_;
   size_t kvsize_retained_;
