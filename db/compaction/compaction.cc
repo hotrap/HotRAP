@@ -124,22 +124,12 @@ void Compaction::SetInputVersion(Version* _input_version) {
       mark_fn();
     } else {
       assert(it->first == start_level_);
-      std::vector<std::pair<std::string, std::string>> records;
       {
         auto mut = it->second.mut().Write();
         mark_fn();
-        records = mut->TakeRange(cfd_->internal_stats(), router,
-                                 smallest_user_key_, largest_user_key_);
-      }
-      for (auto& record : records) {
-        auto& user_key = record.first;
-        auto& value = record.second;
-        InternalKey key;
-        *key.rep() = std::move(user_key);
-        // Future work: Support other types and sequence number
-        key.ConvertFromUserKey(0, ValueType::kTypeValue);
-        cached_records_to_promote_.emplace_back(std::move(*key.rep()),
-                                                std::move(value));
+        cached_records_to_promote_ =
+            mut->TakeRange(cfd_->internal_stats(), router, smallest_user_key_,
+                           largest_user_key_);
       }
       target_level_to_promote_ = start_level_;
     }
@@ -148,21 +138,11 @@ void Compaction::SetInputVersion(Version* _input_version) {
   auto it = caches->find(output_level_);
   if (it != caches->end()) {
     assert(it->first == output_level_);
-    auto records = it->second.mut().Write()->TakeRange(
-        cfd_->internal_stats(), router, smallest_user_key_, largest_user_key_);
     // Future work: Handle the other case which is possible if the router
     // changes.
     assert(cached_records_to_promote_.empty());
-    for (auto& record : records) {
-      auto& user_key = record.first;
-      auto& value = record.second;
-      InternalKey key;
-      *key.rep() = std::move(user_key);
-      // Future work: Support other types and sequence number
-      key.ConvertFromUserKey(0, ValueType::kTypeValue);
-      cached_records_to_promote_.emplace_back(std::move(*key.rep()),
-                                              std::move(value));
-    }
+    cached_records_to_promote_ = it->second.mut().Write()->TakeRange(
+        cfd_->internal_stats(), router, smallest_user_key_, largest_user_key_);
     target_level_to_promote_ = output_level_;
   }
 }

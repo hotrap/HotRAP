@@ -14,6 +14,7 @@
 
 #include "column_family.h"
 #include "db/db_impl/db_impl.h"
+#include "db/dbformat.h"
 #include "db/internal_stats.h"
 #include "db/job_context.h"
 #include "db/lookup_key.h"
@@ -23,6 +24,7 @@
 #include "rocksdb/compaction_router.h"
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
+#include "rocksdb/types.h"
 #include "util/autovector.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -60,14 +62,14 @@ void PromotionCache::stop_checker_no_wait() {
   }
 }
 void PromotionCache::wait_for_checker_to_stop() { checker_.join(); }
-bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
+bool PromotionCache::Get(InternalStats *internal_stats, Slice user_key,
                          PinnableSlice *value) const {
   {
     auto res = mut_.TryRead();
     if (!res.has_value()) return false;
     const auto &mut = res.value();
     PCHashTable::accessor it;
-    if (mut->cache.find(it, key.ToString())) {
+    if (mut->cache.find(it, user_key.ToString())) {
       if (value) value->PinSelf(it->second.value);
       it->second.count += 1;
       return true;
@@ -234,9 +236,8 @@ void PromotionCache::checker() {
                      user_key.size() + value.size());
           continue;
         }
-        // It seems that sequence number 0 is treated specially. So we use 1
-        // here.
-        Status s = m->Add(1, ValueType::kTypeValue, user_key, value, nullptr);
+        Status s =
+            m->Add(item.second.sequence, kTypeValue, user_key, value, nullptr);
         if (!s.ok()) {
           ROCKS_LOG_FATAL(cfd->ioptions()->logger,
                           "check_newer_version: Unexpected error: %s",
@@ -278,12 +279,17 @@ void PromotionCache::checker() {
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
-size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
-                                     const std::string &key,
+size_t MutablePromotionCache::Insert(InternalStats *internal_stats, Slice key,
                                      Slice value) const {
   size_t size;
+
+  ParsedInternalKey ikey;
+  Status s = ParseInternalKey(key, &ikey, false);
+  assert(s.ok());
+
   PCHashTable::accessor it;
-  if (cache.insert(it, key)) {
+  if (cache.insert(it, ikey.user_key.ToString())) {
+    it->second.sequence = ikey.sequence;
     it->second.value = value.ToString();
     it->second.count = 1;
     size_t add = key.size() + value.size();
@@ -344,25 +350,32 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
                                  Slice largest) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
-  std::vector<std::pair<std::string, PCData>> records_in_range;
+  std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
+      records_in_range;
   for (const auto &record : cache) {
     if (ucmp_->Compare(record.first, largest) < 0 &&
         ucmp_->Compare(record.first, smallest) >= 0) {
-      records_in_range.emplace_back(record.first, record.second);
+      InternalKey key(record.first, record.second.sequence, kTypeValue);
+      records_in_range.emplace_back(
+          std::move(key),
+          std::make_pair(record.second.value, record.second.count));
     }
   }
   std::vector<std::pair<std::string, std::string>> ret;
   for (auto &record : records_in_range) {
-    assert(cache.erase(record.first));
-    size_.fetch_sub(record.first.size() + record.second.value.size(),
-                    std::memory_order_relaxed);
-    bool is_hot = router->IsHot(record.first);
-    router->Access(record.first, record.second.value.size());
-    if (record.second.count > 1 || is_hot) {
-      ret.emplace_back(std::move(record.first), std::move(record.second.value));
+    InternalKey key = std::move(record.first);
+    Slice user_key = key.user_key();
+    std::string value = std::move(record.second.first);
+    uint64_t count = record.second.second;
+    assert(cache.erase(user_key.ToString()));
+    size_.fetch_sub(key.size() + value.size(), std::memory_order_relaxed);
+    bool is_hot = router->IsHot(user_key);
+    router->Access(user_key, value.size());
+    if (count > 1 || is_hot) {
+      ret.emplace_back(std::move(*key.rep()), std::move(value));
     }
   }
-  std::sort(ret.begin(), ret.end());
+  std::sort(ret.begin(), ret.end(), InternalKeyCompare(ucmp_));
   return ret;
 }
 }  // namespace ROCKSDB_NAMESPACE

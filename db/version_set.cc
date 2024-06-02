@@ -32,6 +32,7 @@
 #include "db/column_family.h"
 #include "db/compaction/compaction.h"
 #include "db/compaction/file_pri.h"
+#include "db/dbformat.h"
 #include "db/internal_stats.h"
 #include "db/log_reader.h"
 #include "db/log_writer.h"
@@ -1964,16 +1965,16 @@ static void TryPromote(
     DBImpl* db, ColumnFamilyData& cfd,
     const MutableCFOptions& mutable_cf_options,
     std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
-    Slice user_key, PinnableSlice* value) {
+    const LookupKey& key, PinnableSlice* value) {
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value) return;
   // I don't think we can get the block size in this context. So I hard code
   // the promotion threshold. Maybe we should make it an option of compaction
   // router.
-  if (user_key.size() + value->size() >= 16 * 1024) return;
+  if (key.internal_key().size() + value->size() >= 16 * 1024) return;
   if (router->Tier(hit_level) == 0) {
-    router->Access(user_key, value->size());
+    router->Access(key.user_key(), value->size());
     return;
   }
   assert(hit_level > 0);
@@ -2019,7 +2020,7 @@ static void TryPromote(
       if (f.get().being_or_has_been_compacted) return;
     }
     mut_size = const_cast<MutablePromotionCache&>(*mut).Insert(
-        cfd.internal_stats(), user_key.ToString(), *value);
+        cfd.internal_stats(), key.internal_key(), *value);
   }
   size_t tot = mut_size + cache->imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
@@ -2165,7 +2166,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
     case GetContext::kFound:
       if (num_cache_data_miss > prev_num_cache_data_miss) {
         TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
-                   hit_level, user_key, env_get.value);
+                   hit_level, env_get.k, env_get.value);
       }
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
