@@ -1454,12 +1454,10 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     }
     Decision decision;
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      decision = Decision::kStartLevel;
-      hot_iter_.next();
+      return Decision::kStartLevel;
     } else {
-      decision = Decision::kNextLevel;
+      return Decision::kNextLevel;
     }
-    return decision;
   }
   optional<Elem> next() override {
     optional<IKeyValueLevel> kv_ret = iter_.next();
