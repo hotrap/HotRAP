@@ -194,7 +194,7 @@ void PromotionCache::checker() {
       LookupKey key(user_key, kMaxSequenceNumber);
       Status s;
       MergeContext merge_context;
-      SequenceNumber max_covering_tombstone_seq;
+      SequenceNumber max_covering_tombstone_seq = 0;
       if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
                        &max_covering_tombstone_seq, ReadOptions())) {
         mark_updated(cache, user_key);
