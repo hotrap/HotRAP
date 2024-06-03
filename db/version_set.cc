@@ -2190,7 +2190,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
 }
 
 // If db == nullptr then it's called from check_newer_version
-void Version::Get(DBImpl* db, const ReadOptions& read_options,
+bool Version::Get(DBImpl* db, const ReadOptions& read_options,
                   const LookupKey& k, PinnableSlice* value,
                   std::string* timestamp, Status* status,
                   MergeContext* merge_context,
@@ -2260,7 +2260,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
     while (f != nullptr && (int)fp.GetHitFileLevel() <= level_pc->first) {
       bool should_stop = GetInFile(env_get, *f, fp.GetHitFileLevel(),
                                    fp.IsHitFileLastInLevel());
-      if (should_stop) return;
+      if (should_stop) return true;
       f = fp.GetNextFile();
     }
     if (db != nullptr) {
@@ -2274,18 +2274,19 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
         HandleFound(env_get.read_options, env_get.get_context, level_pc->first,
                     k.user_key(), value, env_get.status, env_get.is_blob_index,
                     env_get.do_merge);
-        return;
+        return true;
       }
     }
   }
   while (f != nullptr) {
     bool should_stop =
         GetInFile(env_get, *f, fp.GetHitFileLevel(), fp.IsHitFileLastInLevel());
-    if (should_stop) return;
+    if (should_stop) return true;
     f = fp.GetNextFile();
   }
   HandleNotFound(env_get.get_context, user_key, env_get.value, env_get.status,
                  env_get.merge_context, env_get.key_exists, env_get.do_merge);
+  return false;
 }
 
 void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,

@@ -708,7 +708,7 @@ class Version {
   //    If the key has any merge operands then store them in
   //    merge_context.operands_list and don't merge the operands
   // REQUIRES: lock is not held
-  void Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
+  bool Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
            PinnableSlice* value, std::string* timestamp, Status* status,
            MergeContext* merge_context,
            SequenceNumber* max_covering_tombstone_seq,

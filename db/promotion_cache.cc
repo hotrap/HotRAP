@@ -204,17 +204,14 @@ void PromotionCache::checker() {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                         s.ToString().c_str());
       }
-      sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
-                       &merge_context, &max_covering_tombstone_seq, nullptr,
-                       nullptr, nullptr, nullptr, nullptr, false,
-                       target_level_);
-      if (!s.IsNotFound()) {
-        if (!s.ok()) {
-          ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
-                          s.ToString().c_str());
-        }
+      if (sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
+                           &merge_context, &max_covering_tombstone_seq, nullptr,
+                           nullptr, nullptr, nullptr, nullptr, false,
+                           target_level_)) {
         mark_updated(cache, user_key);
+        continue;
       }
+      assert(s.IsNotFound());
     }
     // TODO: Is this really thread-safe?
     MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
