@@ -2019,8 +2019,7 @@ static void TryPromote(
     for (auto f : cd_files) {
       if (f.get().being_or_has_been_compacted) return;
     }
-    mut_size = const_cast<MutablePromotionCache&>(*mut).Insert(
-        cfd.internal_stats(), key.internal_key(), *value);
+    mut_size = mut->Insert(cfd.internal_stats(), key.internal_key(), *value);
   }
   size_t tot = mut_size + cache->imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
