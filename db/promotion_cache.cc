@@ -175,15 +175,14 @@ void PromotionCache::checker() {
                                               .start();
       for (const auto &item : cache.cache) {
         const std::string &user_key = item.first;
-        if (item.second.count <= 1 && !router->IsHot(user_key)) {
+        bool is_stably_hot = item.second.count > 1 || router->IsHot(user_key);
+        router->Access(item.first, item.second.value.size());
+        if (is_stably_hot) {
+          stably_hot.insert(user_key);
+        } else {
           RecordTick(stats, Tickers::ACCESSED_COLD_BYTES,
                      user_key.size() + item.second.value.size());
-          continue;
         }
-        stably_hot.insert(user_key);
-      }
-      for (const auto &item : cache.cache) {
-        router->Access(item.first, item.second.value.size());
       }
     }
     TimerGuard check_newer_version_start =
