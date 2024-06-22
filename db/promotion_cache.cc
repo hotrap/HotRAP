@@ -75,17 +75,6 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice user_key,
       return true;
     }
   }
-  // auto imm_list = imm_list_.Read();
-  // for (const ImmPromotionCache &imm : imm_list->list) {
-  //   auto timer_guard_imm =
-  //       internal_stats->hotrap_timers().timer(TimerType::kImmPCGet).start();
-  //   // TODO: Avoid the copy here after upgrading to C++14
-  //   auto it = imm.cache.find(key.ToString());
-  //   if (it != imm.cache.end()) {
-  //     if (value) value->PinSelf(it->second);
-  //     return true;
-  //   }
-  // }
   return false;
 }
 
