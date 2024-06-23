@@ -840,7 +840,8 @@ class Version {
 
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
                    int hit_level, Slice user_key, PinnableSlice* value,
-                   Status& status, bool is_blob_index, bool do_merge);
+                   Status& status, bool is_blob_index, bool do_merge,
+                   bool is_checker);
   void HandleNotFound(GetContext& get_context, Slice user_key,
                       PinnableSlice* value, Status& status,
                       MergeContext& merge_context, bool* key_exists,

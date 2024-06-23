@@ -2032,10 +2032,12 @@ static void TryPromote(
 void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
                           Slice user_key, PinnableSlice* value, Status& status,
-                          bool is_blob_index, bool do_merge) {
+                          bool is_blob_index, bool do_merge, bool is_checker) {
   CompactionRouter* router = mutable_cf_options_.compaction_router;
   if (!router) return;
-  router->HitLevel(hit_level, user_key);
+  if (!is_checker) {
+    router->HitLevel(hit_level, user_key);
+  }
 
   if (hit_level == 0) {
     RecordTick(db_statistics_, GET_HIT_L0);
@@ -2169,7 +2171,8 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
       }
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
-                  env_get.is_blob_index, env_get.do_merge);
+                  env_get.is_blob_index, env_get.do_merge,
+                  env_get.db == nullptr);
       return true;
     case GetContext::kDeleted:
       // Use empty error message for speed
@@ -2272,7 +2275,7 @@ bool Version::Get(DBImpl* db, const ReadOptions& read_options,
         }
         HandleFound(env_get.read_options, env_get.get_context, level_pc->first,
                     k.user_key(), value, env_get.status, env_get.is_blob_index,
-                    env_get.do_merge);
+                    env_get.do_merge, false);
         return true;
       }
     }
