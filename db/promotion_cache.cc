@@ -149,7 +149,7 @@ void PromotionCache::checker() {
     SuperVersion *sv = elem.sv;
     auto iter = elem.iter;
     ColumnFamilyData *cfd = sv->cfd;
-    InternalStats &internal_stats = *cfd->internal_stats();
+    const auto &hotrap_timers = cfd->internal_stats()->hotrap_timers();
     ImmPromotionCache &cache = *iter;
 
     std::unordered_set<std::reference_wrapper<const std::string>, RefHash,
@@ -159,9 +159,8 @@ void PromotionCache::checker() {
     const Comparator *ucmp = cfd->ioptions()->user_comparator;
     auto stats = cfd->ioptions()->stats;
     if (router) {
-      TimerGuard check_stably_hot_start = internal_stats.hotrap_timers()
-                                              .timer(TimerType::kCheckStablyHot)
-                                              .start();
+      TimerGuard check_stably_hot_start =
+          hotrap_timers.timer(TimerType::kCheckStablyHot).start();
       for (const auto &item : cache.cache) {
         const std::string &user_key = item.first;
         bool is_stably_hot = item.second.count > 1 || router->IsHot(user_key);
@@ -175,9 +174,7 @@ void PromotionCache::checker() {
       }
     }
     TimerGuard check_newer_version_start =
-        internal_stats.hotrap_timers()
-            .timer(TimerType::kCheckNewerVersion)
-            .start();
+        hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
     for (const std::string &user_key : stably_hot) {
       LookupKey key(user_key, kMaxSequenceNumber);
       Status s;
