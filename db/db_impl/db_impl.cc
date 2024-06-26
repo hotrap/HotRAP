@@ -1636,6 +1636,345 @@ static void CleanupIteratorState(void* arg1, void* /*arg2*/) {
 
   delete state;
 }
+
+class IgnoreSource : public InternalIterator {
+ public:
+  IgnoreSource(InternalIteratorBase<std::pair<size_t, Slice>>* iter)
+      : iter_(iter) {}
+  ~IgnoreSource() { iter_->~InternalIteratorBase<std::pair<size_t, Slice>>(); }
+
+  bool Valid() const final override { return iter_->Valid(); }
+  Slice key() const final override { return iter_->key(); }
+  Status status() const final override { return iter_->status(); }
+  void Seek(const Slice& key) final override { iter_->Seek(key); }
+  void SeekToFirst() final override { iter_->SeekToFirst(); }
+  void SeekToLast() final override { iter_->SeekToLast(); }
+  void SeekForPrev(const Slice& target) final override {
+    iter_->SeekForPrev(target);
+  }
+  void Prev() final override { iter_->Prev(); }
+  void Next() final override { iter_->Next(); }
+
+  Slice value() const final override { return iter_->value().second; }
+
+ private:
+  InternalIteratorBase<std::pair<size_t, Slice>>* iter_;
+};
+
+class Merge2Iters : public InternalIteratorBase<std::pair<size_t, Slice>> {
+ public:
+  Merge2Iters(const InternalKeyComparator* icmp, InternalIterator* it0,
+              InternalIterator* it1)
+      : icmp_(icmp), it0_(it0), it1_(it1) {}
+  ~Merge2Iters() {
+    it0_->~InternalIterator();
+    it1_->~InternalIterator();
+  }
+
+  void rebuild() {
+    if (!it0_->Valid()) {
+      current_ = it1_;
+      return;
+    }
+    if (!it1_->Valid()) {
+      current_ = it0_;
+      return;
+    }
+    int res = icmp_->Compare(it0_->key(), it1_->key());
+    if (res <= 0) {
+      if (res == 0) {
+        it1_->Next();
+      }
+      current_ = it0_;
+    } else {
+      current_ = it1_;
+    }
+  }
+
+  bool Valid() const override { return current_->Valid(); }
+  Slice key() const override { return current_->key(); }
+  Slice user_key() const override { return current_->user_key(); }
+  std::pair<size_t, Slice> value() const override {
+    return std::make_pair(current_ == it0_ ? 0 : 1, current_->value());
+  }
+  Status status() const override { return current_->status(); }
+
+  void Seek(const Slice& target) override {
+    it0_->Seek(target);
+    it1_->Seek(target);
+    rebuild();
+  }
+  void Next() override {
+    assert(current_->Valid());
+    current_->Next();
+    rebuild();
+  }
+
+  void SeekToFirst() override { assert(false); }
+  void SeekToLast() override { assert(false); }
+  void SeekForPrev(const Slice& key) override { assert(false); }
+  void Prev() override { assert(false); }
+
+ private:
+  const InternalKeyComparator* icmp_;
+  InternalIterator* it0_;
+  InternalIterator* it1_;
+  InternalIterator* current_;
+};
+
+class TieredIterator : public InternalIterator {
+ public:
+  TieredIterator(InternalIterator* fast_disk_it, Arena* arena,
+                 SequenceNumber sequence, size_t first_level_in_slow_disk,
+                 DBImpl& db, const ReadOptions& read_options,
+                 SuperVersion* super_version, const FileOptions& file_options,
+                 RangeDelAggregator* range_del_agg, bool allow_unprepared_value)
+      : fast_disk_it_(fast_disk_it),
+        arena_(arena),
+        sequence_(sequence),
+        first_level_in_slow_disk_(first_level_in_slow_disk),
+        db_(db),
+        super_version_(super_version),
+        read_options_(read_options),
+        file_options_(file_options),
+        range_del_agg_(range_del_agg),
+        allow_unprepared_value_(allow_unprepared_value),
+        iter_(fast_disk_it_),
+        slow_disk_it_(nullptr),
+        merging_it_with_src_(nullptr),
+        merging_it_(nullptr),
+        num_accessed_bytes_(0) {}
+  ~TieredIterator() {
+    TryPromote();
+    if (merging_it_ != nullptr) {
+      assert(slow_disk_it_ != nullptr);
+      assert(merging_it_with_src_ != nullptr);
+      // Automatically deconstructs fast_disk_it_0_, slow_disk_it_,
+      // merging_it_with_src_
+      merging_it_->~IgnoreSource();
+    } else {
+      fast_disk_it_->~InternalIterator();
+      assert(slow_disk_it_ == nullptr);
+      assert(merging_it_with_src_ == nullptr);
+    }
+  }
+
+  bool Valid() const final override { return iter_->Valid(); }
+  Slice key() const final override { return iter_->key(); }
+  Slice value() const final override { return iter_->value(); }
+  Status status() const final override { return iter_->status(); }
+
+  void SeekToFirst() final override { assert(false); }
+  void SeekToLast() final override { assert(false); }
+  void SeekForPrev(const Slice& target) final override { assert(false); }
+  void Prev() final override { assert(false); }
+
+  void Seek(const Slice& key) final override {
+    TryPromote();
+
+    CompactionRouter* router =
+        super_version_->mutable_cf_options.compaction_router;
+
+    ParsedInternalKey ikey;
+    Status s = ParseInternalKey(key, &ikey, false);
+    assert(s.ok());
+    seek_user_key_.assign(ikey.user_key.data(), ikey.user_key.size());
+
+    last_promoted_user_key_ = router->LastPromoted(key, sequence_);
+    if (!last_promoted_user_key_.empty()) {
+      iter_ = fast_disk_it_;
+      iter_->Seek(key);
+      return;
+    }
+    prepare_merging_it();
+    iter_ = merging_it_;
+    // Make sure that all newer versions of seek_user_key will be promoted.
+    InternalKey k;
+    k.SetMinPossibleForUserKey(ikey.user_key);
+    iter_->Seek(k.Encode());
+    RecordAccess();
+  }
+
+  void Next() final override {
+    assert(iter_->Valid());
+    iter_->Next();
+    if (!iter_->Valid()) return;
+
+    Version* version = super_version_->current;
+    const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
+
+    Slice internal_key = key();
+    ParsedInternalKey ikey;
+    Status s = ParseInternalKey(internal_key, &ikey, false);
+    assert(s.ok());
+
+    if (iter_ != fast_disk_it_) {
+      RecordAccess(ucmp, internal_key, ikey);
+      return;
+    }
+    if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) <= 0) return;
+    prepare_merging_it();
+
+    // Seek to first not promoted
+    InternalKey k(last_promoted_user_key_, 0, static_cast<ValueType>(0));
+    slow_disk_it_->Seek(k.Encode());
+    for (;;) {
+      s = ParseInternalKey(slow_disk_it_->key(), &ikey, false);
+      assert(s.ok());
+      if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) > 0) break;
+      slow_disk_it_->Next();
+    }
+
+    merging_it_with_src_->rebuild();
+    iter_ = merging_it_;
+
+    internal_key = key();
+    s = ParseInternalKey(internal_key, &ikey, false);
+    assert(s.ok());
+    RecordAccess(ucmp, internal_key, ikey);
+  }
+
+ private:
+  void prepare_merging_it() {
+    if (merging_it_ != nullptr) return;
+
+    Version* version = super_version_->current;
+    VersionStorageInfo* storage_info = version->storage_info();
+
+    assert(slow_disk_it_ == nullptr);
+    const InternalKeyComparator* internal_comparator =
+        &version->cfd()->ioptions()->internal_comparator;
+    MergeIteratorBuilder merge_iter_builder(internal_comparator, arena_);
+    for (int level = first_level_in_slow_disk_;
+         level < storage_info->num_non_empty_levels(); ++level) {
+      InternalIterator* iter =
+          version->NewIterForLevel(arena_, read_options_, file_options_, level,
+                                   range_del_agg_, allow_unprepared_value_);
+      merge_iter_builder.AddIterator(iter);
+    }
+    slow_disk_it_ = merge_iter_builder.Finish();
+
+    assert(merging_it_with_src_ == nullptr);
+    char* mem = arena_->AllocateAligned(sizeof(Merge2Iters));
+    merging_it_with_src_ = new (mem)
+        Merge2Iters(internal_comparator, fast_disk_it_, slow_disk_it_);
+
+    mem = arena_->AllocateAligned(sizeof(IgnoreSource));
+    merging_it_ = new (mem) IgnoreSource(merging_it_with_src_);
+  }
+
+  void RecordAccess(const Comparator* ucmp, Slice internal_key,
+                    const ParsedInternalKey& ikey) {
+    // Future work: Handle other types
+    assert(ikey.type == ValueType::kTypeValue);
+    bool not_stale_version;
+    if (ikey.sequence <= sequence_) {
+      // Visible
+      Slice last_user_key = ikey.user_key;
+      int res = ucmp->Compare(last_user_key, last_user_key_);
+      if (res != 0) {
+        assert(res > 0);
+        last_user_key_.assign(last_user_key.data(), last_user_key.size());
+        // This is the latest visible version of this user key
+        not_stale_version = true;
+      } else {
+        not_stale_version = false;
+      }
+    } else {
+      // A future version
+      not_stale_version = true;
+    }
+    if (not_stale_version) {
+      num_accessed_bytes_ += internal_key.size() + value().size();
+      if (iter_ == merging_it_) {
+        std::pair<size_t, Slice> src_value = merging_it_with_src_->value();
+        if (src_value.first == kSrcSlowDisk) {
+          records_to_promote_.emplace_back(internal_key.ToString(),
+                                           src_value.second.ToString());
+        }
+      }
+    }
+  }
+
+  void RecordAccess() {
+    Version* version = super_version_->current;
+    const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
+
+    Slice internal_key = key();
+    ParsedInternalKey ikey;
+    Status s = ParseInternalKey(internal_key, &ikey, false);
+    assert(s.ok());
+
+    RecordAccess(ucmp, internal_key, ikey);
+  }
+
+  void TryPromote() {
+    CompactionRouter* router =
+        super_version_->mutable_cf_options.compaction_router;
+
+    if (seek_user_key_.empty() || router == nullptr) return;
+    router->ScanResult(iter_ == fast_disk_it_);
+    if (records_to_promote_.empty()) {
+      if (!last_user_key_.empty()) {
+        router->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
+                            sequence_);
+      }
+      num_accessed_bytes_ = 0;
+      return;
+    }
+
+    const PromotionCache& cache =
+        super_version_->cfd->get_or_create_promotion_cache(
+            db_, first_level_in_slow_disk_ - 1);
+    size_t mut_size;
+    {
+      auto mut = cache.mut().Write();
+      // FIXME(jiansheng): Check being_or_has_been_compacted
+      mut_size = mut->InsertRangeAccessRecords(
+          std::move(records_to_promote_), std::move(seek_user_key_),
+          std::move(last_user_key_), sequence_, num_accessed_bytes_);
+    }
+    records_to_promote_ = std::vector<std::pair<std::string, std::string>>();
+    seek_user_key_ = std::string();
+    last_user_key_ = std::string();
+    num_accessed_bytes_ = 0;
+
+    size_t tot = mut_size + cache.imm_list().Read()->size;
+    rusty::intrinsics::atomic_max_relaxed(cache.max_size(), tot);
+    const MutableCFOptions& mutable_cf_options =
+        super_version_->mutable_cf_options;
+    if (mut_size < mutable_cf_options.write_buffer_size) return;
+
+    cache.SwitchMutablePromotionCache(db_, *super_version_->cfd,
+                                      mutable_cf_options.write_buffer_size);
+  }
+
+  static constexpr size_t kSrcFastDisk = 0;
+  static constexpr size_t kSrcSlowDisk = 1;
+
+  InternalIterator* fast_disk_it_;
+  Arena* arena_;
+  SequenceNumber sequence_;
+  size_t first_level_in_slow_disk_;
+  DBImpl& db_;
+  SuperVersion* super_version_;
+  const ReadOptions& read_options_;
+  const FileOptions& file_options_;
+  RangeDelAggregator* range_del_agg_;
+  bool allow_unprepared_value_;
+
+  InternalIterator* iter_;
+  InternalIterator* slow_disk_it_;
+  Merge2Iters* merging_it_with_src_;
+  IgnoreSource* merging_it_;
+
+  std::string last_promoted_user_key_;
+  std::vector<std::pair<std::string, std::string>> records_to_promote_;
+  std::string seek_user_key_;
+  std::string last_user_key_;
+  uint64_t num_accessed_bytes_;
+};
+
 }  // namespace
 
 InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
@@ -1675,11 +2014,31 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
   if (s.ok()) {
     // Collect iterators for files in L0 - Ln
     if (read_options.read_tier != kMemtableTier) {
-      super_version->current->AddIterators(read_options, file_options_,
-                                           &merge_iter_builder, range_del_agg,
-                                           allow_unprepared_value);
+      Version* version = super_version->current;
+      VersionStorageInfo* storage_info = version->storage_info();
+      CompactionRouter* router =
+          super_version->mutable_cf_options.compaction_router;
+
+      int level = 0;
+      for (; level < storage_info->num_non_empty_levels(); level++) {
+        if (router->Tier(level) == 1) {
+          break;
+        }
+        version->AddIteratorsForLevel(read_options, file_options_,
+                                      &merge_iter_builder, level, range_del_agg,
+                                      allow_unprepared_value);
+      }
+      internal_iter = merge_iter_builder.Finish();
+      if (level < storage_info->num_non_empty_levels()) {
+        auto* mem = arena->AllocateAligned(sizeof(TieredIterator));
+        internal_iter = new (mem)
+            TieredIterator(internal_iter, arena, sequence, level, *this,
+                           read_options, super_version, file_options_,
+                           range_del_agg, allow_unprepared_value);
+      }
+    } else {
+      internal_iter = merge_iter_builder.Finish();
     }
-    internal_iter = merge_iter_builder.Finish();
     IterState* cleanup =
         new IterState(this, &mutex_, super_version,
                       read_options.background_purge_on_iterator_cleanup ||

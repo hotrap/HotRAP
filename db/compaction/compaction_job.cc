@@ -1446,14 +1446,16 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   Decision route(const IKeyValueLevel& kv) {
     // It is guaranteed that all versions of the same user key share the same
     // decision.
-    const rocksdb::Slice* hot = hot_iter_.peek();
+    const HotRecInfo* hot = hot_iter_.peek();
     while (hot != nullptr) {
-      if (ucmp_->Compare(*hot, kv.ikey.user_key) >= 0) break;
+      if (ucmp_->Compare(hot->last, kv.ikey.user_key) >= 0) break;
       hot_iter_.next();
       hot = hot_iter_.peek();
     }
-    Decision decision;
-    if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
+    if (!hot) return Decision::kNextLevel;
+    // kv.ikey.user_key <= hot->last
+    Slice first = hot->first.empty() ? hot->last : hot->first;
+    if (ucmp_->Compare(first, kv.ikey.user_key) <= 0) {
       return Decision::kStartLevel;
     } else {
       return Decision::kNextLevel;

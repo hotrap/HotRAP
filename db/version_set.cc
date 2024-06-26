@@ -1579,17 +1579,18 @@ double VersionStorageInfo::GetEstimatedCompressionRatioAtLevel(
   return static_cast<double>(sum_data_size_bytes) / sum_file_size_bytes;
 }
 
-void Version::AddIterators(const ReadOptions& read_options,
-                           const FileOptions& soptions,
-                           MergeIteratorBuilder* merge_iter_builder,
-                           RangeDelAggregator* range_del_agg,
-                           bool allow_unprepared_value) {
-  assert(storage_info_.finalized_);
-
-  for (int level = 0; level < storage_info_.num_non_empty_levels(); level++) {
-    AddIteratorsForLevel(read_options, soptions, merge_iter_builder, level,
-                         range_del_agg, allow_unprepared_value);
-  }
+InternalIterator* Version::NewIterForLevel(
+    Arena* arena, const ReadOptions& read_options, const FileOptions& soptions,
+    int level, RangeDelAggregator* range_del_agg, bool allow_unprepared_value) {
+  auto* mem = arena->AllocateAligned(sizeof(LevelIterator));
+  return new (mem) LevelIterator(
+      cfd_->table_cache(), read_options, soptions, cfd_->internal_comparator(),
+      &storage_info_.LevelFilesBrief(level),
+      mutable_cf_options_.prefix_extractor.get(), should_sample_file_read(),
+      cfd_->internal_stats()->GetFileReadHist(level),
+      TableReaderCaller::kUserIterator, IsFilterSkipped(level), level,
+      range_del_agg,
+      /*compaction_boundaries=*/nullptr, allow_unprepared_value);
 }
 
 void Version::AddIteratorsForLevel(const ReadOptions& read_options,
@@ -1636,15 +1637,9 @@ void Version::AddIteratorsForLevel(const ReadOptions& read_options,
     // For levels > 0, we can use a concatenating iterator that sequentially
     // walks through the non-overlapping files in the level, opening them
     // lazily.
-    auto* mem = arena->AllocateAligned(sizeof(LevelIterator));
-    merge_iter_builder->AddIterator(new (mem) LevelIterator(
-        cfd_->table_cache(), read_options, soptions,
-        cfd_->internal_comparator(), &storage_info_.LevelFilesBrief(level),
-        mutable_cf_options_.prefix_extractor.get(), should_sample_file_read(),
-        cfd_->internal_stats()->GetFileReadHist(level),
-        TableReaderCaller::kUserIterator, IsFilterSkipped(level), level,
-        range_del_agg,
-        /*compaction_boundaries=*/nullptr, allow_unprepared_value));
+    merge_iter_builder->AddIterator(
+        NewIterForLevel(arena, read_options, soptions, level, range_del_agg,
+                        allow_unprepared_value));
   }
 }
 
@@ -1982,38 +1977,11 @@ static void TryPromote(
   while (router->Tier(target_level) == 1) {
     target_level -= 1;
   }
-  const PromotionCache* cache;
-  {
-    auto caches = cfd.promotion_caches().Read();
-    // The first whose level <= target_level
-    auto it = caches->find(target_level);
-    if (it == caches->end()) {
-      cache = nullptr;
-    } else {
-      cache = &it->second;
-    }
-  }
-  if (cache == nullptr) {
-    auto caches = cfd.promotion_caches().Write();
-    // It seems that even if the key already exists, emplace still construct
-    // PromotionCache then destruct it. However, PromotionCache should only be
-    // destructed when shutting down the database. Therefore we firstly make
-    // sure that the key does not exist to avoid destructing PromotionCache
-    // here.
-    auto it = caches->find(target_level);
-    if (it == caches->end()) {
-      auto ret = caches->emplace(
-          std::piecewise_construct, std::make_tuple(target_level),
-          std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
-      assert(ret.second);
-      it = ret.first;
-    }
-    assert(it->first == target_level);
-    cache = &it->second;
-  }
+  const PromotionCache& cache =
+      cfd.get_or_create_promotion_cache(*db, target_level);
   size_t mut_size;
   {
-    auto res = cache->mut().TryRead();
+    auto res = cache.mut().TryRead();
     if (!res.has_value()) return;
     const auto& mut = res.value();
     for (auto f : cd_files) {
@@ -2021,12 +1989,12 @@ static void TryPromote(
     }
     mut_size = mut->Insert(cfd.internal_stats(), key.internal_key(), *value);
   }
-  size_t tot = mut_size + cache->imm_list().Read()->size;
-  rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
+  size_t tot = mut_size + cache.imm_list().Read()->size;
+  rusty::intrinsics::atomic_max_relaxed(cache.max_size(), tot);
   if (mut_size < mutable_cf_options.write_buffer_size) return;
 
-  cache->SwitchMutablePromotionCache(*db, cfd,
-                                     mutable_cf_options.write_buffer_size);
+  cache.SwitchMutablePromotionCache(*db, cfd,
+                                    mutable_cf_options.write_buffer_size);
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,
@@ -2252,21 +2220,22 @@ bool Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .key_exists = key_exists,
                  .is_blob_index = is_blob_index,
                  .do_merge = do_merge};
-  autovector<std::map<int, rocksdb::PromotionCache>::const_iterator> level_pcs;
+  autovector<std::map<size_t, rocksdb::PromotionCache>::const_iterator>
+      level_pcs;
   {
     auto caches = cfd_->promotion_caches().Read();
     for (auto it = caches->cbegin(); it != caches->cend(); ++it)
       level_pcs.push_back(it);
   }
   for (auto level_pc : level_pcs) {
-    while (f != nullptr && (int)fp.GetHitFileLevel() <= level_pc->first) {
+    while (f != nullptr && fp.GetHitFileLevel() <= level_pc->first) {
       bool should_stop = GetInFile(env_get, *f, fp.GetHitFileLevel(),
                                    fp.IsHitFileLastInLevel());
       if (should_stop) return true;
       f = fp.GetNextFile();
     }
     if (db != nullptr) {
-      assert(level_pc->first < last_level);
+      assert((int)level_pc->first < last_level);
       if (level_pc->second.Get(cfd_->internal_stats(), k.user_key(), value)) {
         RecordTick(cfd_->ioptions()->stats, Tickers::GET_HIT_PROMOTION_CACHE);
         CompactionRouter* router = mutable_cf_options_.compaction_router;

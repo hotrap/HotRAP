@@ -376,9 +376,10 @@ class ColumnFamilyData {
 
   TableCache* table_cache() const { return table_cache_.get(); }
   BlobFileCache* blob_file_cache() const { return blob_file_cache_.get(); }
-  RWMutexProtected<std::map<int, PromotionCache>>& promotion_caches() {
+  RWMutexProtected<std::map<size_t, PromotionCache>>& promotion_caches() {
     return promotion_caches_;
   }
+  const PromotionCache& get_or_create_promotion_cache(DBImpl& db, size_t level);
 
   // See documentation in compaction_picker.h
   // REQUIRES: DB mutex held
@@ -561,7 +562,7 @@ class ColumnFamilyData {
   std::unique_ptr<BlobFileCache> blob_file_cache_;
   // Map from level to its promotion cache
   // The promotion cache of level i is considered between level i and level i+1
-  RWMutexProtected<std::map<int, PromotionCache>> promotion_caches_;
+  RWMutexProtected<std::map<size_t, PromotionCache>> promotion_caches_;
 
   std::unique_ptr<InternalStats> internal_stats_;
 

@@ -663,16 +663,11 @@ using MultiGetRange = MultiGetContext::Range;
 // the column family at a certain point in time.
 class Version {
  public:
-  // Append to *iters a sequence of iterators that will
-  // yield the contents of this Version when merged together.
-  // @param read_options Must outlive any iterator built by
-  // `merger_iter_builder`.
-  // REQUIRES: This version has been saved (see VersionSet::SaveTo).
-  void AddIterators(const ReadOptions& read_options,
-                    const FileOptions& soptions,
-                    MergeIteratorBuilder* merger_iter_builder,
-                    RangeDelAggregator* range_del_agg,
-                    bool allow_unprepared_value);
+  InternalIterator* NewIterForLevel(Arena* arena,
+                                    const ReadOptions& read_options,
+                                    const FileOptions& soptions, int level,
+                                    RangeDelAggregator* range_del_agg,
+                                    bool allow_unprepared_value);
 
   // @param read_options Must outlive any iterator built by
   // `merger_iter_builder`.
@@ -820,7 +815,9 @@ class Version {
   // Prerequisite for this API is max_open_files = -1
   void GetCreationTimeOfOldestFile(uint64_t* creation_time);
 
-  const MutableCFOptions& GetMutableCFOptions() { return mutable_cf_options_; }
+  const MutableCFOptions& GetMutableCFOptions() const {
+    return mutable_cf_options_;
+  }
 
  private:
   Env* env_;

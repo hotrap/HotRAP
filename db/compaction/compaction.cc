@@ -123,7 +123,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
       // inserted.
       mark_fn();
     } else {
-      assert(it->first == start_level_);
+      assert((int)it->first == start_level_);
       {
         auto mut = it->second.mut().Write();
         mark_fn();
@@ -137,7 +137,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
   auto caches = cfd_->promotion_caches().Read();
   auto it = caches->find(output_level_);
   if (it != caches->end()) {
-    assert(it->first == output_level_);
+    assert((int)it->first == output_level_);
     // Future work: Handle the other case which is possible if the router
     // changes.
     assert(cached_records_to_promote_.empty());
