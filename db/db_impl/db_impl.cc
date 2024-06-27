@@ -1818,7 +1818,7 @@ class TieredIterator : public InternalIterator {
     // Seek to first not promoted
     InternalKey k(last_promoted_user_key_, 0, static_cast<ValueType>(0));
     slow_disk_it_->Seek(k.Encode());
-    for (;;) {
+    while (slow_disk_it_->Valid()) {
       s = ParseInternalKey(slow_disk_it_->key(), &ikey, false);
       assert(s.ok());
       if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) > 0) break;
