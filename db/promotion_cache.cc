@@ -325,7 +325,6 @@ void PromotionCache::SwitchMutablePromotionCache(
                  queue_len);
   signal_check_.notify_one();
 }
-// [begin, end)
 std::vector<std::pair<std::string, std::string>>
 MutablePromotionCache::TakeRange(InternalStats *internal_stats,
                                  CompactionRouter *router, Slice smallest,
@@ -335,7 +334,7 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
   std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
       records_in_range;
   for (const auto &record : cache) {
-    if (ucmp_->Compare(record.first, largest) < 0 &&
+    if (ucmp_->Compare(record.first, largest) <= 0 &&
         ucmp_->Compare(record.first, smallest) >= 0) {
       InternalKey key(record.first, record.second.sequence, kTypeValue);
       records_in_range.emplace_back(

@@ -77,7 +77,6 @@ struct MutablePromotionCache {
 
   // Return the size of the mutable promotion cache
   size_t Insert(InternalStats *internal_stats, Slice key, Slice value) const;
-  // [begin, end)
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
       Slice largest);
