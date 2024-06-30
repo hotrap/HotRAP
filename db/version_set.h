@@ -708,7 +708,7 @@ class Version {
   //    If the key has any merge operands then store them in
   //    merge_context.operands_list and don't merge the operands
   // REQUIRES: lock is not held
-  void Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
+  bool Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
            PinnableSlice* value, std::string* timestamp, Status* status,
            MergeContext* merge_context,
            SequenceNumber* max_covering_tombstone_seq,
@@ -840,7 +840,8 @@ class Version {
 
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
                    int hit_level, Slice user_key, PinnableSlice* value,
-                   Status& status, bool is_blob_index, bool do_merge);
+                   Status& status, bool is_blob_index, bool do_merge,
+                   bool is_checker);
   void HandleNotFound(GetContext& get_context, Slice user_key,
                       PinnableSlice* value, Status& status,
                       MergeContext& merge_context, bool* key_exists,

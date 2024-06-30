@@ -155,7 +155,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
         bool found =
             mut->cache.find(mut_it, start_level_it.user_key().ToString());
         if (found) {
-          *mut->size -= mut_it->first.size() + mut_it->second.value.size();
+          mut->size_ -= mut_it->first.size() + mut_it->second.value.size();
           mut->cache.erase(mut_it);
         }
         start_level_it.Next();

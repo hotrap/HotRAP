@@ -760,6 +760,9 @@ Status CompactionJob::Run() {
 
   const size_t num_threads = compact_->sub_compact_states.size();
   assert(num_threads > 0);
+  // HotRAP doesn't support subcompactions yet because VecIter does not
+  // implement Seek
+  assert(num_threads == 1);
   const uint64_t start_micros = db_options_.clock->NowMicros();
 
   // Launch a thread for each of subcompactions 1...num_threads-1
@@ -1285,90 +1288,6 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
 }
 #endif  // !ROCKSDB_LITE
 
-enum class MergeDecision {
-  SelectLeft,
-  SelectRight,
-  DropLeft,
-  DropRight,
-};
-
-template <typename T, typename Compare>
-class Merge2Iterators : public TraitIterator<std::pair<size_t, T>> {
- public:
-  Merge2Iterators(std::unique_ptr<TraitPeekable<T>> t0,
-                  std::unique_ptr<TraitPeekable<T>> t1, Compare&& compare)
-      : t0_(std::move(t0)), t1_(std::move(t1)), compare_(std::move(compare)) {}
-  optional<std::pair<size_t, T>> next() override {
-    const T* p1 = t0_.get()->peek();
-    if (p1 == nullptr) return convert(t1_.get()->next(), 1);
-    const T* p2 = t1_.get()->peek();
-    if (p2 == nullptr) return convert(t0_.get()->next(), 0);
-    for (;;) {
-      switch (compare_(*p1, *p2)) {
-        case MergeDecision::SelectLeft:
-          return convert(t0_.get()->next(), 0);
-        case MergeDecision::SelectRight:
-          return convert(t1_.get()->next(), 1);
-        case MergeDecision::DropLeft:
-          t0_.get()->next();
-          p1 = t0_.get()->peek();
-          if (p1 == nullptr) return convert(t1_.get()->next(), 1);
-          break;
-        case MergeDecision::DropRight:
-          t1_.get()->next();
-          p2 = t1_.get()->peek();
-          if (p2 == nullptr) return convert(t0_.get()->next(), 0);
-          break;
-      }
-    }
-  }
-
- private:
-  optional<std::pair<size_t, T>> convert(optional<T> ret, size_t src) {
-    if (!ret.has_value())
-      return nullopt;
-    else
-      return make_optional<std::pair<size_t, T>>(src, ret.value());
-  }
-  std::unique_ptr<TraitPeekable<T>> t0_;
-  std::unique_ptr<TraitPeekable<T>> t1_;
-  Compare compare_;
-};
-
-struct IKeyValueLevel;
-struct IKeyValue {
-  Slice key;
-  ParsedInternalKey ikey;
-  Slice value;
-
-  IKeyValue() = default;
-  IKeyValue(IKeyValueLevel);
-  IKeyValue(Slice arg_key, Slice arg_value) : key(arg_key), value(arg_value) {
-    ParseInternalKey(key, &ikey, true);
-  }
-  IKeyValue(const InternalKey& internal_key, Slice arg_value)
-      : IKeyValue(internal_key.Encode(), arg_value) {}
-  IKeyValue(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value)
-      : key(arg_key), ikey(arg_ikey), value(arg_value) {}
-
-  class Compare {
-   public:
-    Compare(const Comparator* ucmp) : ucmp_(ucmp) {}
-    MergeDecision operator()(const IKeyValue& lhs, const IKeyValue& rhs) {
-      int res = ucmp_->Compare(lhs.ikey.user_key, rhs.ikey.user_key);
-      if (res == 0) {
-        return lhs.ikey.sequence < rhs.ikey.sequence ? MergeDecision::DropLeft
-                                                     : MergeDecision::DropRight;
-      } else {
-        return res < 0 ? MergeDecision::SelectLeft : MergeDecision::SelectRight;
-      }
-    }
-
-   private:
-    const Comparator* ucmp_;
-  };
-};
-
 struct IKeyValueLevel {
   Slice key;
   ParsedInternalKey ikey;
@@ -1393,28 +1312,22 @@ struct IKeyValueLevel {
     value = Slice(*(const char**)(buf + sizeof(int)),
                   *(size_t*)(buf + sizeof(int) + sizeof(const char*)));
   }
-
-  class Compare {
-   public:
-    Compare(const Comparator* ucmp) : ucmp_(ucmp) {}
-    MergeDecision operator()(const IKeyValueLevel& lhs,
-                             const IKeyValueLevel& rhs) {
-      int res = ucmp_->Compare(lhs.ikey.user_key, rhs.ikey.user_key);
-      if (res == 0) {
-        return lhs.ikey.sequence < rhs.ikey.sequence ? MergeDecision::DropLeft
-                                                     : MergeDecision::DropRight;
-      } else {
-        return res < 0 ? MergeDecision::SelectLeft : MergeDecision::SelectRight;
-      }
-    }
-
-   private:
-    const Comparator* ucmp_;
-  };
 };
 
-IKeyValue::IKeyValue(IKeyValueLevel rhs)
-    : IKeyValue(rhs.key, rhs.ikey, rhs.value) {}
+struct IKeyValue {
+  Slice key;
+  ParsedInternalKey ikey;
+  Slice value;
+
+  IKeyValue() = default;
+  IKeyValue(IKeyValueLevel rhs) : IKeyValue(rhs.key, rhs.ikey, rhs.value) {}
+  IKeyValue(const InternalKey& internal_key, Slice arg_value)
+      : key(internal_key.Encode()), value(arg_value) {
+    ParseInternalKey(key, &ikey, true);
+  }
+  IKeyValue(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value)
+      : key(arg_key), ikey(arg_ikey), value(arg_value) {}
+};
 
 enum class Decision {
   kUndetermined,
@@ -1482,27 +1395,6 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
   const TypedTimers<TimerType>& timers_;
 };
 
-template <typename Iter>
-class IgnoreStableHot : public TraitIterator<Slice> {
- public:
-  IgnoreStableHot(Iter&& iter) : iter_(std::move(iter)) {}
-  IgnoreStableHot(IgnoreStableHot<Iter>&& iter)
-      : iter_(std::move(iter.iter_)) {}
-  optional<Slice> next() override {
-    for (;;) {
-      optional<HotRecInfo> ret = iter_->next();
-      if (!ret.has_value()) {
-        return nullopt;
-      } else {
-        return make_optional<Slice>(ret.value().key);
-      }
-    }
-  }
-
- private:
-  Iter iter_;
-};
-
 class RouterIteratorFD2SD : public TraitIterator<Elem> {
  public:
   RouterIteratorFD2SD(CompactionRouter& router, const Compaction& c,
@@ -1512,8 +1404,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
         c_(c),
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(c_iter),
-        hot_iter_(Peekable<IgnoreStableHot<CompactionRouter::Iter>>(
-            router.LowerBound(start_level_smallest_user_key))),
+        hot_iter_(router.LowerBound(start_level_smallest_user_key)),
         kvsize_retained_(0) {}
   ~RouterIteratorFD2SD() {
     auto stats = c_.immutable_options()->stats;
@@ -1530,12 +1421,10 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     }
     Decision decision;
     if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      decision = Decision::kStartLevel;
-      hot_iter_.next();
+      return Decision::kStartLevel;
     } else {
-      decision = Decision::kNextLevel;
+      return Decision::kNextLevel;
     }
-    return decision;
   }
   optional<Elem> next() override {
     optional<IKeyValueLevel> kv_ret = iter_.next();
@@ -1561,7 +1450,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
-  Peekable<IgnoreStableHot<CompactionRouter::Iter>> hot_iter_;
+  Peekable<CompactionRouter::Iter> hot_iter_;
 
   size_t kvsize_retained_;
 };

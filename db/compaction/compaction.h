@@ -154,10 +154,11 @@ class Compaction {
   }
 
   const std::vector<CompactionInputFiles>* inputs() const { return &inputs_; }
-  const std::vector<std::pair<InternalKey, std::string>>&
+  const std::vector<std::pair<std::string, std::string>>&
   cached_records_to_promote() const {
     return cached_records_to_promote_;
   }
+  int target_level_to_promote() const { return target_level_to_promote_; }
 
   // Returns the LevelFilesBrief of the specified compaction input level.
   const LevelFilesBrief* input_levels(size_t compaction_input_level) const {
@@ -380,7 +381,8 @@ class Compaction {
 
   // Compaction input files organized by level. Constant after construction
   const std::vector<CompactionInputFiles> inputs_;
-  std::vector<std::pair<InternalKey, std::string>> cached_records_to_promote_;
+  std::vector<std::pair<std::string, std::string>> cached_records_to_promote_;
+  int target_level_to_promote_;
 
   // A copy of inputs_, organized more closely in memory
   autovector<LevelFilesBrief, 2> input_levels_;

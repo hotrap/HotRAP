@@ -7,10 +7,12 @@
 #include <queue>
 #include <unordered_set>
 
+#include "db/dbformat.h"
 #include "monitoring/instrumented_mutex.h"
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
+#include "rocksdb/types.h"
 #include "tbb/concurrent_hash_map.h"
 #include "util/mutexlock.h"
 
@@ -23,6 +25,7 @@ struct SuperVersion;
 
 class PromotionCache;
 struct PCData {
+  SequenceNumber sequence;
   std::string value;
   int count{0};
 };
@@ -39,6 +42,20 @@ class UserKeyCompare {
   const Comparator *ucmp_;
 };
 
+class InternalKeyCompare {
+ public:
+  InternalKeyCompare(const Comparator *ucmp) : icmp_(ucmp) {}
+  bool operator()(const std::pair<std::string, std::string> &lhs,
+                  const std::pair<std::string, std::string> &rhs) const {
+    return icmp_.Compare(lhs.first, rhs.first) < 0;
+  }
+
+  const InternalKeyComparator &icmp() const { return icmp_; }
+
+ private:
+  InternalKeyComparator icmp_;
+};
+
 struct ImmPromotionCache {
   std::unordered_map<std::string, PCData> cache;
   size_t size;
@@ -52,19 +69,21 @@ struct ImmPromotionCacheList {
   size_t size = 0;
 };
 struct MutablePromotionCache {
-  MutablePromotionCache(const Comparator *ucmp)
-      : ucmp_(ucmp), size(new std::atomic<size_t>(0)) {}
+  MutablePromotionCache(const Comparator *ucmp) : ucmp_(ucmp), size_(0) {}
+  MutablePromotionCache(const MutablePromotionCache &&rhs)
+      : ucmp_(rhs.ucmp_),
+        cache(std::move(rhs.cache)),
+        size_(rhs.size_.load(std::memory_order_relaxed)) {}
+
   // Return the size of the mutable promotion cache
-  size_t Insert(InternalStats *internal_stats, const std::string &key,
-                Slice value);
-  // [begin, end)
+  size_t Insert(InternalStats *internal_stats, Slice key, Slice value) const;
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
       Slice largest);
 
   const Comparator *ucmp_;
-  PCHashTable cache;
-  std::unique_ptr<std::atomic<size_t>> size;
+  mutable PCHashTable cache;
+  mutable std::atomic<size_t> size_;
   friend class PromotionCache;
 };
 
@@ -78,7 +97,7 @@ class PromotionCache {
   void stop_checker_no_wait();
   // Not thread-safe
   void wait_for_checker_to_stop();
-  bool Get(InternalStats *internal_stats, Slice key,
+  bool Get(InternalStats *internal_stats, Slice user_key,
            PinnableSlice *value) const;
   void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
                                    size_t write_buffer_size) const;

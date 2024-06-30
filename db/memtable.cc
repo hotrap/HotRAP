@@ -607,15 +607,14 @@ Status MemTable::Add(SequenceNumber s, ValueType type,
     }
 
     // The first sequence number inserted into the memtable
-    assert(first_seqno_ == 0 || s >= first_seqno_);
-    if (first_seqno_ == 0) {
+    if (first_seqno_ == 0 || s < first_seqno_) {
       first_seqno_.store(s, std::memory_order_relaxed);
 
+      // FIXME
       if (earliest_seqno_ == kMaxSequenceNumber) {
         earliest_seqno_.store(GetFirstSequenceNumber(),
                               std::memory_order_relaxed);
       }
-      assert(first_seqno_.load() >= earliest_seqno_.load());
     }
     assert(post_process_info == nullptr);
     UpdateFlushState();
