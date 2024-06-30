@@ -205,7 +205,7 @@ void PromotionCache::checker() {
     SuperVersionContext svc(true);
 
     db->mutex()->Lock();
-    m->SetNextLogNumber(db->logfile_number_);
+    // No need to SetNextLogNumber, because we don't delete any log file
     size_t flushed_bytes = 0;
     {
       auto updated = cache.updated.Lock();
