@@ -32,6 +32,7 @@
 #include "db/column_family.h"
 #include "db/compaction/compaction.h"
 #include "db/compaction/file_pri.h"
+#include "db/dbformat.h"
 #include "db/internal_stats.h"
 #include "db/log_reader.h"
 #include "db/log_writer.h"
@@ -1964,12 +1965,16 @@ static void TryPromote(
     DBImpl* db, ColumnFamilyData& cfd,
     const MutableCFOptions& mutable_cf_options,
     std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
-    Slice user_key, PinnableSlice* value) {
+    const LookupKey& key, PinnableSlice* value) {
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value) return;
+  // I don't think we can get the block size in this context. So I hard code
+  // the promotion threshold. Maybe we should make it an option of compaction
+  // router.
+  if (key.internal_key().size() + value->size() >= 16 * 1024) return;
   if (router->Tier(hit_level) == 0) {
-    router->Access(user_key, value->size());
+    router->Access(key.user_key(), value->size());
     return;
   }
   assert(hit_level > 0);
@@ -2014,8 +2019,7 @@ static void TryPromote(
     for (auto f : cd_files) {
       if (f.get().being_or_has_been_compacted) return;
     }
-    mut_size = const_cast<MutablePromotionCache&>(*mut).Insert(
-        cfd.internal_stats(), user_key.ToString(), *value);
+    mut_size = mut->Insert(cfd.internal_stats(), key.internal_key(), *value);
   }
   size_t tot = mut_size + cache->imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
@@ -2028,10 +2032,12 @@ static void TryPromote(
 void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
                           Slice user_key, PinnableSlice* value, Status& status,
-                          bool is_blob_index, bool do_merge) {
+                          bool is_blob_index, bool do_merge, bool is_checker) {
   CompactionRouter* router = mutable_cf_options_.compaction_router;
   if (!router) return;
-  router->HitLevel(hit_level, user_key);
+  if (!is_checker) {
+    router->HitLevel(hit_level, user_key);
+  }
 
   if (hit_level == 0) {
     RecordTick(db_statistics_, GET_HIT_L0);
@@ -2161,11 +2167,12 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
     case GetContext::kFound:
       if (num_cache_data_miss > prev_num_cache_data_miss) {
         TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
-                   hit_level, user_key, env_get.value);
+                   hit_level, env_get.k, env_get.value);
       }
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
-                  env_get.is_blob_index, env_get.do_merge);
+                  env_get.is_blob_index, env_get.do_merge,
+                  env_get.db == nullptr);
       return true;
     case GetContext::kDeleted:
       // Use empty error message for speed
@@ -2185,7 +2192,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
 }
 
 // If db == nullptr then it's called from check_newer_version
-void Version::Get(DBImpl* db, const ReadOptions& read_options,
+bool Version::Get(DBImpl* db, const ReadOptions& read_options,
                   const LookupKey& k, PinnableSlice* value,
                   std::string* timestamp, Status* status,
                   MergeContext* merge_context,
@@ -2255,7 +2262,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
     while (f != nullptr && (int)fp.GetHitFileLevel() <= level_pc->first) {
       bool should_stop = GetInFile(env_get, *f, fp.GetHitFileLevel(),
                                    fp.IsHitFileLastInLevel());
-      if (should_stop) return;
+      if (should_stop) return true;
       f = fp.GetNextFile();
     }
     if (db != nullptr) {
@@ -2268,19 +2275,20 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
         }
         HandleFound(env_get.read_options, env_get.get_context, level_pc->first,
                     k.user_key(), value, env_get.status, env_get.is_blob_index,
-                    env_get.do_merge);
-        return;
+                    env_get.do_merge, false);
+        return true;
       }
     }
   }
   while (f != nullptr) {
     bool should_stop =
         GetInFile(env_get, *f, fp.GetHitFileLevel(), fp.IsHitFileLastInLevel());
-    if (should_stop) return;
+    if (should_stop) return true;
     f = fp.GetNextFile();
   }
   HandleNotFound(env_get.get_context, user_key, env_get.value, env_get.status,
                  env_get.merge_context, env_get.key_exists, env_get.do_merge);
+  return false;
 }
 
 void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,
@@ -6054,6 +6062,48 @@ void VersionSet::AddLiveFiles(std::vector<uint64_t>* live_table_files,
   }
 }
 
+class VecIter : public InternalIterator {
+ public:
+  VecIter(const Comparator* ucmp,
+          const std::vector<std::pair<std::string, std::string>>& v)
+      : cmp_(ucmp), v_(v), it_(v_.end()) {}
+
+  bool Valid() const final override { return it_ != v_.end(); }
+  Slice key() const final override { return it_->first; }
+  Status status() const final override { return Status::OK(); }
+
+  void Seek(const Slice& key) final override { assert(false); }
+  void SeekToLast() final override { assert(false); }
+  void SeekForPrev(const Slice& target) final override { assert(false); }
+  void Prev() final override { assert(false); }
+
+  // void Seek(const Slice& key) final override {
+  //   it_ = lower_bound(v_.begin(), v_.end(), key, cmp_);
+  // }
+  void SeekToFirst() final override { it_ = v_.begin(); }
+
+  Slice value() const final override { return it_->second; }
+
+  void Next() final override { ++it_; }
+
+ private:
+  class Compare {
+   public:
+    Compare(const Comparator* ucmp) : icmp_(ucmp) {}
+    bool operator()(const std::pair<std::string, std::string>& a,
+                    const Slice& b) const {
+      return icmp_.Compare(a.first, b) < 0;
+    }
+
+   private:
+    InternalKeyComparator icmp_;
+  };
+
+  Compare cmp_;
+  const std::vector<std::pair<std::string, std::string>>& v_;
+  typename std::vector<std::pair<std::string, std::string>>::const_iterator it_;
+};
+
 class InternalIterAppendLevel : public InternalIterator {
  public:
   InternalIterAppendLevel(int level, InternalIterator* iter) : iter_(iter) {
@@ -6108,12 +6158,23 @@ InternalIterator* VersionSet::MakeInputIterator(
     RangeDelAggregator* range_del_agg,
     const FileOptions& file_options_compactions) {
   auto cfd = c->column_family_data();
+
+  InternalIterAppendLevel* promotion_cache_iter = nullptr;
+  if (!c->cached_records_to_promote().empty()) {
+    InternalIterator* iter =
+        new VecIter(cfd->user_comparator(), c->cached_records_to_promote());
+    promotion_cache_iter = new InternalIterAppendLevel(-1, iter);
+  }
+
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
-  const size_t space = (c->level() == 0 ? c->input_levels(0)->num_files +
-                                              c->num_input_levels() - 1
-                                        : c->num_input_levels());
+  size_t space = (c->level() == 0 ? c->input_levels(0)->num_files +
+                                        c->num_input_levels() - 1
+                                  : c->num_input_levels());
+  if (promotion_cache_iter) {
+    space += 1;
+  }
   InternalIterator** list = new InternalIterator*[space];
   size_t num = 0;
   for (size_t which = 0; which < c->num_input_levels(); which++) {
@@ -6150,6 +6211,11 @@ InternalIterator* VersionSet::MakeInputIterator(
                 TableReaderCaller::kCompaction, /*skip_filters=*/false,
                 /*level=*/static_cast<int>(c->level(which)), range_del_agg,
                 c->boundaries(which)));
+      }
+      if (promotion_cache_iter != nullptr &&
+          c->level(which) == c->target_level_to_promote()) {
+        list[num++] = promotion_cache_iter;
+        promotion_cache_iter = nullptr;
       }
     }
   }

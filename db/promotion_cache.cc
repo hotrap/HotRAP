@@ -14,6 +14,7 @@
 
 #include "column_family.h"
 #include "db/db_impl/db_impl.h"
+#include "db/dbformat.h"
 #include "db/internal_stats.h"
 #include "db/job_context.h"
 #include "db/lookup_key.h"
@@ -22,6 +23,7 @@
 #include "monitoring/statistics.h"
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
+#include "rocksdb/types.h"
 #include "util/autovector.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -59,30 +61,19 @@ void PromotionCache::stop_checker_no_wait() {
   }
 }
 void PromotionCache::wait_for_checker_to_stop() { checker_.join(); }
-bool PromotionCache::Get(InternalStats *internal_stats, Slice key,
+bool PromotionCache::Get(InternalStats *internal_stats, Slice user_key,
                          PinnableSlice *value) const {
   {
     auto res = mut_.TryRead();
     if (!res.has_value()) return false;
     const auto &mut = res.value();
     PCHashTable::accessor it;
-    if (mut->cache.find(it, key.ToString())) {
+    if (mut->cache.find(it, user_key.ToString())) {
       if (value) value->PinSelf(it->second.value);
       it->second.count += 1;
       return true;
     }
   }
-  // auto imm_list = imm_list_.Read();
-  // for (const ImmPromotionCache &imm : imm_list->list) {
-  //   auto timer_guard_imm =
-  //       internal_stats->hotrap_timers().timer(TimerType::kImmPCGet).start();
-  //   // TODO: Avoid the copy here after upgrading to C++14
-  //   auto it = imm.cache.find(key.ToString());
-  //   if (it != imm.cache.end()) {
-  //     if (value) value->PinSelf(it->second);
-  //     return true;
-  //   }
-  // }
   return false;
 }
 
@@ -146,7 +137,7 @@ void PromotionCache::checker() {
     SuperVersion *sv = elem.sv;
     auto iter = elem.iter;
     ColumnFamilyData *cfd = sv->cfd;
-    InternalStats &internal_stats = *cfd->internal_stats();
+    const auto &hotrap_timers = cfd->internal_stats()->hotrap_timers();
     ImmPromotionCache &cache = *iter;
     CompactionRouter *router = sv->mutable_cf_options.compaction_router;
     auto stats = cfd->ioptions()->stats;
@@ -156,15 +147,13 @@ void PromotionCache::checker() {
       }
     }
     TimerGuard check_newer_version_start =
-        internal_stats.hotrap_timers()
-            .timer(TimerType::kCheckNewerVersion)
-            .start();
+        hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
     for (const auto &item : cache.cache) {
       const std::string &user_key = item.first;
       LookupKey key(user_key, kMaxSequenceNumber);
       Status s;
       MergeContext merge_context;
-      SequenceNumber max_covering_tombstone_seq;
+      SequenceNumber max_covering_tombstone_seq = 0;
       if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
                        &max_covering_tombstone_seq, ReadOptions())) {
         mark_updated(cache, user_key);
@@ -174,17 +163,14 @@ void PromotionCache::checker() {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                         s.ToString().c_str());
       }
-      sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
-                       &merge_context, &max_covering_tombstone_seq, nullptr,
-                       nullptr, nullptr, nullptr, nullptr, false,
-                       target_level_);
-      if (!s.IsNotFound()) {
-        if (!s.ok()) {
-          ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
-                          s.ToString().c_str());
-        }
+      if (sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
+                           &merge_context, &max_covering_tombstone_seq, nullptr,
+                           nullptr, nullptr, nullptr, nullptr, false,
+                           target_level_)) {
         mark_updated(cache, user_key);
+        continue;
       }
+      assert(s.IsNotFound());
     }
     // TODO: Is this really thread-safe?
     MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
@@ -205,9 +191,8 @@ void PromotionCache::checker() {
                      user_key.size() + value.size());
           continue;
         }
-        // It seems that sequence number 0 is treated specially. So we use 1
-        // here.
-        Status s = m->Add(1, ValueType::kTypeValue, user_key, value, nullptr);
+        Status s =
+            m->Add(item.second.sequence, kTypeValue, user_key, value, nullptr);
         if (!s.ok()) {
           ROCKS_LOG_FATAL(cfd->ioptions()->logger,
                           "check_newer_version: Unexpected error: %s",
@@ -249,15 +234,25 @@ void PromotionCache::checker() {
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
-size_t MutablePromotionCache::Insert(InternalStats *internal_stats,
-                                     const std::string &key, Slice value) {
+size_t MutablePromotionCache::Insert(InternalStats *internal_stats, Slice key,
+                                     Slice value) const {
+  size_t size;
+
+  ParsedInternalKey ikey;
+  Status s = ParseInternalKey(key, &ikey, false);
+  assert(s.ok());
+
   PCHashTable::accessor it;
-  if (cache.insert(it, key)) {
+  if (cache.insert(it, ikey.user_key.ToString())) {
+    it->second.sequence = ikey.sequence;
     it->second.value = value.ToString();
     it->second.count = 1;
-    *size += key.size() + value.size();
+    size_t add = key.size() + value.size();
+    size = size_.fetch_add(add, std::memory_order_relaxed) + add;
+  } else {
+    size = size_.load(std::memory_order_relaxed);
   }
-  return *size;
+  return size;
 }
 void PromotionCache::SwitchMutablePromotionCache(
     DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
@@ -265,7 +260,7 @@ void PromotionCache::SwitchMutablePromotionCache(
   size_t mut_size;
   {
     auto mut = mut_.Write();
-    mut_size = mut->size->load();
+    mut_size = mut->size_.load(std::memory_order_relaxed);
     if (mut_size < write_buffer_size) {
       return;
     }
@@ -274,7 +269,7 @@ void PromotionCache::SwitchMutablePromotionCache(
       cache.emplace(a.first, std::move(a.second));
     }
     mut->cache.clear();
-    *(mut->size) = 0;
+    mut->size_.store(0, std::memory_order_relaxed);
   }
   db.mutex()->Lock();
   std::list<rocksdb::ImmPromotionCache>::iterator iter;
@@ -303,31 +298,36 @@ void PromotionCache::SwitchMutablePromotionCache(
                  queue_len);
   signal_check_.notify_one();
 }
-// [begin, end)
 std::vector<std::pair<std::string, std::string>>
 MutablePromotionCache::TakeRange(InternalStats *internal_stats,
                                  CompactionRouter *router, Slice smallest,
                                  Slice largest) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
+  std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
+      records_in_range;
+  for (const auto &record : cache) {
+    if (ucmp_->Compare(record.first, largest) <= 0 &&
+        ucmp_->Compare(record.first, smallest) >= 0) {
+      InternalKey key(record.first, record.second.sequence, kTypeValue);
+      records_in_range.emplace_back(
+          std::move(key),
+          std::make_pair(record.second.value, record.second.count));
+    }
+  }
   std::vector<std::pair<std::string, std::string>> ret;
-  auto begin_it = cache.begin();
-  auto it = begin_it;
-  while (it != cache.end()) {
-    if (ucmp_->Compare(it->first, largest) < 0 &&
-        ucmp_->Compare(it->first, smallest) >= 0) {
-      // TODO: Is it possible to avoid copying here?
-      ret.emplace_back(it->first, it->second.value);
-      router->Access(it->first, it->second.value.size());
-    }
-    ++it;
+  for (auto &record : records_in_range) {
+    InternalKey key = std::move(record.first);
+    Slice user_key = key.user_key();
+    std::string value = std::move(record.second.first);
+    uint64_t count = record.second.second;
+    assert(cache.erase(user_key.ToString()));
+    size_.fetch_sub(key.size() + value.size(), std::memory_order_relaxed);
+    bool is_hot = router->IsHot(user_key);
+    router->Access(user_key, value.size());
+    ret.emplace_back(std::move(*key.rep()), std::move(value));
   }
-  for (auto &kv : ret) {
-    if (cache.erase(kv.first)) {
-      *size -= kv.first.size() + kv.second.size();
-    }
-  }
-  std::sort(ret.begin(), ret.end());
+  std::sort(ret.begin(), ret.end(), InternalKeyCompare(ucmp_));
   return ret;
 }
 }  // namespace ROCKSDB_NAMESPACE
