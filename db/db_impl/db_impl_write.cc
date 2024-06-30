@@ -1947,7 +1947,7 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
     Arena arena;
     ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
     auto caches = cfd->promotion_caches().Read();
-    while (mem_it->Valid()) {
+    for (mem_it->SeekToFirst(); mem_it->Valid(); mem_it->Next()) {
       std::string user_key = mem_it->user_key().ToString();
       for (const auto& level_cache : *caches) {
         const PromotionCache& cache = level_cache.second;
