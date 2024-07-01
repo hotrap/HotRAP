@@ -75,6 +75,9 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice user_key,
       return true;
     }
   }
+  // We shouldn't read immutable promotion caches here, because it's possible
+  // that the newer version has been compacted into the slow disk while the old
+  // version is in an immutable promotion cache.
   return false;
 }
 
