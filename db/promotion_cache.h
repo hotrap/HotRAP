@@ -76,7 +76,8 @@ struct MutablePromotionCache {
         size_(rhs.size_.load(std::memory_order_relaxed)) {}
 
   // Return the size of the mutable promotion cache
-  size_t Insert(InternalStats *internal_stats, Slice key, Slice value) const;
+  size_t Insert(Slice user_key, SequenceNumber sequencd, Slice value) const;
+  size_t Insert(Slice internal_key, Slice value) const;
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
       Slice largest);
@@ -117,6 +118,9 @@ class PromotionCache {
     DBImpl *db;
     SuperVersion *sv;
     std::list<ImmPromotionCache>::iterator iter;
+    // Data will be inserted back to this mutable promotion cache if there are
+    // too few data to flush.
+    const RWMutexProtected<MutablePromotionCache> *mut;
   };
   void checker();
 
