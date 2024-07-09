@@ -197,9 +197,11 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
       *seq_used = w.sequence;
     }
     // write is complete and leader has updated sequence
+    RecordTick(stats_, NON_LEADER_WRITE_COUNT);
     return w.FinalStatus();
   }
   // else we are the leader of the write batch group
+  RecordTick(stats_, LEADER_WRITE_COUNT);
   assert(w.state == WriteThread::STATE_GROUP_LEADER);
   Status status;
   // Once reaches this point, the current writer "w" will try to do its write
