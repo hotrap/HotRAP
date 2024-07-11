@@ -378,11 +378,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     uint64_t count = record.second.second;
     assert(cache.erase(user_key.ToString()));
     size_.fetch_sub(key.size() + value.size(), std::memory_order_relaxed);
-    bool is_hot = router->IsHot(user_key);
     router->Access(user_key, value.size());
-    if (count > 1 || is_hot) {
-      ret.emplace_back(std::move(*key.rep()), std::move(value));
-    }
+    ret.emplace_back(std::move(*key.rep()), std::move(value));
   }
   std::sort(ret.begin(), ret.end(), InternalKeyCompare(ucmp_));
   return ret;

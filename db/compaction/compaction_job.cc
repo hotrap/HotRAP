@@ -1446,52 +1446,50 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
     RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
   }
-  Decision route(const IKeyValueLevel& kv) {
-    // It is guaranteed that all versions of the same user key share the same
-    // decision.
-    const rocksdb::Slice* hot = hot_iter_.peek();
-    while (hot != nullptr) {
-      if (ucmp_->Compare(*hot, kv.ikey.user_key) >= 0) break;
-      hot_iter_.next();
-      hot = hot_iter_.peek();
-    }
-    Decision decision;
-    if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      return Decision::kStartLevel;
-    } else {
-      return Decision::kNextLevel;
-    }
-  }
   optional<Elem> next() override {
-    optional<IKeyValueLevel> kv_ret = iter_.next();
-    if (!kv_ret.has_value()) {
-      return nullopt;
-    }
-    const IKeyValueLevel& kv = kv_ret.value();
-    RangeBounds range{
-        .start =
-            Bound{
-                .user_key = start_,
-                .excluded = false,
-            },
-        .end = end_,
-    };
-    if (!range.contains(kv.ikey.user_key, ucmp_)) {
-      return make_optional<Elem>(Decision::kNextLevel, kv);
-    }
-    Decision decision = route(kv);
-    if (decision == Decision::kStartLevel) {
-      size_t kvsize = kv.key.size() + kv.value.size();
-      if (kv.level == -1 || kv.level == c_.output_level()) {
-        kvsize_promoted_ += kvsize;
-      } else {
-        assert(kv.level == c_.start_level());
-        kvsize_retained_ += kvsize;
+    for (;;) {
+      optional<IKeyValueLevel> kv_ret = iter_.next();
+      if (!kv_ret.has_value()) {
+        return nullopt;
       }
-    } else {
-      assert(decision == Decision::kNextLevel);
+      const IKeyValueLevel& kv = kv_ret.value();
+      RangeBounds range{
+          .start =
+              Bound{
+                  .user_key = start_,
+                  .excluded = false,
+              },
+          .end = end_,
+      };
+      if (!range.contains(kv.ikey.user_key, ucmp_)) {
+        return make_optional<Elem>(Decision::kNextLevel, kv);
+      }
+      // It is guaranteed that all versions of the same user key share the same
+      // decision.
+      const rocksdb::Slice* hot = hot_iter_.peek();
+      while (hot != nullptr) {
+        if (ucmp_->Compare(*hot, kv.ikey.user_key) >= 0) break;
+        hot_iter_.next();
+        hot = hot_iter_.peek();
+      }
+      Decision decision;
+      if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
+        decision = Decision::kStartLevel;
+        size_t kvsize = kv.key.size() + kv.value.size();
+        if (kv.level == -1 || kv.level == c_.output_level()) {
+          kvsize_promoted_ += kvsize;
+        } else {
+          assert(kv.level == c_.start_level());
+          kvsize_retained_ += kvsize;
+        }
+      } else {
+        if (kv.level == -1) {
+          continue;
+        }
+        decision = Decision::kNextLevel;
+      }
+      return make_optional<Elem>(decision, kv);
     }
-    return make_optional<Elem>(decision, kv);
   }
 
  private:
