@@ -758,6 +758,9 @@ Status CompactionJob::Run() {
 
   const size_t num_threads = compact_->sub_compact_states.size();
   assert(num_threads > 0);
+  // HotRAP doesn't support subcompactions yet because VecIter does not
+  // implement Seek
+  assert(num_threads == 1);
   const uint64_t start_micros = db_options_.clock->NowMicros();
 
   // Launch a thread for each of subcompactions 1...num_threads-1
