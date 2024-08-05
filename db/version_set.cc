@@ -1981,7 +1981,7 @@ static void TryPromote(
       cfd.get_or_create_promotion_cache(*db, target_level);
   size_t mut_size;
   {
-    auto res = cache.mut().TryRead();
+    auto res = cache.mut().TryWrite();
     if (!res.has_value()) return;
     const auto& mut = res.value();
     for (auto f : cd_files) {

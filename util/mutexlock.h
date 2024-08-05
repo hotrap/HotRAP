@@ -182,6 +182,8 @@ class MutexGuard {
 template <typename T>
 class MutexProtected {
  public:
+  template <class... Args>
+  MutexProtected(Args... args) : data_(args...) {}
   MutexGuard<T> Lock() const { return MutexGuard<T>(data_, &lock_); }
 
  private:
@@ -235,7 +237,8 @@ template <typename T>
 class RWMutexProtected {
  public:
   RWMutexProtected() = default;
-  RWMutexProtected(T &&rhs) : data_(std::move(rhs)) {}
+  template <class... Args>
+  RWMutexProtected(Args &&...args) : data_(args...) {}
 
   ReadGuard<T> Read() const {
     lock_.ReadLock();
