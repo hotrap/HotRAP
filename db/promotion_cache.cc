@@ -234,6 +234,8 @@ void PromotionCache::check(CheckerQueueElem &elem) {
 
   TimerGuard check_newer_version_start =
       hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
+  // FIXME(hotrap): Don't promote the corresponding range if a record is not
+  // promoted due to a newer version.
   for (auto it : candidates) {
     LookupKey key(it->first, kMaxSequenceNumber);
     Status s;
@@ -424,20 +426,11 @@ void MutablePromotionCache::InsertRanges(
   auto key_it1 = keys.begin();
   auto range_it = ranges_.begin();
   auto range1_it = ranges.begin();
-  while (range1_it != ranges.end()) {
-    std::string range1_last = range1_it->first;
-    RangeInfo range1 = std::move(range1_it->second);
-    range1_it = ranges.erase(range1_it);
-    while (range_it != ranges_.end() &&
-           ucmp_->Compare(range_it->first, range1.first_user_key) < 0) {
-      ++range_it;
-    }
-    MergeRange(range_it, std::move(range1_last), std::move(range1));
-    const std::string &new_range_first = range_it->second.first_user_key;
-    const std::string &new_range_last = range_it->first;
-    SequenceNumber new_range_sequence = range_it->second.sequence;
-    while (key_it1 != keys.end() &&
-           ucmp_->Compare(key_it1->first, new_range_first) < 0) {
+  auto insert_keys_until = [this, &key_it, &key_it1, &keys](Slice range_first) {
+    while (key_it1 != keys.end()) {
+      if (range_first.data()) {
+        if (ucmp_->Compare(key_it1->first, range_first) >= 0) break;
+      }
       std::string &&user_key = std::move(key_it1->first);
       assert(key_it1->second.only_by_point_query);
       auto seq_value = std::move(key_it1->second.seq_value);
@@ -463,6 +456,20 @@ void MutablePromotionCache::InsertRanges(
       }
       ++key_it1;
     }
+  };
+  while (range1_it != ranges.end()) {
+    std::string range1_last = range1_it->first;
+    RangeInfo range1 = std::move(range1_it->second);
+    range1_it = ranges.erase(range1_it);
+    while (range_it != ranges_.end() &&
+           ucmp_->Compare(range_it->first, range1.first_user_key) < 0) {
+      ++range_it;
+    }
+    MergeRange(range_it, std::move(range1_last), std::move(range1));
+    const std::string &new_range_first = range_it->second.first_user_key;
+    const std::string &new_range_last = range_it->first;
+    SequenceNumber new_range_sequence = range_it->second.sequence;
+    insert_keys_until(new_range_first);
     while (key_it1 != keys.end() &&
            ucmp_->Compare(key_it1->first, new_range_last) <= 0) {
       assert(!key_it1->second.only_by_point_query);
@@ -472,6 +479,7 @@ void MutablePromotionCache::InsertRanges(
       ++key_it1;
     }
   }
+  insert_keys_until(Slice(nullptr, 0));
 }
 
 void MutablePromotionCache::MergeRange(

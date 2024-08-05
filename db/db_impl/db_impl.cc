@@ -1739,7 +1739,7 @@ class TieredIterator : public InternalIterator {
         file_options_(file_options),
         range_del_agg_(range_del_agg),
         allow_unprepared_value_(allow_unprepared_value),
-        iter_(fast_disk_it_),
+        iter_(nullptr),
         slow_disk_it_(nullptr),
         merging_it_with_src_(nullptr),
         merging_it_(nullptr),
@@ -1749,7 +1749,7 @@ class TieredIterator : public InternalIterator {
     if (merging_it_ != nullptr) {
       assert(slow_disk_it_ != nullptr);
       assert(merging_it_with_src_ != nullptr);
-      // Automatically deconstructs fast_disk_it_0_, slow_disk_it_,
+      // Automatically deconstructs fast_disk_it_, slow_disk_it_,
       // merging_it_with_src_
       merging_it_->~IgnoreSource();
     } else {
@@ -1784,6 +1784,7 @@ class TieredIterator : public InternalIterator {
     if (!last_promoted_user_key_.empty()) {
       iter_ = fast_disk_it_;
       iter_->Seek(key);
+      RecordAccess();
       return;
     }
     prepare_merging_it();
@@ -1912,10 +1913,11 @@ class TieredIterator : public InternalIterator {
     CompactionRouter* router =
         super_version_->mutable_cf_options.compaction_router;
 
-    if (seek_user_key_.empty() || router == nullptr) return;
+    if (iter_ == nullptr || router == nullptr) return;
     router->ScanResult(iter_ == fast_disk_it_);
     if (records_to_promote_.empty()) {
       if (!last_user_key_.empty()) {
+        assert(!seek_user_key_.empty());
         router->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
                             sequence_);
       }
