@@ -23,28 +23,6 @@ class DBImpl;
 class InternalStats;
 struct SuperVersion;
 
-struct PromotedRange {
-  SequenceNumber sequence;
-  std::string first_user_key;
-  std::string last_user_key;
-};
-class ComparePromotedRange {
- public:
-  ComparePromotedRange(const Comparator *ucmp) : ucmp_(ucmp) {}
-  bool operator()(const PromotedRange &a, const PromotedRange &b) const {
-    return ucmp_->Compare(a.last_user_key, b.last_user_key) < 0;
-  }
-
- private:
-  const Comparator *ucmp_;
-};
-
-struct ParsedPromotedRange {
-  SequenceNumber sequence;
-  Slice first_user_key;
-  Slice last_user_key;
-};
-
 class PromotionCache;
 class PCData {
  public:
@@ -146,11 +124,6 @@ struct ImmPromotionCacheList {
   size_t size = 0;
 };
 
-struct RangeAccessRecord {
-  Slice first_user_key;
-  Slice last_user_key;
-  SequenceNumber sequence;
-};
 class MutablePromotionCache {
  public:
   MutablePromotionCache() = delete;
