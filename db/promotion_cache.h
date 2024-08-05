@@ -157,7 +157,6 @@ class MutablePromotionCache {
 
   const Comparator *ucmp_;
 
-  port::RWMutex mutex_;
   std::map<std::string, PCData, UserKeyCompare> keys_;
   size_t size_;
   // key: The last user key in the range
