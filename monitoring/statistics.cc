@@ -221,9 +221,7 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {COLD_FILE_READ_BYTES, "rocksdb.cold.file.read.bytes"},
     {HOT_FILE_READ_COUNT, "rocksdb.hot.file.read.count"},
     {WARM_FILE_READ_COUNT, "rocksdb.warm.file.read.count"},
-    {COLD_FILE_READ_COUNT, "rocksdb.cold.file.read.count"},
-    {PROMOTED_2FDLAST_BYTES, "hotrap.promoted.2fdlast.bytes"},
-    {PROMOTED_FLUSH_BYTES, "hotrap.promoted.flush.bytes"}};
+    {COLD_FILE_READ_COUNT, "rocksdb.cold.file.read.count"}};
 
 const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap = {
     {DB_GET, "rocksdb.db.get.micros"},
