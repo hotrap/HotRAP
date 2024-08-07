@@ -1739,7 +1739,7 @@ class TieredIterator : public InternalIterator {
         file_options_(file_options),
         range_del_agg_(range_del_agg),
         allow_unprepared_value_(allow_unprepared_value),
-        iter_(nullptr),
+        iter_(fast_disk_it_),
         slow_disk_it_(nullptr),
         merging_it_with_src_(nullptr),
         merging_it_(nullptr),
@@ -1913,11 +1913,10 @@ class TieredIterator : public InternalIterator {
     CompactionRouter* router =
         super_version_->mutable_cf_options.compaction_router;
 
-    if (iter_ == nullptr || router == nullptr) return;
+    if (seek_user_key_.empty() || router == nullptr) return;
     router->ScanResult(iter_ == fast_disk_it_);
     if (records_to_promote_.empty()) {
       if (!last_user_key_.empty()) {
-        assert(!seek_user_key_.empty());
         router->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
                             sequence_);
       }
