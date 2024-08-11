@@ -76,8 +76,7 @@ struct MutablePromotionCache {
         size_(rhs.size_.load(std::memory_order_relaxed)) {}
 
   // Return the size of the mutable promotion cache
-  size_t Insert(Slice user_key, SequenceNumber sequencd, Slice value) const;
-  size_t Insert(Slice internal_key, Slice value) const;
+  size_t Insert(Slice user_key, SequenceNumber sequence, Slice value) const;
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
       Slice largest);
@@ -125,7 +124,7 @@ class PromotionCache {
   void checker();
 
   DBImpl &db_;
-  const int target_level_;
+  const size_t target_level_;
   RWMutexProtected<MutablePromotionCache> mut_;
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
   mutable std::atomic<size_t> max_size_;

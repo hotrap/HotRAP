@@ -302,12 +302,7 @@ size_t MutablePromotionCache::Insert(Slice user_key, SequenceNumber sequence,
   }
   return size;
 }
-size_t MutablePromotionCache::Insert(Slice internal_key, Slice value) const {
-  ParsedInternalKey ikey;
-  Status s = ParseInternalKey(internal_key, &ikey, false);
-  assert(s.ok());
-  return Insert(ikey.user_key, ikey.sequence, value);
-}
+
 void PromotionCache::SwitchMutablePromotionCache(
     DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
   std::unordered_map<std::string, PCData> cache;

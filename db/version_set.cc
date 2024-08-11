@@ -1965,20 +1965,20 @@ static void TryPromote(
     DBImpl* db, ColumnFamilyData& cfd,
     const MutableCFOptions& mutable_cf_options,
     std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
-    const LookupKey& key, PinnableSlice* value) {
+    Slice user_key, SequenceNumber seq, PinnableSlice* value) {
   if (db == nullptr) return;
   CompactionRouter* router = mutable_cf_options.compaction_router;
   if (!router || !value) return;
   // I don't think we can get the block size in this context. So I hard code
   // the promotion threshold. Maybe we should make it an option of compaction
   // router.
-  if (key.internal_key().size() + value->size() >= 16 * 1024) return;
+  if (user_key.size() + value->size() >= 16 * 1024) return;
   if (router->Tier(hit_level) == 0) {
-    router->Access(key.user_key(), value->size());
+    router->Access(user_key, value->size());
     return;
   }
   assert(hit_level > 0);
-  int target_level = hit_level - 1;
+  size_t target_level = hit_level - 1;
   while (router->Tier(target_level) == 1) {
     target_level -= 1;
   }
@@ -2019,7 +2019,7 @@ static void TryPromote(
     for (auto f : cd_files) {
       if (f.get().being_or_has_been_compacted) return;
     }
-    mut_size = mut->Insert(key.internal_key(), *value);
+    mut_size = mut->Insert(user_key, seq, *value);
   }
   size_t tot = mut_size + cache->imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
@@ -2167,7 +2167,8 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
     case GetContext::kFound:
       if (num_cache_data_miss > prev_num_cache_data_miss) {
         TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
-                   hit_level, env_get.k, env_get.value);
+                   hit_level, env_get.k.user_key(), env_get.get_context.seq(),
+                   env_get.value);
       }
       HandleFound(env_get.read_options, env_get.get_context, hit_level,
                   user_key, env_get.value, env_get.status,
@@ -2191,6 +2192,56 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   return false;
 }
 
+bool Version::Get(EnvGet& env_get, int last_level) {
+  Slice ikey = env_get.k.internal_key();
+  Slice user_key = env_get.k.user_key();
+  FilePicker fp(user_key, ikey, &storage_info_.level_files_brief_,
+                std::min(storage_info_.num_non_empty_levels_, last_level + 1),
+                &storage_info_.file_indexer_, user_comparator(),
+                internal_comparator());
+  FdWithKeyRange* f = fp.GetNextFile();
+
+  autovector<std::map<size_t, rocksdb::PromotionCache>::const_iterator>
+      level_pcs;
+  {
+    auto caches = cfd_->promotion_caches().Read();
+    for (auto it = caches->cbegin(); it != caches->cend(); ++it)
+      level_pcs.push_back(it);
+  }
+  for (auto level_pc : level_pcs) {
+    while (f != nullptr && fp.GetHitFileLevel() <= level_pc->first) {
+      bool should_stop = GetInFile(env_get, *f, fp.GetHitFileLevel(),
+                                   fp.IsHitFileLastInLevel());
+      if (should_stop) return true;
+      f = fp.GetNextFile();
+    }
+    if (env_get.db != nullptr) {
+      assert((int)level_pc->first < last_level);
+      if (level_pc->second.Get(cfd_->internal_stats(), env_get.k.user_key(),
+                               env_get.value)) {
+        RecordTick(cfd_->ioptions()->stats, Tickers::GET_HIT_PROMOTION_CACHE);
+        CompactionRouter* router = mutable_cf_options_.compaction_router;
+        if (router) {
+          router->Access(env_get.k.user_key(), env_get.value->size());
+        }
+        HandleFound(env_get.read_options, env_get.get_context, level_pc->first,
+                    env_get.k.user_key(), env_get.value, env_get.status,
+                    env_get.is_blob_index, env_get.do_merge, false);
+        return true;
+      }
+    }
+  }
+  while (f != nullptr) {
+    bool should_stop =
+        GetInFile(env_get, *f, fp.GetHitFileLevel(), fp.IsHitFileLastInLevel());
+    if (should_stop) return true;
+    f = fp.GetNextFile();
+  }
+  HandleNotFound(env_get.get_context, user_key, env_get.value, env_get.status,
+                 env_get.merge_context, env_get.key_exists, env_get.do_merge);
+  return false;
+}
+
 // If db == nullptr then it's called from check_newer_version
 bool Version::Get(DBImpl* db, const ReadOptions& read_options,
                   const LookupKey& k, PinnableSlice* value,
@@ -2199,7 +2250,6 @@ bool Version::Get(DBImpl* db, const ReadOptions& read_options,
                   SequenceNumber* max_covering_tombstone_seq, bool* value_found,
                   bool* key_exists, SequenceNumber* seq, ReadCallback* callback,
                   bool* is_blob, bool do_merge, int last_level) {
-  Slice ikey = k.internal_key();
   Slice user_key = k.user_key();
 
   assert(status->ok() || status->IsMergeInProgress());
@@ -2227,7 +2277,7 @@ bool Version::Get(DBImpl* db, const ReadOptions& read_options,
       user_comparator(), merge_operator_, info_log_, db_statistics_,
       status->ok() ? GetContext::kNotFound : GetContext::kMerge, user_key,
       do_merge ? value : nullptr, do_merge ? timestamp : nullptr, value_found,
-      merge_context, do_merge, max_covering_tombstone_seq, clock_, seq,
+      merge_context, do_merge, max_covering_tombstone_seq, clock_,
       merge_operator_ ? &pinned_iters_mgr : nullptr, callback, is_blob_to_use,
       tracing_get_id, &blob_fetcher);
 
@@ -2236,11 +2286,6 @@ bool Version::Get(DBImpl* db, const ReadOptions& read_options,
     pinned_iters_mgr.StartPinning();
   }
 
-  FilePicker fp(user_key, ikey, &storage_info_.level_files_brief_,
-                std::min(storage_info_.num_non_empty_levels_, last_level + 1),
-                &storage_info_.file_indexer_, user_comparator(),
-                internal_comparator());
-  FdWithKeyRange* f = fp.GetNextFile();
   EnvGet env_get{.db = db,
                  .read_options = read_options,
                  .k = k,
@@ -2252,43 +2297,11 @@ bool Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .key_exists = key_exists,
                  .is_blob_index = is_blob_index,
                  .do_merge = do_merge};
-  autovector<std::map<int, rocksdb::PromotionCache>::const_iterator> level_pcs;
-  {
-    auto caches = cfd_->promotion_caches().Read();
-    for (auto it = caches->cbegin(); it != caches->cend(); ++it)
-      level_pcs.push_back(it);
+  bool ret = Get(env_get, last_level);
+  if (seq) {
+    *seq = env_get.get_context.seq();
   }
-  for (auto level_pc : level_pcs) {
-    while (f != nullptr && (int)fp.GetHitFileLevel() <= level_pc->first) {
-      bool should_stop = GetInFile(env_get, *f, fp.GetHitFileLevel(),
-                                   fp.IsHitFileLastInLevel());
-      if (should_stop) return true;
-      f = fp.GetNextFile();
-    }
-    if (db != nullptr) {
-      assert(level_pc->first < last_level);
-      if (level_pc->second.Get(cfd_->internal_stats(), k.user_key(), value)) {
-        RecordTick(cfd_->ioptions()->stats, Tickers::GET_HIT_PROMOTION_CACHE);
-        CompactionRouter* router = mutable_cf_options_.compaction_router;
-        if (router) {
-          router->Access(k.user_key(), value->size());
-        }
-        HandleFound(env_get.read_options, env_get.get_context, level_pc->first,
-                    k.user_key(), value, env_get.status, env_get.is_blob_index,
-                    env_get.do_merge, false);
-        return true;
-      }
-    }
-  }
-  while (f != nullptr) {
-    bool should_stop =
-        GetInFile(env_get, *f, fp.GetHitFileLevel(), fp.IsHitFileLastInLevel());
-    if (should_stop) return true;
-    f = fp.GetNextFile();
-  }
-  HandleNotFound(env_get.get_context, user_key, env_get.value, env_get.status,
-                 env_get.merge_context, env_get.key_exists, env_get.do_merge);
-  return false;
+  return ret;
 }
 
 void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,
@@ -2317,7 +2330,7 @@ void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,
         iter->s->ok() ? GetContext::kNotFound : GetContext::kMerge,
         iter->ukey_with_ts, iter->value, iter->timestamp, nullptr,
         &(iter->merge_context), true, &iter->max_covering_tombstone_seq, clock_,
-        nullptr, merge_operator_ ? &pinned_iters_mgr : nullptr, callback,
+        merge_operator_ ? &pinned_iters_mgr : nullptr, callback,
         &iter->is_blob_index, tracing_mget_id, &blob_fetcher);
     // MergeInProgress status, if set, has been transferred to the get_context
     // state, so we set status to ok here. From now on, the iter status will
