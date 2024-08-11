@@ -268,7 +268,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     auto caches = cfd->promotion_caches().Read();
     auto caches_it = caches->find(target_level_);
     assert(caches_it != caches->end());
-    assert((int)caches_it->first == target_level_);
+    assert(caches_it->first == target_level_);
     auto list = caches_it->second.imm_list().Write();
     list->size -= iter->size;
     tmp.splice(tmp.begin(), list->list, iter);
@@ -365,12 +365,6 @@ size_t MutablePromotionCache::Insert(Slice user_key, SequenceNumber sequence,
     it->second.set_repeated_accessed(true);
   }
   return size_;
-}
-size_t MutablePromotionCache::Insert(Slice internal_key, Slice value) {
-  ParsedInternalKey ikey;
-  Status s = ParseInternalKey(internal_key, &ikey, false);
-  assert(s.ok());
-  return Insert(ikey.user_key, ikey.sequence, value);
 }
 
 size_t MutablePromotionCache::InsertOneRange(

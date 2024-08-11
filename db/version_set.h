@@ -859,6 +859,7 @@ class Version {
   };
   bool GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
                  bool is_hit_file_last_in_level);
+  bool Get(EnvGet& env_get, int last_level);
   // Returns true if the filter blocks in the specified level will not be
   // checked during read operations. In certain cases (trivial move or preload),
   // the filter block may already be cached, but we still do not access it such

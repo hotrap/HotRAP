@@ -132,7 +132,6 @@ class MutablePromotionCache {
 
   // Return the size of the mutable promotion cache
   size_t Insert(Slice user_key, SequenceNumber sequencd, Slice value);
-  size_t Insert(Slice internal_key, Slice value);
   size_t InsertOneRange(
       std::vector<std::pair<std::string, std::string>> &&records,
       std::string &&first_user_key, std::string &&last_user_key,
@@ -202,7 +201,7 @@ class PromotionCache {
   void check(CheckerQueueElem &elem);
 
   DBImpl &db_;
-  const int target_level_;
+  const size_t target_level_;
   RWMutexProtected<MutablePromotionCache> mut_;
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
   mutable std::atomic<size_t> max_size_;

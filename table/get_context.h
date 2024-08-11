@@ -103,7 +103,6 @@ class GetContext {
              const Slice& user_key, PinnableSlice* value, bool* value_found,
              MergeContext* merge_context, bool do_merge,
              SequenceNumber* max_covering_tombstone_seq, SystemClock* clock,
-             SequenceNumber* seq = nullptr,
              PinnedIteratorsManager* _pinned_iters_mgr = nullptr,
              ReadCallback* callback = nullptr, bool* is_blob_index = nullptr,
              uint64_t tracing_get_id = 0, BlobFetcher* blob_fetcher = nullptr);
@@ -113,7 +112,6 @@ class GetContext {
              std::string* timestamp, bool* value_found,
              MergeContext* merge_context, bool do_merge,
              SequenceNumber* max_covering_tombstone_seq, SystemClock* clock,
-             SequenceNumber* seq = nullptr,
              PinnedIteratorsManager* _pinned_iters_mgr = nullptr,
              ReadCallback* callback = nullptr, bool* is_blob_index = nullptr,
              uint64_t tracing_get_id = 0, BlobFetcher* blob_fetcher = nullptr);
@@ -153,7 +151,9 @@ class GetContext {
   void SetReplayLog(std::string* replay_log) { replay_log_ = replay_log; }
 
   // Do we need to fetch the SequenceNumber for this key?
-  bool NeedToReadSequence() const { return (seq_ != nullptr); }
+  bool NeedToReadSequence() const { return true; }
+
+  SequenceNumber seq() const { return seq_; }
 
   bool sample() const { return sample_; }
 
@@ -192,7 +192,7 @@ class GetContext {
   SystemClock* clock_;
   // If a key is found, seq_ will be set to the SequenceNumber of most recent
   // write to the key or kMaxSequenceNumber if unknown
-  SequenceNumber* seq_;
+  SequenceNumber seq_;
   std::string* replay_log_;
   // Used to temporarily pin blocks when state_ == GetContext::kMerge
   PinnedIteratorsManager* pinned_iters_mgr_;
