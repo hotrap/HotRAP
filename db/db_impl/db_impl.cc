@@ -1780,7 +1780,7 @@ class TieredIterator : public InternalIterator {
     assert(s.ok());
     seek_user_key_.assign(ikey.user_key.data(), ikey.user_key.size());
 
-    last_promoted_user_key_ = router->LastPromoted(key, sequence_);
+    last_promoted_user_key_ = router->LastPromoted(ikey.user_key, sequence_);
     if (!last_promoted_user_key_.empty()) {
       iter_ = fast_disk_it_;
       iter_->Seek(key);
