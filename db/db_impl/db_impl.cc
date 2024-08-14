@@ -1784,7 +1784,7 @@ class TieredIterator : public InternalIterator {
     if (!last_promoted_user_key_.empty()) {
       iter_ = fast_disk_it_;
       iter_->Seek(key);
-      RecordAccess();
+      SeekInSlowDiskIfNeeded();
       return;
     }
     prepare_merging_it();
@@ -1799,40 +1799,15 @@ class TieredIterator : public InternalIterator {
   void Next() final override {
     assert(iter_->Valid());
     iter_->Next();
-    if (!iter_->Valid()) return;
-
-    Version* version = super_version_->current;
-    const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
-
-    Slice internal_key = key();
-    ParsedInternalKey ikey;
-    Status s = ParseInternalKey(internal_key, &ikey, false);
-    assert(s.ok());
-
-    if (iter_ != fast_disk_it_) {
-      RecordAccess(ucmp, internal_key, ikey);
+    if (!iter_->Valid()) {
+      if (iter_ == fast_disk_it_) SeekInSlowDisk();
       return;
     }
-    if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) <= 0) return;
-    prepare_merging_it();
-
-    // Seek to first not promoted
-    InternalKey k(last_promoted_user_key_, 0, static_cast<ValueType>(0));
-    slow_disk_it_->Seek(k.Encode());
-    while (slow_disk_it_->Valid()) {
-      s = ParseInternalKey(slow_disk_it_->key(), &ikey, false);
-      assert(s.ok());
-      if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) > 0) break;
-      slow_disk_it_->Next();
+    if (iter_ != fast_disk_it_) {
+      RecordAccess();
+      return;
     }
-
-    merging_it_with_src_->rebuild();
-    iter_ = merging_it_;
-
-    internal_key = key();
-    s = ParseInternalKey(internal_key, &ikey, false);
-    assert(s.ok());
-    RecordAccess(ucmp, internal_key, ikey);
+    SeekInSlowDiskIfNeeded();
   }
 
  private:
@@ -1864,11 +1839,11 @@ class TieredIterator : public InternalIterator {
     merging_it_ = new (mem) IgnoreSource(merging_it_with_src_);
   }
 
-  void RecordAccess(const Comparator* ucmp, Slice internal_key,
-                    const ParsedInternalKey& ikey) {
+  // If not a stale version, return true, otherwise return false.
+  bool UpdateLastUserKey(const Comparator* ucmp,
+                         const ParsedInternalKey& ikey) {
     // Future work: Handle other types
     assert(ikey.type == ValueType::kTypeValue);
-    bool not_stale_version;
     if (ikey.sequence <= sequence_) {
       // Visible
       Slice last_user_key = ikey.user_key;
@@ -1877,14 +1852,62 @@ class TieredIterator : public InternalIterator {
         assert(res > 0);
         last_user_key_.assign(last_user_key.data(), last_user_key.size());
         // This is the latest visible version of this user key
-        not_stale_version = true;
+        return true;
       } else {
-        not_stale_version = false;
+        return false;
       }
     } else {
       // A future version
-      not_stale_version = true;
+      return true;
     }
+  }
+
+  void SeekInSlowDisk(const Comparator* ucmp) {
+    ParsedInternalKey ikey;
+
+    prepare_merging_it();
+
+    // Seek to first not promoted
+    InternalKey k(last_promoted_user_key_, 0, static_cast<ValueType>(0));
+    slow_disk_it_->Seek(k.Encode());
+    while (slow_disk_it_->Valid()) {
+      Status s = ParseInternalKey(slow_disk_it_->key(), &ikey, false);
+      assert(s.ok());
+      if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) > 0) break;
+      slow_disk_it_->Next();
+    }
+
+    merging_it_with_src_->rebuild();
+    iter_ = merging_it_;
+
+    Slice internal_key = key();
+    Status s = ParseInternalKey(internal_key, &ikey, false);
+    assert(s.ok());
+    RecordAccess(ucmp, internal_key, ikey);
+  }
+  void SeekInSlowDisk() {
+    Version* version = super_version_->current;
+    const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
+    SeekInSlowDisk(ucmp);
+  }
+  void SeekInSlowDiskIfNeeded() {
+    Version* version = super_version_->current;
+    const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
+
+    Slice internal_key = key();
+    ParsedInternalKey ikey;
+    Status s = ParseInternalKey(internal_key, &ikey, false);
+    assert(s.ok());
+    if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) <= 0) {
+      UpdateLastUserKey(ucmp, ikey);
+      return;
+    }
+    SeekInSlowDisk(ucmp);
+  }
+
+  void RecordAccess(const Comparator* ucmp, Slice internal_key,
+                    const ParsedInternalKey& ikey) {
+    bool not_stale_version = UpdateLastUserKey(ucmp, ikey);
     if (not_stale_version) {
       num_accessed_bytes_ += internal_key.size() + value().size();
       if (iter_ == merging_it_) {
