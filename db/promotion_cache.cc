@@ -649,8 +649,7 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<std::string, std::string>> ret;
   auto range_it = ranges_.lower_bound(smallest.ToString());
-  std::map<std::string, PCData, UserKeyCompare>::iterator key_it =
-      keys_.lower_bound(smallest.ToString());
+  std::map<std::string, PCData, UserKeyCompare>::iterator key_it;
   auto erase_keys_in_range = [this, &key_it](Slice range_last) {
     while (key_it != keys_.end()) {
       const std::string &user_key = key_it->first;
@@ -694,11 +693,14 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     // Only a part of this range is promotable.
     // Therefore, we don't promote this range.
     const std::string &range_first = range_it->second.first_user_key;
+    key_it = keys_.lower_bound(range_first);
     const std::string &range_last = range_it->first;
     router->AccessRange(range_first, range_last, range_it->second.num_bytes, 0);
     erase_point_query_keys(range_first, false);
     erase_keys_in_range(range_last);
     range_it = ranges_.erase(range_it);
+  } else {
+    key_it = keys_.lower_bound(smallest.ToString());
   }
   while (range_it != ranges_.end()) {
     const std::string &range_last = range_it->first;
