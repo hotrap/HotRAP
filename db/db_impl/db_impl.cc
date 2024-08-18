@@ -1890,19 +1890,23 @@ class TieredIterator : public InternalIterator {
     const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
     SeekInSlowDisk(ucmp);
   }
+  // Not needed if marked promoted in RALT after being promoted.
   void SeekInSlowDiskIfNeeded() {
     Version* version = super_version_->current;
     const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
-
+    if (!Valid()) {
+      SeekInSlowDisk(ucmp);
+      return;
+    }
     Slice internal_key = key();
     ParsedInternalKey ikey;
     Status s = ParseInternalKey(internal_key, &ikey, false);
     assert(s.ok());
-    if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) <= 0) {
-      UpdateLastUserKey(ucmp, ikey);
+    if (ucmp->Compare(ikey.user_key, last_promoted_user_key_) > 0) {
+      SeekInSlowDisk(ucmp);
       return;
     }
-    SeekInSlowDisk(ucmp);
+    UpdateLastUserKey(ucmp, ikey);
   }
 
   void RecordAccess(const Comparator* ucmp, Slice internal_key,
