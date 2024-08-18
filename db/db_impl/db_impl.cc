@@ -1890,7 +1890,7 @@ class TieredIterator : public InternalIterator {
     const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
     SeekInSlowDisk(ucmp);
   }
-  // Not needed if marked promoted in RALT after being promoted.
+  // FIXME(hotrap): Not needed if marked promoted in RALT after being promoted.
   void SeekInSlowDiskIfNeeded() {
     Version* version = super_version_->current;
     const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
