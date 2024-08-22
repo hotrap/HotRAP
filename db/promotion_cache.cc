@@ -234,8 +234,13 @@ void PromotionCache::check(CheckerQueueElem &elem) {
 
   TimerGuard check_newer_version_start =
       hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
-  // FIXME(hotrap): Don't promote the corresponding range if a record is not
-  // promoted due to a newer version.
+  auto erase_range_containing = [&cache, ucmp](const std::string &user_key) {
+    auto it = cache.ranges.lower_bound(user_key);
+    if (it != cache.ranges.end() &&
+        ucmp->Compare(it->second.first_user_key, user_key) <= 0) {
+      cache.ranges.erase(it);
+    }
+  };
   for (auto it : candidates) {
     LookupKey key(it->first, kMaxSequenceNumber);
     Status s;
@@ -243,6 +248,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     SequenceNumber max_covering_tombstone_seq = 0;
     if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
                      &max_covering_tombstone_seq, ReadOptions())) {
+      erase_range_containing(it->first);
       continue;
     }
     if (!s.ok()) {
@@ -253,6 +259,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
                          &merge_context, &max_covering_tombstone_seq, nullptr,
                          nullptr, nullptr, nullptr, nullptr, false,
                          target_level_)) {
+      erase_range_containing(it->first);
       continue;
     }
     assert(s.IsNotFound());
