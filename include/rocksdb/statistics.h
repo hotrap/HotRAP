@@ -518,6 +518,9 @@ enum Tickers : uint32_t {
   // ReadOptions.auto_readahead_size is set.
   READAHEAD_TRIMMED,
 
+  LEADER_WRITE_COUNT,
+  NON_LEADER_WRITE_COUNT,
+
   TICKER_ENUM_MAX
 };
 
