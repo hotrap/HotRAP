@@ -40,17 +40,14 @@ void appendToReplayLog(std::string* replay_log, ValueType type, Slice value) {
 
 }  // namespace
 
-GetContext::GetContext(const Comparator* ucmp,
-                       const MergeOperator* merge_operator, Logger* logger,
-                       Statistics* statistics, GetState init_state,
-                       const Slice& user_key, PinnableSlice* pinnable_val,
-                       std::string* timestamp, bool* value_found,
-                       MergeContext* merge_context, bool do_merge,
-                       SequenceNumber* _max_covering_tombstone_seq,
-                       SystemClock* clock, SequenceNumber* seq,
-                       PinnedIteratorsManager* _pinned_iters_mgr,
-                       ReadCallback* callback, bool* is_blob_index,
-                       uint64_t tracing_get_id, BlobFetcher* blob_fetcher)
+GetContext::GetContext(
+    const Comparator* ucmp, const MergeOperator* merge_operator, Logger* logger,
+    Statistics* statistics, GetState init_state, const Slice& user_key,
+    PinnableSlice* pinnable_val, std::string* timestamp, bool* value_found,
+    MergeContext* merge_context, bool do_merge,
+    SequenceNumber* _max_covering_tombstone_seq, SystemClock* clock,
+    PinnedIteratorsManager* _pinned_iters_mgr, ReadCallback* callback,
+    bool* is_blob_index, uint64_t tracing_get_id, BlobFetcher* blob_fetcher)
     : ucmp_(ucmp),
       merge_operator_(merge_operator),
       logger_(logger),
@@ -63,7 +60,7 @@ GetContext::GetContext(const Comparator* ucmp,
       merge_context_(merge_context),
       max_covering_tombstone_seq_(_max_covering_tombstone_seq),
       clock_(clock),
-      seq_(seq),
+      seq_(kMaxSequenceNumber),
       replay_log_(nullptr),
       pinned_iters_mgr_(_pinned_iters_mgr),
       callback_(callback),
@@ -71,9 +68,6 @@ GetContext::GetContext(const Comparator* ucmp,
       is_blob_index_(is_blob_index),
       tracing_get_id_(tracing_get_id),
       blob_fetcher_(blob_fetcher) {
-  if (seq_) {
-    *seq_ = kMaxSequenceNumber;
-  }
   sample_ = should_sample_file_read();
 }
 
@@ -82,12 +76,12 @@ GetContext::GetContext(
     Statistics* statistics, GetState init_state, const Slice& user_key,
     PinnableSlice* pinnable_val, bool* value_found, MergeContext* merge_context,
     bool do_merge, SequenceNumber* _max_covering_tombstone_seq,
-    SystemClock* clock, SequenceNumber* seq,
-    PinnedIteratorsManager* _pinned_iters_mgr, ReadCallback* callback,
-    bool* is_blob_index, uint64_t tracing_get_id, BlobFetcher* blob_fetcher)
+    SystemClock* clock, PinnedIteratorsManager* _pinned_iters_mgr,
+    ReadCallback* callback, bool* is_blob_index, uint64_t tracing_get_id,
+    BlobFetcher* blob_fetcher)
     : GetContext(ucmp, merge_operator, logger, statistics, init_state, user_key,
                  pinnable_val, nullptr, value_found, merge_context, do_merge,
-                 _max_covering_tombstone_seq, clock, seq, _pinned_iters_mgr,
+                 _max_covering_tombstone_seq, clock, _pinned_iters_mgr,
                  callback, is_blob_index, tracing_get_id, blob_fetcher) {}
 
 // Called from TableCache::Get and Table::Get when file/block in which
@@ -232,11 +226,9 @@ bool GetContext::SaveValue(const ParsedInternalKey& parsed_key,
 
     appendToReplayLog(replay_log_, parsed_key.type, value);
 
-    if (seq_ != nullptr) {
-      // Set the sequence number if it is uninitialized
-      if (*seq_ == kMaxSequenceNumber) {
-        *seq_ = parsed_key.sequence;
-      }
+    // Set the sequence number if it is uninitialized
+    if (seq_ == kMaxSequenceNumber) {
+      seq_ = parsed_key.sequence;
     }
 
     auto type = parsed_key.type;
