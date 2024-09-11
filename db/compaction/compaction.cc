@@ -123,7 +123,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
       // inserted.
       mark_fn();
     } else {
-      assert(it->first == start_level_);
+      assert(it->first == (size_t)start_level_);
 
       const LevelFilesBrief* start_level_input = input_levels(0);
       std::vector<FileMetaData*> file_meta_data;

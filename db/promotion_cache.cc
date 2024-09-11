@@ -75,6 +75,9 @@ bool PromotionCache::Get(InternalStats *internal_stats, Slice user_key,
       return true;
     }
   }
+  // We shouldn't read immutable promotion caches here, because it's possible
+  // that the newer version has been compacted into the slow disk while the old
+  // version is in an immutable promotion cache.
   return false;
 }
 
@@ -198,47 +201,69 @@ void PromotionCache::checker() {
       }
       assert(s.IsNotFound());
     }
-    // TODO: Is this really thread-safe?
-    MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
-    m->Ref();
-    autovector<MemTable *> memtables_to_free;
-    SuperVersionContext svc(true);
 
     db->mutex()->Lock();
-    m->SetNextLogNumber(db->logfile_number_);
-    size_t flushed_bytes = 0;
+    // No need to SetNextLogNumber, because we don't delete any log file
+    size_t bytes_to_flush = 0;
     {
       auto updated = cache.updated.Lock();
-      for (const auto &item : cache.cache) {
-        const std::string &user_key = item.first;
-        const std::string &value = item.second.value;
-        if (stably_hot.find(user_key) == stably_hot.end()) continue;
+      // We are the only one who is accessing this imm PC, so we can modify it.
+      auto it = cache.cache.begin();
+      while (it != cache.cache.end()) {
+        const std::string &user_key = it->first;
+        const std::string &value = it->second.value;
+        if (stably_hot.find(user_key) == stably_hot.end()) {
+          it = cache.cache.erase(it);
+          continue;
+        }
         if (updated->find(user_key) != updated->end()) {
           RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
                      user_key.size() + value.size());
+          it = cache.cache.erase(it);
           continue;
         }
-        Status s =
-            m->Add(item.second.sequence, kTypeValue, user_key, value, nullptr);
+        bytes_to_flush += user_key.size() + value.size();
+        ++it;
+      }
+    }
+    if (bytes_to_flush * 2 < sv->mutable_cf_options.write_buffer_size) {
+      // There are too few data to flush. There will be too much compaction I/O
+      // in L1 if we force to flush them to L0. Therefore, we just insert them
+      // back to the mutable promotion cache.
+      auto mut = elem.mut->Write();
+      for (const auto &item : cache.cache) {
+        mut->Insert(item.first, item.second.sequence, item.second.value);
+      }
+      db->mutex()->Unlock();
+    } else {
+      RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
+
+      MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
+      m->Ref();
+      autovector<MemTable *> memtables_to_free;
+      SuperVersionContext svc(true);
+      for (const auto &item : cache.cache) {
+        Status s = m->Add(item.second.sequence, kTypeValue, item.first,
+                          item.second.value, nullptr);
         if (!s.ok()) {
           ROCKS_LOG_FATAL(cfd->ioptions()->logger,
                           "check_newer_version: Unexpected error: %s",
                           s.ToString().c_str());
         }
-        flushed_bytes += user_key.size() + value.size();
       }
-    }
-    cfd->imm()->Add(m, &memtables_to_free);
-    db->InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
-    DBImpl::FlushRequest flush_req;
-    db->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}), &flush_req);
-    db->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
-    db->MaybeScheduleFlushOrCompaction();
-    db->mutex()->Unlock();
+      cfd->imm()->Add(m, &memtables_to_free);
+      db->InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
+      DBImpl::FlushRequest flush_req;
+      db->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
+                               &flush_req);
+      db->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
+      db->MaybeScheduleFlushOrCompaction();
 
-    for (MemTable *table : memtables_to_free) delete table;
-    svc.Clean();
-    RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, flushed_bytes);
+      db->mutex()->Unlock();
+
+      for (MemTable *table : memtables_to_free) delete table;
+      svc.Clean();
+    }
 
     std::list<ImmPromotionCache> tmp;
     {
@@ -261,26 +286,23 @@ void PromotionCache::checker() {
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
-size_t MutablePromotionCache::Insert(InternalStats *internal_stats, Slice key,
+size_t MutablePromotionCache::Insert(Slice user_key, SequenceNumber sequence,
                                      Slice value) const {
   size_t size;
 
-  ParsedInternalKey ikey;
-  Status s = ParseInternalKey(key, &ikey, false);
-  assert(s.ok());
-
   PCHashTable::accessor it;
-  if (cache.insert(it, ikey.user_key.ToString())) {
-    it->second.sequence = ikey.sequence;
+  if (cache.insert(it, user_key.ToString())) {
+    it->second.sequence = sequence;
     it->second.value = value.ToString();
     it->second.count = 1;
-    size_t add = key.size() + value.size();
+    size_t add = user_key.size() + value.size();
     size = size_.fetch_add(add, std::memory_order_relaxed) + add;
   } else {
     size = size_.load(std::memory_order_relaxed);
   }
   return size;
 }
+
 void PromotionCache::SwitchMutablePromotionCache(
     DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
   std::unordered_map<std::string, PCData> cache;
@@ -318,6 +340,7 @@ void PromotionCache::SwitchMutablePromotionCache(
         .db = &db,
         .sv = sv,
         .iter = iter,
+        .mut = &mut_,
     });
     queue_len = checker_queue_.size();
   }

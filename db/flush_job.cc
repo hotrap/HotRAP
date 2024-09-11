@@ -188,7 +188,9 @@ void FlushJob::PickMemTable() {
   edit_->SetPrevLogNumber(0);
   // SetLogNumber(log_num) indicates logs with number smaller than log_num
   // will no longer be picked up for recovery.
-  edit_->SetLogNumber(mems_.back()->GetNextLogNumber());
+  if (mems_.back()->GetNextLogNumber()) {
+    edit_->SetLogNumber(mems_.back()->GetNextLogNumber());
+  }
   edit_->SetColumnFamily(cfd_->GetID());
 
   // path 0 for level 0 file.
