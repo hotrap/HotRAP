@@ -78,8 +78,7 @@ struct MutablePromotionCache {
   // Return the size of the mutable promotion cache
   size_t Insert(Slice user_key, SequenceNumber sequence, Slice value) const;
   std::vector<std::pair<std::string, std::string>> TakeRange(
-      InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
-      Slice largest);
+      InternalStats *internal_stats, RALT *ralt, Slice smallest, Slice largest);
 
  private:
   const Comparator *ucmp_;

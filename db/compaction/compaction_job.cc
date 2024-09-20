@@ -51,9 +51,9 @@
 #include "options/configurable_helper.h"
 #include "options/options_helper.h"
 #include "port/port.h"
-#include "rocksdb/compaction_router.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
+#include "rocksdb/ralt.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/sst_partitioner.h"
 #include "rocksdb/statistics.h"
@@ -1395,10 +1395,10 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
 
 class RouterIteratorIntraTier : public TraitIterator<Elem> {
  public:
-  RouterIteratorIntraTier(CompactionRouter& router, const Compaction& c,
+  RouterIteratorIntraTier(RALT& ralt, const Compaction& c,
                           CompactionIterator& c_iter, Slice start, Bound end,
                           Tickers promotion_type)
-      : router_(router),
+      : ralt_(ralt),
         c_(c),
         promotion_type_(promotion_type),
         promoted_bytes_(0),
@@ -1421,7 +1421,7 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
   }
 
  private:
-  CompactionRouter& router_;
+  RALT& ralt_;
   const Compaction& c_;
   Tickers promotion_type_;
   size_t promoted_bytes_;
@@ -1430,15 +1430,15 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
 
 class RouterIteratorFD2SD : public TraitIterator<Elem> {
  public:
-  RouterIteratorFD2SD(CompactionRouter& router, const Compaction& c,
+  RouterIteratorFD2SD(RALT& ralt, const Compaction& c,
                       CompactionIterator& c_iter, Slice start, Bound end)
-      : router_(router),
+      : ralt_(ralt),
         c_(c),
         start_(start),
         end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(c_iter),
-        hot_iter_(router.LowerBound(start_)),
+        hot_iter_(ralt.LowerBound(start_)),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
   ~RouterIteratorFD2SD() {
@@ -1495,44 +1495,44 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   }
 
  private:
-  CompactionRouter& router_;
+  RALT& ralt_;
   const Compaction& c_;
   const Slice start_;
   const Bound end_;
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
-  Peekable<CompactionRouter::Iter> hot_iter_;
+  Peekable<RALT::Iter> hot_iter_;
 
   size_t kvsize_promoted_;
   size_t kvsize_retained_;
 };
 class RouterIterator {
  public:
-  RouterIterator(CompactionRouter* router, const Compaction& c,
-                 CompactionIterator& c_iter, Slice start, Bound end)
+  RouterIterator(RALT* ralt, const Compaction& c, CompactionIterator& c_iter,
+                 Slice start, Bound end)
       : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
     int start_level = c.level();
     int latter_level = c.output_level();
-    if (router == NULL) {
+    if (ralt == NULL) {
       // Future work: Handle the case that it's not empty, which is possible
-      // when router was not NULL but then is set to NULL.
+      // when ralt was not NULL but then is set to NULL.
       assert(c.cached_records_to_promote().empty());
       iter_ = std::unique_ptr<IteratorWithoutRouter>(
           new IteratorWithoutRouter(c, c_iter));
     } else {
-      size_t start_tier = router->Tier(start_level);
-      size_t latter_tier = router->Tier(latter_level);
+      size_t start_tier = ralt->Tier(start_level);
+      size_t latter_tier = ralt->Tier(latter_level);
       if (start_tier != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorFD2SD>(
-            new RouterIteratorFD2SD(*router, c, c_iter, start, end));
-      } else if (router->Tier(latter_level + 1) != latter_tier) {
+            new RouterIteratorFD2SD(*ralt, c, c_iter, start, end));
+      } else if (ralt->Tier(latter_level + 1) != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorIntraTier>(
-            new RouterIteratorIntraTier(*router, c, c_iter, start, end,
+            new RouterIteratorIntraTier(*ralt, c, c_iter, start, end,
                                         Tickers::PROMOTED_2FDLAST_BYTES));
       } else {
         iter_ = std::unique_ptr<RouterIteratorIntraTier>(
-            new RouterIteratorIntraTier(*router, c, c_iter, start, end,
+            new RouterIteratorIntraTier(*ralt, c, c_iter, start, end,
                                         Tickers::PROMOTED_2SDFRONT_BYTES));
       }
     }
@@ -1594,7 +1594,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "anymore.");
     return;
   }
-  CompactionRouter* router = c->mutable_cf_options()->compaction_router;
+  RALT* ralt = c->mutable_cf_options()->ralt;
   TimerGuard timer_guard =
       cfd->internal_stats()
           ->hotrap_timers_per_level()
@@ -1770,7 +1770,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                        .user_key = start_level_largest_user_key,
                        .excluded = false,
                    });
-  RouterIterator router_iter(router, *c, *c_iter, promotable_start,
+  RouterIterator router_iter(ralt, *c, *c_iter, promotable_start,
                              promotable_end);
 
   std::string previous_user_key;

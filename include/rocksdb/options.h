@@ -25,12 +25,12 @@
 #include "rocksdb/env.h"
 #include "rocksdb/file_checksum.h"
 #include "rocksdb/listener.h"
+#include "rocksdb/ralt.h"
 #include "rocksdb/sst_partitioner.h"
 #include "rocksdb/types.h"
 #include "rocksdb/universal_compaction.h"
 #include "rocksdb/version.h"
 #include "rocksdb/write_buffer_manager.h"
-#include "rocksdb/compaction_router.h"
 
 #ifdef max
 #undef max
@@ -163,7 +163,7 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   // Default: nullptr
   std::shared_ptr<CompactionFilterFactory> compaction_filter_factory = nullptr;
 
-  CompactionRouter* compaction_router = nullptr;
+  RALT* ralt = nullptr;
 
   // -------------------
   // Parameters that affect performance

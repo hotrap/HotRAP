@@ -1967,19 +1967,18 @@ static void TryPromote(
     std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
     Slice user_key, SequenceNumber seq, PinnableSlice* value) {
   if (db == nullptr) return;
-  CompactionRouter* router = mutable_cf_options.compaction_router;
-  if (!router || !value) return;
+  RALT* ralt = mutable_cf_options.ralt;
+  if (!ralt || !value) return;
   // I don't think we can get the block size in this context. So I hard code
-  // the promotion threshold. Maybe we should make it an option of compaction
-  // router.
+  // the promotion threshold. Maybe we should make it an option of RALT.
   if (user_key.size() + value->size() >= 16 * 1024) return;
-  if (router->Tier(hit_level) == 0) {
-    router->Access(user_key, value->size());
+  if (ralt->Tier(hit_level) == 0) {
+    ralt->Access(user_key, value->size());
     return;
   }
   assert(hit_level > 0);
   size_t target_level = hit_level - 1;
-  while (router->Tier(target_level) == 1) {
+  while (ralt->Tier(target_level) == 1) {
     target_level -= 1;
   }
   const PromotionCache* cache;
@@ -2041,10 +2040,10 @@ void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
                           Slice user_key, PinnableSlice* value, Status& status,
                           bool is_blob_index, bool do_merge, bool is_checker) {
-  CompactionRouter* router = mutable_cf_options_.compaction_router;
-  if (!router) return;
+  RALT* ralt = mutable_cf_options_.ralt;
+  if (!ralt) return;
   if (!is_checker) {
-    router->HitLevel(hit_level, user_key);
+    ralt->HitLevel(hit_level, user_key);
   }
 
   if (hit_level == 0) {
@@ -2113,8 +2112,8 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
                         bool is_hit_file_last_in_level) {
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
-  CompactionRouter* router = mutable_cf_options_.compaction_router;
-  if (router && router->Tier(hit_level) > 0) {
+  RALT* ralt = mutable_cf_options_.ralt;
+  if (ralt && ralt->Tier(hit_level) > 0) {
     env_get.cd_files.push_back(std::ref(*f.file_metadata));
   }
   if (env_get.max_covering_tombstone_seq > 0) {
@@ -2228,9 +2227,9 @@ bool Version::Get(EnvGet& env_get, int last_level) {
       if (level_pc->second.Get(cfd_->internal_stats(), env_get.k.user_key(),
                                env_get.value)) {
         RecordTick(cfd_->ioptions()->stats, Tickers::PROMOTION_CACHE_GET_HIT);
-        CompactionRouter* router = mutable_cf_options_.compaction_router;
-        if (router) {
-          router->Access(env_get.k.user_key(), env_get.value->size());
+        RALT* ralt = mutable_cf_options_.ralt;
+        if (ralt) {
+          ralt->Access(env_get.k.user_key(), env_get.value->size());
         }
         HandleFound(env_get.read_options, env_get.get_context, level_pc->first,
                     env_get.k.user_key(), env_get.value, env_get.status,
@@ -3433,8 +3432,7 @@ void PickSSTStaticEstimatedHotSize(
       });
 }
 
-void PickSSTAccurateHotSize(CompactionRouter* router,
-                            const InternalKeyComparator& icmp,
+void PickSSTAccurateHotSize(RALT* ralt, const InternalKeyComparator& icmp,
                             const std::vector<FileMetaData*>& files,
                             const std::vector<FileMetaData*>& next_level_files,
                             SystemClock* clock, int level,
@@ -3473,9 +3471,9 @@ void PickSSTAccurateHotSize(CompactionRouter* router,
     }
 
     uint64_t benefit = file->raw_key_size + file->raw_value_size;
-    if (router && router->Tier(level) != router->Tier(level + 1)) {
-      size_t hot_size = router->RangeHotSize(file->smallest.user_key(),
-                                             file->largest.user_key());
+    if (ralt && ralt->Tier(level) != ralt->Tier(level + 1)) {
+      size_t hot_size = ralt->RangeHotSize(file->smallest.user_key(),
+                                           file->largest.user_key());
       if (benefit < hot_size) {
         benefit = 0;
       } else {
@@ -3535,7 +3533,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     // don't need this
     return;
   }
-  auto router = options.compaction_router;
+  auto ralt = options.ralt;
   InternalStats* internal_stats = cfd->internal_stats();
   auto start_time = rusty::time::Instant::now();
   // No need to sort the highest level because it is never compacted.
@@ -3587,7 +3585,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
             ioptions.clock, level, num_non_empty_levels_, options.ttl, &temp);
         break;
       case kAccurateHotSize:
-        PickSSTAccurateHotSize(router, *internal_comparator_, files_[level],
+        PickSSTAccurateHotSize(ralt, *internal_comparator_, files_[level],
                                files_[level + 1], ioptions.clock, level,
                                num_non_empty_levels_, options.ttl, &temp);
         break;

@@ -21,8 +21,8 @@
 #include "db/version_set.h"
 #include "logging/logging.h"
 #include "monitoring/statistics.h"
-#include "rocksdb/compaction_router.h"
 #include "rocksdb/options.h"
+#include "rocksdb/ralt.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/types.h"
 #include "util/autovector.h"
@@ -158,16 +158,16 @@ void PromotionCache::checker() {
     std::unordered_set<std::reference_wrapper<const std::string>, RefHash,
                        RefEq>
         stably_hot;
-    CompactionRouter *router = sv->mutable_cf_options.compaction_router;
+    RALT *ralt = sv->mutable_cf_options.ralt;
     const Comparator *ucmp = cfd->ioptions()->user_comparator;
     auto stats = cfd->ioptions()->stats;
-    if (router) {
+    if (ralt) {
       TimerGuard check_stably_hot_start =
           hotrap_timers.timer(TimerType::kCheckStablyHot).start();
       for (const auto &item : cache.cache) {
         const std::string &user_key = item.first;
-        bool is_stably_hot = item.second.count > 1 || router->IsHot(user_key);
-        router->Access(item.first, item.second.value.size());
+        bool is_stably_hot = item.second.count > 1 || ralt->IsHot(user_key);
+        ralt->Access(item.first, item.second.value.size());
         if (is_stably_hot) {
           stably_hot.insert(user_key);
         } else {
@@ -349,9 +349,8 @@ void PromotionCache::SwitchMutablePromotionCache(
   signal_check_.notify_one();
 }
 std::vector<std::pair<std::string, std::string>>
-MutablePromotionCache::TakeRange(InternalStats *internal_stats,
-                                 CompactionRouter *router, Slice smallest,
-                                 Slice largest) {
+MutablePromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
+                                 Slice smallest, Slice largest) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
@@ -373,8 +372,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     uint64_t count = record.second.second;
     assert(cache.erase(user_key.ToString()));
     size_.fetch_sub(key.size() + value.size(), std::memory_order_relaxed);
-    bool is_hot = router->IsHot(user_key);
-    router->Access(user_key, value.size());
+    bool is_hot = ralt->IsHot(user_key);
+    ralt->Access(user_key, value.size());
     if (count > 1 || is_hot) {
       ret.emplace_back(std::move(*key.rep()), std::move(value));
     }
