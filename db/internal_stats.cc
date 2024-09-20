@@ -41,8 +41,10 @@ const char* timer_names[] = {
     "GetKeyValueFromLevelsBelow",
     "InvalidateOld",
     "TakeRange",
+    "SwitchMutablePromotionCache",
     "CheckStablyHot",
     "CheckNewerVersion",
+    "WriteBackToMutablePromotionCache",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 

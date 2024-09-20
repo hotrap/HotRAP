@@ -230,6 +230,9 @@ void PromotionCache::checker() {
       // There are too few data to flush. There will be too much compaction I/O
       // in L1 if we force to flush them to L0. Therefore, we just insert them
       // back to the mutable promotion cache.
+      TimerGuard start =
+          hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
+              .start();
       auto mut = elem.mut->Write();
       for (const auto &item : cache.cache) {
         mut->Insert(item.first, item.second.sequence, item.second.value);
@@ -308,6 +311,10 @@ void PromotionCache::SwitchMutablePromotionCache(
   std::unordered_map<std::string, PCData> cache;
   size_t mut_size;
   {
+    auto start = cfd.internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kSwitchMutablePromotionCache)
+                     .start();
     auto mut = mut_.Write();
     mut_size = mut->size_.load(std::memory_order_relaxed);
     if (mut_size < write_buffer_size) {
