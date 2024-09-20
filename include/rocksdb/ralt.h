@@ -129,7 +129,7 @@ class RALT : public Customizable {
   virtual bool IsHot(Slice key) = 0;
 
   // For statistics
-  virtual void HitLevel(int level, rocksdb::Slice key){};
+  virtual void HitLevel(int, rocksdb::Slice){};
 };
 
 }  // namespace ROCKSDB_NAMESPACE
