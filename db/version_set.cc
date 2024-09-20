@@ -2038,12 +2038,12 @@ static void TryPromote(
 }
 void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
-                          Slice user_key, PinnableSlice* value, Status& status,
-                          bool is_blob_index, bool do_merge, bool is_checker) {
+                          PinnableSlice* value, Status& status,
+                          bool is_checker) {
   RALT* ralt = mutable_cf_options_.ralt;
   if (!ralt) return;
   if (!is_checker) {
-    ralt->HitLevel(hit_level, user_key);
+    ralt->HitLevel(hit_level, get_context.user_key());
   }
 
   if (hit_level == 0) {
@@ -2056,12 +2056,12 @@ void Version::HandleFound(const ReadOptions& read_options,
 
   PERF_COUNTER_BY_LEVEL_ADD(user_key_return_count, 1, hit_level);
 
-  if (is_blob_index) {
-    if (do_merge && value) {
+  if (get_context.is_blob_index()) {
+    if (get_context.do_merge() && value) {
       constexpr FilePrefetchBuffer* prefetch_buffer = nullptr;
       constexpr uint64_t* bytes_read = nullptr;
 
-      status = GetBlob(read_options, user_key, *value, prefetch_buffer, value,
+      status = GetBlob(read_options, get_context.user_key(), *value, prefetch_buffer, value,
                        bytes_read);
       if (!status.ok()) {
         if (status.IsIncomplete()) {
@@ -2072,15 +2072,13 @@ void Version::HandleFound(const ReadOptions& read_options,
     }
   }
 }
-void Version::HandleNotFound(GetContext& get_context, Slice user_key,
-                             PinnableSlice* value, Status& status,
-                             MergeContext& merge_context, bool* key_exists,
-                             bool do_merge) {
+void Version::HandleNotFound(GetContext& get_context, PinnableSlice* value,
+                             Status& status, bool* key_exists) {
   if (db_statistics_ != nullptr) {
     get_context.ReportCounters();
   }
   if (GetContext::kMerge == get_context.State()) {
-    if (!do_merge) {
+    if (!get_context.do_merge()) {
       status = Status::OK();
       return;
     }
@@ -2092,10 +2090,10 @@ void Version::HandleNotFound(GetContext& get_context, Slice user_key,
     // merge_operands are in saver and we hit the beginning of the key history
     // do a final merge of nullptr and operands;
     std::string* str_value = value != nullptr ? value->GetSelf() : nullptr;
-    status = MergeHelper::TimedFullMerge(merge_operator_, user_key, nullptr,
-                                         merge_context.GetOperands(), str_value,
-                                         info_log_, db_statistics_, clock_,
-                                         nullptr /* result_operand */, true);
+    status = MergeHelper::TimedFullMerge(
+        merge_operator_, get_context.user_key(), nullptr,
+        get_context.merge_context().GetOperands(), str_value, info_log_,
+        db_statistics_, clock_, nullptr /* result_operand */, true);
     if (LIKELY(value != nullptr)) {
       value->PinSelf();
     }
@@ -2108,7 +2106,8 @@ void Version::HandleNotFound(GetContext& get_context, Slice user_key,
 }
 
 // Return stop searching or not
-bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
+bool Version::GetInFile(EnvGet& env_get, GetContext& get_context,
+                        FdWithKeyRange& f, int hit_level,
                         bool is_hit_file_last_in_level) {
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
@@ -2116,14 +2115,14 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   if (ralt && ralt->Tier(hit_level) > 0) {
     env_get.cd_files.push_back(std::ref(*f.file_metadata));
   }
-  if (env_get.max_covering_tombstone_seq > 0) {
+  if (*get_context.max_covering_tombstone_seq() > 0) {
     // The remaining files we look at will only contain covered keys, so we
     // stop here.
-    HandleNotFound(env_get.get_context, user_key, env_get.value, env_get.status,
-                   env_get.merge_context, env_get.key_exists, env_get.do_merge);
+    HandleNotFound(get_context, env_get.value, env_get.status,
+                   env_get.key_exists);
     return true;
   }
-  if (env_get.get_context.sample()) {
+  if (get_context.sample()) {
     sample_file_read_inc(f.file_metadata);
   }
 
@@ -2132,10 +2131,10 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   StopWatchNano timer(clock_, timer_enabled /* auto_start */);
   uint64_t prev_rand_read_bytes = IOSTATS(rand_read_bytes);
   uint64_t prev_num_cache_data_miss =
-      env_get.get_context.get_context_stats_.num_cache_data_miss;
+      get_context.get_context_stats_.num_cache_data_miss;
   env_get.status = table_cache_->Get(
       env_get.read_options, *internal_comparator(), *f.file_metadata, ikey,
-      &env_get.get_context, mutable_cf_options_.prefix_extractor.get(),
+      &get_context, mutable_cf_options_.prefix_extractor.get(),
       cfd_->internal_stats()->GetFileReadHist(hit_level),
       IsFilterSkipped(static_cast<int>(hit_level), is_hit_file_last_in_level),
       hit_level, max_file_size_for_l0_meta_pin_);
@@ -2144,7 +2143,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
     cfd_->internal_stats()->IncRandReadBytes(hit_level, rand_read_bytes);
   }
   uint64_t num_cache_data_miss =
-      env_get.get_context.get_context_stats_.num_cache_data_miss;
+      get_context.get_context_stats_.num_cache_data_miss;
   // TODO: examine the behavior for corrupted key
   if (timer_enabled) {
     PERF_COUNTER_BY_LEVEL_ADD(get_from_table_nanos, timer.ElapsedNanos(),
@@ -2152,18 +2151,17 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   }
   if (!env_get.status.ok()) {
     if (db_statistics_ != nullptr) {
-      env_get.get_context.ReportCounters();
+      get_context.ReportCounters();
     }
     return true;
   }
 
   // report the counters before returning
-  if (env_get.get_context.State() != GetContext::kNotFound &&
-      env_get.get_context.State() != GetContext::kMerge &&
-      db_statistics_ != nullptr) {
-    env_get.get_context.ReportCounters();
+  if (get_context.State() != GetContext::kNotFound &&
+      get_context.State() != GetContext::kMerge && db_statistics_ != nullptr) {
+    get_context.ReportCounters();
   }
-  switch (env_get.get_context.State()) {
+  switch (get_context.State()) {
     case GetContext::kNotFound:
       // Keep searching in other files
       break;
@@ -2174,13 +2172,11 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
     case GetContext::kFound:
       if (num_cache_data_miss > prev_num_cache_data_miss) {
         TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
-                   hit_level, env_get.k.user_key(), env_get.get_context.seq(),
+                   hit_level, env_get.k.user_key(), get_context.seq(),
                    env_get.value);
       }
-      HandleFound(env_get.read_options, env_get.get_context, hit_level,
-                  user_key, env_get.value, env_get.status,
-                  env_get.is_blob_index, env_get.do_merge,
-                  env_get.db == nullptr);
+      HandleFound(env_get.read_options, get_context, hit_level, env_get.value,
+                  env_get.status, env_get.db == nullptr);
       return true;
     case GetContext::kDeleted:
       // Use empty error message for speed
@@ -2199,7 +2195,7 @@ bool Version::GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
   return false;
 }
 
-bool Version::Get(EnvGet& env_get, int last_level) {
+bool Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
   FilePicker fp(user_key, ikey, &storage_info_.level_files_brief_,
@@ -2217,8 +2213,9 @@ bool Version::Get(EnvGet& env_get, int last_level) {
   }
   for (auto level_pc : level_pcs) {
     while (f != nullptr && fp.GetHitFileLevel() <= level_pc->first) {
-      bool should_stop = GetInFile(env_get, *f, fp.GetHitFileLevel(),
-                                   fp.IsHitFileLastInLevel());
+      bool should_stop =
+          GetInFile(env_get, get_context, *f, fp.GetHitFileLevel(),
+                    fp.IsHitFileLastInLevel());
       if (should_stop) return true;
       f = fp.GetNextFile();
     }
@@ -2231,21 +2228,20 @@ bool Version::Get(EnvGet& env_get, int last_level) {
         if (ralt) {
           ralt->Access(env_get.k.user_key(), env_get.value->size());
         }
-        HandleFound(env_get.read_options, env_get.get_context, level_pc->first,
-                    env_get.k.user_key(), env_get.value, env_get.status,
-                    env_get.is_blob_index, env_get.do_merge, false);
+        HandleFound(env_get.read_options, get_context, level_pc->first,
+                    env_get.value, env_get.status, false);
         return true;
       }
     }
   }
   while (f != nullptr) {
-    bool should_stop =
-        GetInFile(env_get, *f, fp.GetHitFileLevel(), fp.IsHitFileLastInLevel());
+    bool should_stop = GetInFile(env_get, get_context, *f, fp.GetHitFileLevel(),
+                                 fp.IsHitFileLastInLevel());
     if (should_stop) return true;
     f = fp.GetNextFile();
   }
-  HandleNotFound(env_get.get_context, user_key, env_get.value, env_get.status,
-                 env_get.merge_context, env_get.key_exists, env_get.do_merge);
+  HandleNotFound(get_context, env_get.value, env_get.status,
+                 env_get.key_exists);
   return false;
 }
 
@@ -2297,16 +2293,11 @@ bool Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .read_options = read_options,
                  .k = k,
                  .value = value,
-                 .get_context = get_context,
                  .status = *status,
-                 .merge_context = *merge_context,
-                 .max_covering_tombstone_seq = *max_covering_tombstone_seq,
-                 .key_exists = key_exists,
-                 .is_blob_index = is_blob_index,
-                 .do_merge = do_merge};
-  bool ret = Get(env_get, last_level);
+                 .key_exists = key_exists};
+  bool ret = Get(env_get, get_context, last_level);
   if (seq) {
-    *seq = env_get.get_context.seq();
+    *seq = get_context.seq();
   }
   return ret;
 }

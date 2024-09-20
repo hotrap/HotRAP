@@ -839,30 +839,22 @@ class Version {
   }
 
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
-                   int hit_level, Slice user_key, PinnableSlice* value,
-                   Status& status, bool is_blob_index, bool do_merge,
+                   int hit_level, PinnableSlice* value, Status& status,
                    bool is_checker);
-  void HandleNotFound(GetContext& get_context, Slice user_key,
-                      PinnableSlice* value, Status& status,
-                      MergeContext& merge_context, bool* key_exists,
-                      bool do_merge);
+  void HandleNotFound(GetContext& get_context, PinnableSlice* value,
+                      Status& status, bool* key_exists);
   struct EnvGet {
     DBImpl* db;
     const ReadOptions& read_options;
     const LookupKey& k;
     PinnableSlice* value;
-    GetContext& get_context;
     Status& status;
-    MergeContext& merge_context;
-    SequenceNumber& max_covering_tombstone_seq;
     bool* key_exists;
-    bool is_blob_index;
-    bool do_merge;
     std::vector<std::reference_wrapper<FileMetaData>> cd_files;
   };
-  bool GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
-                 bool is_hit_file_last_in_level);
-  bool Get(EnvGet& env_get, int last_level);
+  bool GetInFile(EnvGet& env_get, GetContext& get_context, FdWithKeyRange& f,
+                 int hit_level, bool is_hit_file_last_in_level);
+  bool Get(EnvGet& env_get, GetContext& get_context, int last_level);
   // Returns true if the filter blocks in the specified level will not be
   // checked during read operations. In certain cases (trivial move or preload),
   // the filter block may already be cached, but we still do not access it such
