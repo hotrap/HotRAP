@@ -2014,12 +2014,20 @@ static void TryPromote(
   size_t mut_size;
   {
     auto res = cache->mut().TryRead();
-    if (!res.has_value()) return;
+    if (!res.has_value()) {
+      RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_LOCK);
+      return;
+    }
     const auto& mut = res.value();
     for (auto f : cd_files) {
-      if (f.get().being_or_has_been_compacted) return;
+      if (f.get().being_or_has_been_compacted) {
+        RecordTick(cfd.ioptions()->stats,
+                   PROMOTION_CACHE_INSERT_FAIL_COMPACTED);
+        return;
+      }
     }
     mut_size = mut->Insert(user_key, seq, *value);
+    RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
   }
   size_t tot = mut_size + cache->imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
@@ -2219,7 +2227,7 @@ bool Version::Get(EnvGet& env_get, int last_level) {
       assert((int)level_pc->first < last_level);
       if (level_pc->second.Get(cfd_->internal_stats(), env_get.k.user_key(),
                                env_get.value)) {
-        RecordTick(cfd_->ioptions()->stats, Tickers::GET_HIT_PROMOTION_CACHE);
+        RecordTick(cfd_->ioptions()->stats, Tickers::PROMOTION_CACHE_GET_HIT);
         CompactionRouter* router = mutable_cf_options_.compaction_router;
         if (router) {
           router->Access(env_get.k.user_key(), env_get.value->size());
