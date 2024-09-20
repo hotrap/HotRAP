@@ -198,7 +198,7 @@ class VersionStorageInfo {
   // record results in files_by_compaction_pri_. The largest files are listed
   // first.
   void UpdateFilesByCompactionPri(ColumnFamilyData* cfd,
-                                  const MutableCFOptions& mutable_cf_options);
+                                  const Version& version);
 
   void GenerateLevel0NonOverlapping();
   bool level0_non_overlapping() const {
@@ -820,7 +820,10 @@ class Version {
   // Prerequisite for this API is max_open_files = -1
   void GetCreationTimeOfOldestFile(uint64_t* creation_time);
 
-  const MutableCFOptions& GetMutableCFOptions() { return mutable_cf_options_; }
+  const MutableCFOptions& GetMutableCFOptions() const {
+    return mutable_cf_options_;
+  }
+  uint32_t path_id(int level) const { return level_path_id_[level]; }
 
  private:
   Env* env_;
@@ -838,6 +841,10 @@ class Version {
     return storage_info_.user_comparator_;
   }
 
+  void TryPromote(DBImpl* db, ColumnFamilyData& cfd,
+                  std::vector<std::reference_wrapper<FileMetaData>> cd_files,
+                  int hit_level, Slice user_key, SequenceNumber seq,
+                  PinnableSlice* value);
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
                    int hit_level, PinnableSlice* value, Status& status,
                    bool is_checker);
@@ -889,6 +896,7 @@ class Version {
   int refs_;                    // Number of live refs to this version
   const FileOptions file_options_;
   const MutableCFOptions mutable_cf_options_;
+  std::vector<uint32_t> level_path_id_;
   // Cached value to avoid recomputing it on every read.
   const size_t max_file_size_for_l0_meta_pin_;
 

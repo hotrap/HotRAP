@@ -1521,12 +1521,13 @@ class RouterIterator {
       iter_ = std::unique_ptr<IteratorWithoutRouter>(
           new IteratorWithoutRouter(c, c_iter));
     } else {
-      size_t start_tier = ralt->Tier(start_level);
-      size_t latter_tier = ralt->Tier(latter_level);
+      const Version& version = *c.input_version();
+      uint32_t start_tier = version.path_id(start_level);
+      uint32_t latter_tier = version.path_id(latter_level);
       if (start_tier != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorFD2SD>(
             new RouterIteratorFD2SD(*ralt, c, c_iter, start, end));
-      } else if (ralt->Tier(latter_level + 1) != latter_tier) {
+      } else if (version.path_id(latter_level + 1) != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorIntraTier>(
             new RouterIteratorIntraTier(*ralt, c, c_iter, start, end,
                                         Tickers::PROMOTED_2FDLAST_BYTES));

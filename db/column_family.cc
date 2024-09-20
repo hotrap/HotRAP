@@ -840,14 +840,8 @@ int GetL0ThresholdSpeedupCompaction(int level0_file_num_compaction_trigger,
 }
 }  // namespace
 
-/*
- * Find the optimal path to place a file
- * Given a level, finds the path where levels up to it will fit in levels
- * up to and including this path
- */
-static uint32_t GetPathId(const ImmutableCFOptions& ioptions,
-                          const MutableCFOptions& mutable_cf_options,
-                          int level) {
+uint32_t GetPathId(const ImmutableCFOptions& ioptions,
+                   const MutableCFOptions& mutable_cf_options, int level) {
   uint32_t p = 0;
   assert(!ioptions.cf_paths.empty());
 

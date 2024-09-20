@@ -1787,7 +1787,12 @@ Version::Version(ColumnFamilyData* column_family_data, VersionSet* vset,
       max_file_size_for_l0_meta_pin_(
           MaxFileSizeForL0MetaPin(mutable_cf_options_)),
       version_number_(version_number),
-      io_tracer_(io_tracer) {}
+      io_tracer_(io_tracer) {
+  for (int level = 0; level < storage_info()->num_levels(); ++level) {
+    level_path_id_.push_back(
+        GetPathId(*cfd_->ioptions(), mutable_cf_options, level));
+  }
+}
 
 Status Version::GetBlob(const ReadOptions& read_options, const Slice& user_key,
                         const Slice& blob_index_slice,
@@ -1961,24 +1966,23 @@ void Version::MultiGetBlob(
   }
 }
 
-static void TryPromote(
+void Version::TryPromote(
     DBImpl* db, ColumnFamilyData& cfd,
-    const MutableCFOptions& mutable_cf_options,
     std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
     Slice user_key, SequenceNumber seq, PinnableSlice* value) {
   if (db == nullptr) return;
-  RALT* ralt = mutable_cf_options.ralt;
+  RALT* ralt = mutable_cf_options_.ralt;
   if (!ralt || !value) return;
   // I don't think we can get the block size in this context. So I hard code
   // the promotion threshold. Maybe we should make it an option of RALT.
   if (user_key.size() + value->size() >= 16 * 1024) return;
-  if (ralt->Tier(hit_level) == 0) {
+  if (path_id(hit_level) == 0) {
     ralt->Access(user_key, value->size());
     return;
   }
   assert(hit_level > 0);
   size_t target_level = hit_level - 1;
-  while (ralt->Tier(target_level) == 1) {
+  while (path_id(target_level) == 1) {
     target_level -= 1;
   }
   const PromotionCache* cache;
@@ -2030,10 +2034,10 @@ static void TryPromote(
   }
   size_t tot = mut_size + cache->imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
-  if (mut_size < mutable_cf_options.write_buffer_size) return;
+  if (mut_size < mutable_cf_options_.write_buffer_size) return;
 
   cache->SwitchMutablePromotionCache(*db, cfd,
-                                     mutable_cf_options.write_buffer_size);
+                                     mutable_cf_options_.write_buffer_size);
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,
@@ -2111,8 +2115,7 @@ bool Version::GetInFile(EnvGet& env_get, GetContext& get_context,
                         bool is_hit_file_last_in_level) {
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
-  RALT* ralt = mutable_cf_options_.ralt;
-  if (ralt && ralt->Tier(hit_level) > 0) {
+  if (path_id(hit_level) > 0) {
     env_get.cd_files.push_back(std::ref(*f.file_metadata));
   }
   if (*get_context.max_covering_tombstone_seq() > 0) {
@@ -2171,9 +2174,8 @@ bool Version::GetInFile(EnvGet& env_get, GetContext& get_context,
       break;
     case GetContext::kFound:
       if (num_cache_data_miss > prev_num_cache_data_miss) {
-        TryPromote(env_get.db, *cfd_, mutable_cf_options_, env_get.cd_files,
-                   hit_level, env_get.k.user_key(), get_context.seq(),
-                   env_get.value);
+        TryPromote(env_get.db, *cfd_, env_get.cd_files, hit_level,
+                   env_get.k.user_key(), get_context.seq(), env_get.value);
       }
       HandleFound(env_get.read_options, get_context, hit_level, env_get.value,
                   env_get.status, env_get.db == nullptr);
@@ -2579,7 +2581,7 @@ void Version::PrepareApply(const MutableCFOptions& mutable_cf_options,
   UpdateAccumulatedStats(update_stats);
   storage_info_.UpdateNumNonEmptyLevels();
   storage_info_.CalculateBaseBytes(*cfd_->ioptions(), mutable_cf_options);
-  storage_info_.UpdateFilesByCompactionPri(cfd_, mutable_cf_options);
+  storage_info_.UpdateFilesByCompactionPri(cfd_, *this);
   storage_info_.GenerateFileIndexer();
   storage_info_.GenerateLevelFilesBrief();
   storage_info_.GenerateLevel0NonOverlapping();
@@ -3423,12 +3425,14 @@ void PickSSTStaticEstimatedHotSize(
       });
 }
 
-void PickSSTAccurateHotSize(RALT* ralt, const InternalKeyComparator& icmp,
+void PickSSTAccurateHotSize(const Version& version,
+                            const InternalKeyComparator& icmp,
                             const std::vector<FileMetaData*>& files,
                             const std::vector<FileMetaData*>& next_level_files,
                             SystemClock* clock, int level,
                             int num_non_empty_levels, uint64_t ttl,
                             std::vector<Fsize>* temp) {
+  RALT* ralt = version.GetMutableCFOptions().ralt;
   std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> benefit_cost;
   auto next_level_it = next_level_files.begin();
 
@@ -3462,7 +3466,7 @@ void PickSSTAccurateHotSize(RALT* ralt, const InternalKeyComparator& icmp,
     }
 
     uint64_t benefit = file->raw_key_size + file->raw_value_size;
-    if (ralt && ralt->Tier(level) != ralt->Tier(level + 1)) {
+    if (ralt && version.path_id(level) != version.path_id(level + 1)) {
       size_t hot_size = ralt->RangeHotSize(file->smallest.user_key(),
                                            file->largest.user_key());
       if (benefit < hot_size) {
@@ -3515,8 +3519,8 @@ void PickSSTAccurateHotSize(RALT* ralt, const InternalKeyComparator& icmp,
 }
 }  // namespace
 
-void VersionStorageInfo::UpdateFilesByCompactionPri(
-    ColumnFamilyData* cfd, const MutableCFOptions& options) {
+void VersionStorageInfo::UpdateFilesByCompactionPri(ColumnFamilyData* cfd,
+                                                    const Version& version) {
   const ImmutableOptions& ioptions = *cfd->ioptions();
   if (compaction_style_ == kCompactionStyleNone ||
       compaction_style_ == kCompactionStyleFIFO ||
@@ -3524,7 +3528,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
     // don't need this
     return;
   }
-  auto ralt = options.ralt;
+  const MutableCFOptions& options = version.GetMutableCFOptions();
   InternalStats* internal_stats = cfd->internal_stats();
   auto start_time = rusty::time::Instant::now();
   // No need to sort the highest level because it is never compacted.
@@ -3576,7 +3580,7 @@ void VersionStorageInfo::UpdateFilesByCompactionPri(
             ioptions.clock, level, num_non_empty_levels_, options.ttl, &temp);
         break;
       case kAccurateHotSize:
-        PickSSTAccurateHotSize(ralt, *internal_comparator_, files_[level],
+        PickSSTAccurateHotSize(version, *internal_comparator_, files_[level],
                                files_[level + 1], ioptions.clock, level,
                                num_non_empty_levels_, options.ttl, &temp);
         break;
