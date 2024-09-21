@@ -233,11 +233,13 @@ void PromotionCache::checker() {
       TimerGuard start =
           hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
               .start();
-      auto mut = elem.mut->Write();
+      auto mut = elem.pc->mut().Write();
       for (const auto &item : cache.cache) {
-        mut->Insert(item.first, item.second.sequence, item.second.value);
+        mut->Insert(std::string(item.first), item.second.sequence,
+                    std::string(item.second.value));
       }
       db->mutex()->Unlock();
+      elem.pc->ConsumeBuffer(mut);
     } else {
       RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
 
@@ -289,21 +291,46 @@ void PromotionCache::checker() {
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
-size_t MutablePromotionCache::Insert(Slice user_key, SequenceNumber sequence,
-                                     Slice value) const {
+size_t MutablePromotionCache::Insert(std::string &&user_key,
+                                     SequenceNumber sequence,
+                                     std::string &&value) const {
   size_t size;
 
   PCHashTable::accessor it;
-  if (cache.insert(it, user_key.ToString())) {
+  size_t kvsize = user_key.size() + value.size();
+  if (cache.insert(it, std::move(user_key))) {
     it->second.sequence = sequence;
-    it->second.value = value.ToString();
+    it->second.value = std::move(value);
     it->second.count = 1;
-    size_t add = user_key.size() + value.size();
-    size = size_.fetch_add(add, std::memory_order_relaxed) + add;
+    size = size_.fetch_add(kvsize, std::memory_order_relaxed) + kvsize;
   } else {
     size = size_.load(std::memory_order_relaxed);
   }
   return size;
+}
+
+// Return the mutable promotion size, or 0 if inserted to buffer.
+size_t PromotionCache::InsertToMut(std::string &&user_key,
+                                   SequenceNumber sequence,
+                                   std::string &&value) const {
+  auto mut = mut_.TryRead();
+  if (!mut.has_value()) {
+    mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
+                                     std::move(value));
+    return 0;
+  }
+  return mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+}
+
+void PromotionCache::ConsumeBuffer(
+    WriteGuard<MutablePromotionCache> &mut) const {
+  auto mut_buffer = mut_buffer_.Lock();
+  if (mut_buffer->empty()) return;
+  std::vector<MutBufItem> buffer;
+  std::swap(buffer, *mut_buffer);
+  for (MutBufItem &item : buffer) {
+    mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
+  }
 }
 
 void PromotionCache::SwitchMutablePromotionCache(
@@ -326,6 +353,7 @@ void PromotionCache::SwitchMutablePromotionCache(
     }
     mut->cache.clear();
     mut->size_.store(0, std::memory_order_relaxed);
+    ConsumeBuffer(mut);
   }
   db.mutex()->Lock();
   std::list<rocksdb::ImmPromotionCache>::iterator iter;
@@ -347,7 +375,7 @@ void PromotionCache::SwitchMutablePromotionCache(
         .db = &db,
         .sv = sv,
         .iter = iter,
-        .mut = &mut_,
+        .pc = this,
     });
     queue_len = checker_queue_.size();
   }

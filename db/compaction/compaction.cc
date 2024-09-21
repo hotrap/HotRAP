@@ -123,14 +123,15 @@ void Compaction::SetInputVersion(Version* _input_version) {
       mark_fn();
     } else {
       assert(it->first == (size_t)start_level_);
-      {
-        auto mut = it->second.mut().Write();
-        mark_fn();
-        cached_records_to_promote_ =
-            mut->TakeRange(cfd_->internal_stats(), ralt, smallest_user_key_,
-                           largest_user_key_);
-      }
       target_level_to_promote_ = start_level_;
+      const auto& cache = it->second;
+      cache.being_or_has_been_compacted_lock().WriteLock();
+      mark_fn();
+      cache.being_or_has_been_compacted_lock().WriteUnlock();
+      auto mut = it->second.mut().Write();
+      cache.ConsumeBuffer(mut);
+      cached_records_to_promote_ = mut->TakeRange(
+          cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
     }
   }
   auto caches = cfd_->promotion_caches().Read();
@@ -139,9 +140,11 @@ void Compaction::SetInputVersion(Version* _input_version) {
     assert(it->first == (size_t)output_level_);
     // Future work: Handle the other case which is possible if ralt changes.
     assert(cached_records_to_promote_.empty());
-    cached_records_to_promote_ = it->second.mut().Write()->TakeRange(
-        cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
     target_level_to_promote_ = output_level_;
+    auto mut = it->second.mut().Write();
+    it->second.ConsumeBuffer(mut);
+    cached_records_to_promote_ = mut->TakeRange(
+        cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
   }
 }
 

@@ -2014,24 +2014,21 @@ void Version::TryPromote(
     assert(it->first == target_level);
     cache = &it->second;
   }
-  size_t mut_size;
-  {
-    auto res = cache->mut().TryRead();
-    if (!res.has_value()) {
-      RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_LOCK);
+  if (!cache->being_or_has_been_compacted_lock().TryReadLock()) {
+    RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_LOCK);
+    return;
+  }
+  for (auto f : cd_files) {
+    if (f.get().being_or_has_been_compacted) {
+      cache->being_or_has_been_compacted_lock().ReadUnlock();
+      RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_COMPACTED);
       return;
     }
-    const auto& mut = res.value();
-    for (auto f : cd_files) {
-      if (f.get().being_or_has_been_compacted) {
-        RecordTick(cfd.ioptions()->stats,
-                   PROMOTION_CACHE_INSERT_FAIL_COMPACTED);
-        return;
-      }
-    }
-    mut_size = mut->Insert(user_key, seq, *value);
-    RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
   }
+  cache->being_or_has_been_compacted_lock().ReadUnlock();
+  size_t mut_size =
+      cache->InsertToMut(user_key.ToString(), seq, value->ToString());
+  RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
   size_t tot = mut_size + cache->imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
   if (mut_size < mutable_cf_options_.write_buffer_size) return;
