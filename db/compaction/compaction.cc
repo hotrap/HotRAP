@@ -100,9 +100,8 @@ void Compaction::SetInputVersion(Version* _input_version) {
   input_version_->Ref();
   edit_.SetColumnFamily(cfd_->GetID());
 
-  CompactionRouter* router =
-      cfd_->GetCurrentMutableCFOptions()->compaction_router;
-  if (router == nullptr) return;
+  RALT* ralt = cfd_->GetCurrentMutableCFOptions()->ralt;
+  if (ralt == nullptr) return;
   target_level_to_promote_ = -1;
   if (start_level_ != output_level_) {
     // Future work: Handle other cases
@@ -124,26 +123,28 @@ void Compaction::SetInputVersion(Version* _input_version) {
       mark_fn();
     } else {
       assert(it->first == (size_t)start_level_);
-      {
-        auto mut = it->second.mut().Write();
-        mark_fn();
-        cached_records_to_promote_ =
-            mut->TakeRange(cfd_->internal_stats(), router, smallest_user_key_,
-                           largest_user_key_);
-      }
       target_level_to_promote_ = start_level_;
+      const auto& cache = it->second;
+      cache.being_or_has_been_compacted_lock().WriteLock();
+      mark_fn();
+      cache.being_or_has_been_compacted_lock().WriteUnlock();
+      auto mut = it->second.mut().Write();
+      cache.ConsumeBuffer(mut);
+      cached_records_to_promote_ = mut->TakeRange(
+          cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
     }
   }
   auto caches = cfd_->promotion_caches().Read();
   auto it = caches->find(output_level_);
   if (it != caches->end()) {
     assert(it->first == (size_t)output_level_);
-    // Future work: Handle the other case which is possible if the router
-    // changes.
+    // Future work: Handle the other case which is possible if ralt changes.
     assert(cached_records_to_promote_.empty());
-    cached_records_to_promote_ = it->second.mut().Write()->TakeRange(
-        cfd_->internal_stats(), router, smallest_user_key_, largest_user_key_);
     target_level_to_promote_ = output_level_;
+    auto mut = it->second.mut().Write();
+    it->second.ConsumeBuffer(mut);
+    cached_records_to_promote_ = mut->TakeRange(
+        cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
   }
 }
 

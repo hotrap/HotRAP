@@ -21,8 +21,8 @@
 #include "db/version_set.h"
 #include "logging/logging.h"
 #include "monitoring/statistics.h"
-#include "rocksdb/compaction_router.h"
 #include "rocksdb/options.h"
+#include "rocksdb/ralt.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/types.h"
 #include "util/autovector.h"
@@ -144,8 +144,8 @@ void PromotionCache::checker() {
 }
 void PromotionCache::check(CheckerQueueElem &elem) {
   SuperVersion *sv = elem.sv;
-  CompactionRouter *router = sv->mutable_cf_options.compaction_router;
-  if (router == nullptr) return;
+  RALT *ralt = sv->mutable_cf_options.ralt;
+  if (ralt == nullptr) return;
 
   DBImpl *db = elem.db;
   assert(db == &db_);
@@ -174,7 +174,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
         });
   }
   auto key_it = candidates.begin();
-  auto check_key_until = [&to_promote, &key_it, &candidates, ucmp, router,
+  auto check_key_until = [&to_promote, &key_it, &candidates, ucmp, ralt,
                           &stats](Slice range_first) {
     while (key_it != candidates.end()) {
       const std::string &user_key = (*key_it)->first;
@@ -186,8 +186,8 @@ void PromotionCache::check(CheckerQueueElem &elem) {
       const auto &seq_value = data.seq_value;
       assert(seq_value.size() == 1);
       const std::string &value = seq_value[0].second;
-      bool should_promote = data.repeated_accessed || router->IsHot(user_key);
-      router->Access(user_key, value.size());
+      bool should_promote = data.repeated_accessed || ralt->IsHot(user_key);
+      ralt->Access(user_key, value.size());
       if (should_promote) {
         to_promote.push_back(*key_it);
       } else {
@@ -205,9 +205,8 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     uint64_t num_bytes = range_it->second.num_bytes;
     check_key_until(range_first);
     assert(range_it->second.count > 0);
-    if (range_it->second.count == 1 &&
-        !router->IsHot(range_first, range_last)) {
-      router->AccessRange(range_first, range_last, num_bytes, 0);
+    if (range_it->second.count == 1 && !ralt->IsHot(range_first, range_last)) {
+      ralt->AccessRange(range_first, range_last, num_bytes, 0);
       RecordTick(stats, Tickers::ACCESSED_COLD_BYTES, num_bytes);
       while (key_it != candidates.end() &&
              ucmp->Compare((*key_it)->first, range_last) <= 0) {
@@ -217,8 +216,8 @@ void PromotionCache::check(CheckerQueueElem &elem) {
       range_it = cache.ranges.erase(range_it);
     } else {
       // FIXME(hotrap): AccessRange after flush
-      router->AccessRange(range_first, range_last, num_bytes,
-                          range_it->second.sequence);
+      ralt->AccessRange(range_first, range_last, num_bytes,
+                        range_it->second.sequence);
       while (key_it != candidates.end() &&
              ucmp->Compare((*key_it)->first, range_last) <= 0) {
         assert(!(*key_it)->second.only_by_point_query);
@@ -304,14 +303,18 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     // There are too few data to flush. There will be too much compaction I/O
     // in L1 if we force to flush them to L0. Therefore, we just insert them
     // back to the mutable promotion cache.
+    TimerGuard start =
+        hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
+            .start();
     std::vector<std::pair<std::string, ImmPCData>> keys;
     for (auto it : to_promote) {
       keys.push_back(std::move(*it));
     }
 
-    auto mut = elem.mut->Write();
+    auto mut = elem.pc->mut().Write();
     mut->InsertRanges(std::move(cache.ranges), std::move(keys));
     db->mutex()->Unlock();
+    elem.pc->ConsumeBuffer(mut);
   } else {
     RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
 
@@ -346,20 +349,21 @@ void PromotionCache::check(CheckerQueueElem &elem) {
   }
 }
 
-size_t MutablePromotionCache::Insert(Slice user_key, SequenceNumber sequence,
-                                     Slice value) {
-  auto it = keys_.lower_bound(user_key.ToString());
+size_t MutablePromotionCache::Insert(std::string &&user_key,
+                                     SequenceNumber sequence,
+                                     std::string &&value) {
+  auto it = keys_.lower_bound(user_key);
   if (it == keys_.end() || ucmp_->Compare(it->first, user_key) != 0) {
     // It's definitely not contained by a range.
-    auto range_it = ranges_.lower_bound(user_key.ToString());
+    auto range_it = ranges_.lower_bound(user_key);
     assert(range_it == ranges_.end() ||
            ucmp_->Compare(range_it->second.first_user_key, user_key) > 0);
 
     size_ += user_key.size() + value.size();
     std::deque<std::pair<SequenceNumber, std::string>> seq_value{
-        {sequence, value.ToString()}};
+        {sequence, std::move(value)}};
     keys_.emplace_hint(it, std::piecewise_construct,
-                       std::forward_as_tuple(user_key.ToString()),
+                       std::forward_as_tuple(std::move(user_key)),
                        std::forward_as_tuple(std::move(seq_value),
                                              /*repeated_accessed=*/false,
                                              /*only_by_point_query=*/true));
@@ -596,6 +600,10 @@ void PromotionCache::SwitchMutablePromotionCache(
   std::map<std::string, RangeInfo, UserKeyCompare> ranges(
       cfd.ioptions()->user_comparator);
   {
+    auto start = cfd.internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kSwitchMutablePromotionCache)
+                     .start();
     auto mut = mut_.Write();
     mut_size = mut->size_;
     if (mut_size < write_buffer_size) {
@@ -640,7 +648,7 @@ void PromotionCache::SwitchMutablePromotionCache(
         .db = &db,
         .sv = sv,
         .iter = iter,
-        .mut = &mut_,
+        .pc = this,
     });
     queue_len = checker_queue_.size();
   }
@@ -649,9 +657,8 @@ void PromotionCache::SwitchMutablePromotionCache(
   signal_check_.notify_one();
 }
 std::vector<std::pair<std::string, std::string>>
-MutablePromotionCache::TakeRange(InternalStats *internal_stats,
-                                 CompactionRouter *router, Slice smallest,
-                                 Slice largest) {
+MutablePromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
+                                 Slice smallest, Slice largest) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<std::string, std::string>> ret;
@@ -668,8 +675,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
       key_it = keys_.erase(key_it);
     }
   };
-  auto erase_point_query_keys = [this, &ret, &key_it, router](Slice end,
-                                                              bool included) {
+  auto erase_point_query_keys = [this, &ret, &key_it, ralt](Slice end,
+                                                            bool included) {
     while (key_it != keys_.end()) {
       const std::string &user_key = key_it->first;
       int res = ucmp_->Compare(user_key, end);
@@ -686,8 +693,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
       std::string &&value = std::move(seq_value.second);
       size_ -= user_key.size() + value.size();
       bool should_promote =
-          key_it->second.repeated_accessed() || router->IsHot(user_key);
-      router->Access(user_key, value.size());
+          key_it->second.repeated_accessed() || ralt->IsHot(user_key);
+      ralt->Access(user_key, value.size());
       if (should_promote) {
         InternalKey key(user_key, sequence, kTypeValue);
         ret.emplace_back(std::move(*key.rep()), std::move(value));
@@ -702,7 +709,7 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     const std::string &range_first = range_it->second.first_user_key;
     key_it = keys_.lower_bound(range_first);
     const std::string &range_last = range_it->first;
-    router->AccessRange(range_first, range_last, range_it->second.num_bytes, 0);
+    ralt->AccessRange(range_first, range_last, range_it->second.num_bytes, 0);
     erase_point_query_keys(range_first, false);
     erase_keys_in_range(range_last);
     range_it = ranges_.erase(range_it);
@@ -715,15 +722,14 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     const std::string &range_first = range_it->second.first_user_key;
     erase_point_query_keys(range_first, false);
     assert(range_it->second.count > 0);
-    if (range_it->second.count == 1 &&
-        !router->IsHot(range_first, range_last)) {
-      router->AccessRange(range_it->second.first_user_key, range_it->first,
-                          range_it->second.num_bytes, 0);
+    if (range_it->second.count == 1 && !ralt->IsHot(range_first, range_last)) {
+      ralt->AccessRange(range_it->second.first_user_key, range_it->first,
+                        range_it->second.num_bytes, 0);
       erase_keys_in_range(range_last);
     } else {
       // FIXME(hotrap): AccessRange after installing results
-      router->AccessRange(range_first, range_last, range_it->second.num_bytes,
-                          range_it->second.sequence);
+      ralt->AccessRange(range_first, range_last, range_it->second.num_bytes,
+                        range_it->second.sequence);
       while (key_it != keys_.end()) {
         const std::string &user_key = key_it->first;
         if (ucmp_->Compare(user_key, range_last) > 0) {
@@ -750,7 +756,7 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     const std::string &range_last = range_it->first;
     erase_point_query_keys(range_first, false);
     erase_keys_in_range(range_last);
-    router->AccessRange(range_first, range_last, range_it->second.num_bytes, 0);
+    ralt->AccessRange(range_first, range_last, range_it->second.num_bytes, 0);
     range_it = ranges_.erase(range_it);
   } else {
     erase_point_query_keys(largest, true);

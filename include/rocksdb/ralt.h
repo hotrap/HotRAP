@@ -120,16 +120,13 @@ struct HotRecInfo {
   Slice last;
 };
 
-class CompactionRouter : public Customizable {
+class RALT : public Customizable {
  public:
   using Iter = std::unique_ptr<TraitIterator<HotRecInfo>>;
-  virtual ~CompactionRouter() {}
-  static const char *Type() { return "CompactionRouter"; }
+  virtual ~RALT() {}
   static Status CreateFromString(const ConfigOptions &config_options,
-                                 const std::string &name,
-                                 const CompactionRouter **result);
+                                 const std::string &name, const RALT **result);
   const char *Name() const override = 0;
-  virtual size_t Tier(int level) = 0;
   virtual void Access(Slice key, size_t vlen) = 0;
   // sequence = 0 means not promoted.
   virtual void AccessRange(Slice first, Slice last, uint64_t num_bytes,
@@ -145,8 +142,8 @@ class CompactionRouter : public Customizable {
   virtual std::string LastPromoted(Slice key, SequenceNumber seq) = 0;
 
   // For statistics
-  virtual void HitLevel(int level, rocksdb::Slice key) = 0;
-  virtual void ScanResult(bool only_fd) = 0;
+  virtual void HitLevel(int, rocksdb::Slice){};
+  virtual void ScanResult(bool only_fd){};
 };
 
 }  // namespace ROCKSDB_NAMESPACE

@@ -198,12 +198,10 @@ class VersionStorageInfo {
   // record results in files_by_compaction_pri_. The largest files are listed
   // first.
   void UpdateFilesByCompactionPri(ColumnFamilyData* cfd,
-                                  const MutableCFOptions& mutable_cf_options);
+                                  const Version& version);
 
   void GenerateLevel0NonOverlapping();
-  bool level0_non_overlapping() const {
-    return level0_non_overlapping_;
-  }
+  bool level0_non_overlapping() const { return level0_non_overlapping_; }
 
   // Check whether each file in this version is bottommost (i.e., nothing in its
   // key-range could possibly exist in an older file/level).
@@ -679,8 +677,8 @@ class Version {
 
   Status OverlapWithLevelIterator(const ReadOptions&, const FileOptions&,
                                   const Slice& smallest_user_key,
-                                  const Slice& largest_user_key,
-                                  int level, bool* overlap);
+                                  const Slice& largest_user_key, int level,
+                                  bool* overlap);
 
   // Lookup the value for key or get all merge operands for key.
   // If do_merge = true (default) then lookup value for key.
@@ -818,6 +816,7 @@ class Version {
   const MutableCFOptions& GetMutableCFOptions() const {
     return mutable_cf_options_;
   }
+  uint32_t path_id(int level) const { return level_path_id_[level]; }
 
  private:
   Env* env_;
@@ -835,31 +834,27 @@ class Version {
     return storage_info_.user_comparator_;
   }
 
+  void TryPromote(DBImpl* db, ColumnFamilyData& cfd,
+                  std::vector<std::reference_wrapper<FileMetaData>> cd_files,
+                  int hit_level, Slice user_key, SequenceNumber seq,
+                  PinnableSlice* value);
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
-                   int hit_level, Slice user_key, PinnableSlice* value,
-                   Status& status, bool is_blob_index, bool do_merge,
+                   int hit_level, PinnableSlice* value, Status& status,
                    bool is_checker);
-  void HandleNotFound(GetContext& get_context, Slice user_key,
-                      PinnableSlice* value, Status& status,
-                      MergeContext& merge_context, bool* key_exists,
-                      bool do_merge);
+  void HandleNotFound(GetContext& get_context, PinnableSlice* value,
+                      Status& status, bool* key_exists);
   struct EnvGet {
     DBImpl* db;
     const ReadOptions& read_options;
     const LookupKey& k;
     PinnableSlice* value;
-    GetContext& get_context;
     Status& status;
-    MergeContext& merge_context;
-    SequenceNumber& max_covering_tombstone_seq;
     bool* key_exists;
-    bool is_blob_index;
-    bool do_merge;
     std::vector<std::reference_wrapper<FileMetaData>> cd_files;
   };
-  bool GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
-                 bool is_hit_file_last_in_level);
-  bool Get(EnvGet& env_get, int last_level);
+  bool GetInFile(EnvGet& env_get, GetContext& get_context, FdWithKeyRange& f,
+                 int hit_level, bool is_hit_file_last_in_level);
+  bool Get(EnvGet& env_get, GetContext& get_context, int last_level);
   // Returns true if the filter blocks in the specified level will not be
   // checked during read operations. In certain cases (trivial move or preload),
   // the filter block may already be cached, but we still do not access it such
@@ -888,12 +883,13 @@ class Version {
   const MergeOperator* merge_operator_;
 
   VersionStorageInfo storage_info_;
-  VersionSet* vset_;            // VersionSet to which this Version belongs
-  Version* next_;               // Next version in linked list
-  Version* prev_;               // Previous version in linked list
-  int refs_;                    // Number of live refs to this version
+  VersionSet* vset_;  // VersionSet to which this Version belongs
+  Version* next_;     // Next version in linked list
+  Version* prev_;     // Previous version in linked list
+  int refs_;          // Number of live refs to this version
   const FileOptions file_options_;
   const MutableCFOptions mutable_cf_options_;
+  std::vector<uint32_t> level_path_id_;
   // Cached value to avoid recomputing it on every read.
   const size_t max_file_size_for_l0_meta_pin_;
 
@@ -916,7 +912,7 @@ class Version {
 
 struct ObsoleteFileInfo {
   FileMetaData* metadata;
-  std::string   path;
+  std::string path;
 
   ObsoleteFileInfo() noexcept : metadata(nullptr) {}
   ObsoleteFileInfo(FileMetaData* f, const std::string& file_path)
@@ -925,9 +921,8 @@ struct ObsoleteFileInfo {
   ObsoleteFileInfo(const ObsoleteFileInfo&) = delete;
   ObsoleteFileInfo& operator=(const ObsoleteFileInfo&) = delete;
 
-  ObsoleteFileInfo(ObsoleteFileInfo&& rhs) noexcept :
-    ObsoleteFileInfo() {
-      *this = std::move(rhs);
+  ObsoleteFileInfo(ObsoleteFileInfo&& rhs) noexcept : ObsoleteFileInfo() {
+    *this = std::move(rhs);
   }
 
   ObsoleteFileInfo& operator=(ObsoleteFileInfo&& rhs) noexcept {
@@ -1279,7 +1274,7 @@ class VersionSet {
                             FileMetaData** metadata, ColumnFamilyData** cfd);
 
   // This function doesn't support leveldb SST filenames
-  void GetLiveFilesMetaData(std::vector<LiveFileMetaData> *metadata);
+  void GetLiveFilesMetaData(std::vector<LiveFileMetaData>* metadata);
 
   void AddObsoleteBlobFile(uint64_t blob_file_number, std::string path) {
     assert(table_cache_);

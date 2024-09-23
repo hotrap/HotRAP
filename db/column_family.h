@@ -793,4 +793,12 @@ extern uint32_t GetColumnFamilyID(ColumnFamilyHandle* column_family);
 extern const Comparator* GetColumnFamilyUserComparator(
     ColumnFamilyHandle* column_family);
 
+/*
+ * Find the optimal path to place a file
+ * Given a level, finds the path where levels up to it will fit in levels
+ * up to and including this path
+ */
+uint32_t GetPathId(const ImmutableCFOptions& ioptions,
+                   const MutableCFOptions& mutable_cf_options, int level);
+
 }  // namespace ROCKSDB_NAMESPACE

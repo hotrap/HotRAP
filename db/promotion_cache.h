@@ -131,7 +131,8 @@ class MutablePromotionCache {
       : ucmp_(ucmp), keys_(ucmp_), size_(0), ranges_(UserKeyCompare(ucmp_)) {}
 
   // Return the size of the mutable promotion cache
-  size_t Insert(Slice user_key, SequenceNumber sequencd, Slice value);
+  size_t Insert(std::string &&user_key, SequenceNumber sequencd,
+                std::string &&value);
   size_t InsertOneRange(
       std::vector<std::pair<std::string, std::string>> &&records,
       std::string &&first_user_key, std::string &&last_user_key,
@@ -140,8 +141,7 @@ class MutablePromotionCache {
                     std::vector<std::pair<std::string, ImmPCData>> &&keys);
 
   std::vector<std::pair<std::string, std::string>> TakeRange(
-      InternalStats *internal_stats, CompactionRouter *router, Slice smallest,
-      Slice largest);
+      InternalStats *internal_stats, RALT *ralt, Slice smallest, Slice largest);
 
  private:
   // REQUIRES: it->first >= range1.first_user_key
@@ -181,7 +181,14 @@ class PromotionCache {
   // REQUIRES: DB mutex held
   void Flush();
 
+  const port::RWMutex &being_or_has_been_compacted_lock() const {
+    return being_or_has_been_compacted_lock_;
+  }
   const RWMutexProtected<MutablePromotionCache> &mut() const { return mut_; }
+  size_t InsertToMut(std::string &&user_key, SequenceNumber sequence,
+                     std::string &&value) const;
+  void ConsumeBuffer(WriteGuard<MutablePromotionCache> &mut) const;
+
   const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
     return imm_list_;
   }
@@ -195,14 +202,50 @@ class PromotionCache {
     std::list<ImmPromotionCache>::iterator iter;
     // Data will be inserted back to this mutable promotion cache if there are
     // too few data to flush.
-    const RWMutexProtected<MutablePromotionCache> *mut;
+    const PromotionCache *pc;
   };
   void checker();
   void check(CheckerQueueElem &elem);
 
   DBImpl &db_;
   const size_t target_level_;
+
+  // When inserting to the mutable promotion cache:
+  // 1. Lock being_or_has_been_compacted_lock_
+  // 2. Check being_or_has_been_compacted
+  // 3. Lock and insert to mutable promotion cache. If fail to lock, then insert
+  // to mut_buffer
+  // 4. Unlock being_or_has_been_compacted_lock_
+  //
+  // When promote by compaction (TakeRange):
+  // 1. Lock being_or_has_been_compacted_lock_
+  // 2. Set being_or_has_been_compacted
+  // 3. Unlock being_or_has_been_compacted_lock_
+  // 4. Lock mutable promotion cache
+  // 5. Consume mut_buffer_
+  // 6. TakeRange
+  // 7. Unlock mutable promotion cache
+  //
+  // If the insertion to the mutable promotion cache happens before 1, records
+  // in the compaction range will be taken from the promotion cache.
+  // If the insertion to the mutable promotion cache happens after 3, records
+  // in the compaction range won't be inserted into the mutable pormotion cache.
+  //
+  // For other operations that locks the mutable promotion cache:
+  // Consume mut_buffer_ before unlocking, so that the buffer won't grow too
+  // big.
+  mutable port::RWMutex being_or_has_been_compacted_lock_;
+  struct MutBufItem {
+    std::string user_key;
+    SequenceNumber seq;
+    std::string value;
+    MutBufItem(std::string &&_user_key, SequenceNumber _seq,
+               std::string &&_value)
+        : user_key(std::move(_user_key)), seq(_seq), value(std::move(_value)) {}
+  };
+  MutexProtected<std::vector<MutBufItem>> mut_buffer_;
   RWMutexProtected<MutablePromotionCache> mut_;
+
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
   mutable std::atomic<size_t> max_size_;
 

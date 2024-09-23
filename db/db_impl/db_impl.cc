@@ -1772,15 +1772,14 @@ class TieredIterator : public InternalIterator {
   void Seek(const Slice& key) final override {
     TryPromote();
 
-    CompactionRouter* router =
-        super_version_->mutable_cf_options.compaction_router;
+    RALT* ralt = super_version_->mutable_cf_options.ralt;
 
     ParsedInternalKey ikey;
     Status s = ParseInternalKey(key, &ikey, false);
     assert(s.ok());
     seek_user_key_.assign(ikey.user_key.data(), ikey.user_key.size());
 
-    last_promoted_user_key_ = router->LastPromoted(ikey.user_key, sequence_);
+    last_promoted_user_key_ = ralt->LastPromoted(ikey.user_key, sequence_);
     if (!last_promoted_user_key_.empty()) {
       iter_ = fast_disk_it_;
       iter_->Seek(key);
@@ -1937,8 +1936,7 @@ class TieredIterator : public InternalIterator {
   }
 
   void TryPromote() {
-    CompactionRouter* router =
-        super_version_->mutable_cf_options.compaction_router;
+    RALT* router = super_version_->mutable_cf_options.ralt;
 
     if (seek_user_key_.empty() || router == nullptr) return;
     router->ScanResult(iter_ == fast_disk_it_);
@@ -1961,6 +1959,7 @@ class TieredIterator : public InternalIterator {
       mut_size = mut->InsertOneRange(
           std::move(records_to_promote_), std::move(seek_user_key_),
           std::move(last_user_key_), sequence_, num_accessed_bytes_);
+      cache.ConsumeBuffer(mut);
     }
     records_to_promote_ = std::vector<std::pair<std::string, std::string>>();
     seek_user_key_ = std::string();
@@ -2044,12 +2043,11 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
     if (read_options.read_tier != kMemtableTier) {
       Version* version = super_version->current;
       VersionStorageInfo* storage_info = version->storage_info();
-      CompactionRouter* router =
-          super_version->mutable_cf_options.compaction_router;
+      RALT* ralt = super_version->mutable_cf_options.ralt;
 
       int level = 0;
       for (; level < storage_info->num_non_empty_levels(); level++) {
-        if (router->Tier(level) == 1) {
+        if (version->path_id(level) == 1) {
           break;
         }
         version->AddIteratorsForLevel(read_options, file_options_,
@@ -2237,7 +2235,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         done = true;
         get_impl_options.value->PinSelf();
         RecordTick(stats_, MEMTABLE_HIT);
-        sv->mutable_cf_options.compaction_router->HitLevel(-2, key);
+        sv->mutable_cf_options.ralt->HitLevel(-2, key);
       } else if ((s.ok() || s.IsMergeInProgress()) &&
                  sv->imm->Get(lkey, get_impl_options.value->GetSelf(),
                               timestamp, &s, &merge_context,
@@ -2247,7 +2245,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         done = true;
         get_impl_options.value->PinSelf();
         RecordTick(stats_, MEMTABLE_HIT);
-        sv->mutable_cf_options.compaction_router->HitLevel(-1, key);
+        sv->mutable_cf_options.ralt->HitLevel(-1, key);
       }
     } else {
       // Get Merge Operands associated with key, Merge Operands should not be
