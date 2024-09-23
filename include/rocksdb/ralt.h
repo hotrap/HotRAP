@@ -128,7 +128,8 @@ class RALT : public Customizable {
                                  const std::string &name, const RALT **result);
   const char *Name() const override = 0;
   virtual void Access(Slice key, size_t vlen) = 0;
-  // sequence = 0 means not promoted.
+  // sequence > 0 means the range is promoted.
+  // sequence = 0 means the range is not promoted.
   virtual void AccessRange(Slice first, Slice last, uint64_t num_bytes,
                            SequenceNumber sequence) = 0;
   virtual Iter LowerBound(Slice key) = 0;
@@ -143,7 +144,7 @@ class RALT : public Customizable {
 
   // For statistics
   virtual void HitLevel(int, rocksdb::Slice){};
-  virtual void ScanResult(bool only_fd){};
+  virtual void ScanResult(bool){};
 };
 
 }  // namespace ROCKSDB_NAMESPACE
