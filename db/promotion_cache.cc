@@ -593,6 +593,30 @@ void MutablePromotionCache::MergeOneKeyInRange(
   }
 }
 
+// Return the mutable promotion size, or 0 if inserted to buffer.
+size_t PromotionCache::InsertToMut(std::string &&user_key,
+                                   SequenceNumber sequence,
+                                   std::string &&value) const {
+  auto mut = mut_.TryWrite();
+  if (!mut.has_value()) {
+    mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
+                                     std::move(value));
+    return 0;
+  }
+  return mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+}
+
+void PromotionCache::ConsumeBuffer(
+    WriteGuard<MutablePromotionCache> &mut) const {
+  auto mut_buffer = mut_buffer_.Lock();
+  if (mut_buffer->empty()) return;
+  std::vector<MutBufItem> buffer;
+  std::swap(buffer, *mut_buffer);
+  for (MutBufItem &item : buffer) {
+    mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
+  }
+}
+
 void PromotionCache::SwitchMutablePromotionCache(
     DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
   std::unordered_map<std::string, ImmPCData> cache;
