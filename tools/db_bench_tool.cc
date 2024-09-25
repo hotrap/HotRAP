@@ -709,6 +709,36 @@ DEFINE_bool(show_table_properties, false,
 
 DEFINE_string(db, "", "Use the db with the following name.");
 
+DEFINE_string(db_paths, "[]",
+              "Example: [{/mnt/ssd,100000000},{/mnt/hdd,1000000000}]");
+
+static std::vector<rocksdb::DbPath> parse_db_paths(std::string db_paths) {
+  std::istringstream in(db_paths);
+  std::vector<rocksdb::DbPath> ret;
+  assert(in.get() == '[');
+  char c = static_cast<char>(in.get());
+  if (c == ']') return ret;
+  assert(c == '{');
+  while (1) {
+    std::string path;
+    uint64_t size;
+    if (in.peek() == '"') {
+      in >> path;
+      assert(in.get() == ',');
+    } else {
+      while ((c = static_cast<char>(in.get())) != ',') path.push_back(c);
+    }
+    in >> size;
+    ret.emplace_back(std::move(path), size);
+    assert(in.get() == '}');
+    c = static_cast<char>(in.get());
+    if (c != ',') break;
+    assert(in.get() == '{');
+  }
+  assert(c == ']');
+  return ret;
+}
+
 // Read cache flags
 
 DEFINE_string(read_cache_path, "",
@@ -4470,8 +4500,11 @@ class Benchmark {
     options.listeners.emplace_back(listener_);
 
     if (FLAGS_num_multi_db <= 1) {
+      options.db_paths = parse_db_paths(FLAGS_db_paths);
       OpenDb(options, FLAGS_db, &db_);
     } else {
+      // Not supported yet.
+      assert(false);
       multi_dbs_.clear();
       multi_dbs_.resize(FLAGS_num_multi_db);
       auto wal_dir = options.wal_dir;
