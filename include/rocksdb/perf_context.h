@@ -157,6 +157,8 @@ struct PerfContext {
   // total nanos spent on switching memtable/wal and scheduling
   // flushes/compactions.
   uint64_t write_scheduling_flushes_compactions_time;
+  // total nanos spent on joining batch group
+  uint64_t join_batch_group_time;
   // total nanos spent on writing a record, excluding the above four things
   uint64_t write_pre_and_post_process_time;
 
