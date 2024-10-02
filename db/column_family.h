@@ -369,8 +369,9 @@ class ColumnFamilyData {
   uint64_t OldestLogToKeep();
 
   // See Memtable constructor for explanation of earliest_seq param.
-  MemTable* ConstructNewMemtable(const MutableCFOptions& mutable_cf_options,
-                                 SequenceNumber earliest_seq);
+  MemTable* ConstructNewMemtable(
+      const MutableCFOptions& mutable_cf_options, SequenceNumber earliest_seq,
+      std::map<std::string, RangeInfo, UserKeyCompare>&& promoted_ranges = {});
   void CreateNewMemtable(const MutableCFOptions& mutable_cf_options,
                          SequenceNumber earliest_seq);
 

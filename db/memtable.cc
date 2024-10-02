@@ -64,11 +64,12 @@ ImmutableMemTableOptions::ImmutableMemTableOptions(
       info_log(ioptions.logger),
       allow_data_in_errors(ioptions.allow_data_in_errors) {}
 
-MemTable::MemTable(const InternalKeyComparator& cmp,
-                   const ImmutableOptions& ioptions,
-                   const MutableCFOptions& mutable_cf_options,
-                   WriteBufferManager* write_buffer_manager,
-                   SequenceNumber latest_seq, uint32_t column_family_id)
+MemTable::MemTable(
+    const InternalKeyComparator& cmp, const ImmutableOptions& ioptions,
+    const MutableCFOptions& mutable_cf_options,
+    WriteBufferManager* write_buffer_manager, SequenceNumber latest_seq,
+    uint32_t column_family_id,
+    std::map<std::string, RangeInfo, UserKeyCompare>&& promoted_ranges)
     : comparator_(cmp),
       moptions_(ioptions, mutable_cf_options),
       refs_(0),
@@ -110,7 +111,8 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
           ioptions.memtable_insert_with_hint_prefix_extractor.get()),
       oldest_key_time_(std::numeric_limits<uint64_t>::max()),
       atomic_flush_seqno_(kMaxSequenceNumber),
-      approximate_memory_usage_(0) {
+      approximate_memory_usage_(0),
+      promoted_ranges_(std::move(promoted_ranges)) {
   UpdateFlushState();
   // something went wrong if we need to flush before inserting anything
   assert(!ShouldScheduleFlush());

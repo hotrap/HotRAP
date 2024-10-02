@@ -215,9 +215,6 @@ void PromotionCache::check(CheckerQueueElem &elem) {
       }
       range_it = cache.ranges.erase(range_it);
     } else {
-      // FIXME(hotrap): AccessRange after flush
-      ralt->AccessRange(range_first, range_last, num_bytes,
-                        range_it->second.sequence);
       while (key_it != candidates.end() &&
              ucmp->Compare((*key_it)->first, range_last) <= 0) {
         assert(!(*key_it)->second.only_by_point_query);
@@ -319,7 +316,8 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
 
     // No need to SetNextLogNumber, because we don't delete any log file
-    MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
+    MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0,
+                                            std::move(cache.ranges));
     m->Ref();
     autovector<MemTable *> memtables_to_free;
     SuperVersionContext svc(true);

@@ -9,9 +9,8 @@
 
 #include "db/flush_job.h"
 
-#include <cinttypes>
-
 #include <algorithm>
+#include <cinttypes>
 #include <vector>
 
 #include "db/builder.h"
@@ -23,6 +22,7 @@
 #include "db/memtable.h"
 #include "db/memtable_list.h"
 #include "db/merge_context.h"
+#include "db/promotion_cache.h"
 #include "db/range_tombstone_fragmenter.h"
 #include "db/version_set.h"
 #include "file/file_util.h"
@@ -292,6 +292,14 @@ Status FlushJob::Run(LogsWithPrepTracker* prep_tracker, FileMetaData* file_meta,
                               or new level 0 file path to write to manifest. */);
     if (!tmp_io_s.ok()) {
       io_status_ = tmp_io_s;
+    }
+    // TODO(hotrap): Retrieve version number and send to RALT.
+    RALT* ralt = cfd_->GetCurrentMutableCFOptions()->ralt;
+    for (MemTable* m : mems_) {
+      for (const auto& range : m->promoted_ranges()) {
+        ralt->AccessRange(range.second.first_user_key, range.first,
+                          range.second.num_bytes, range.second.sequence);
+      }
     }
   }
 
