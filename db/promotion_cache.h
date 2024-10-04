@@ -67,7 +67,7 @@ struct ImmPCData {
 class UserKeyCompare {
  public:
   // Just for compatibility with std::map
-  UserKeyCompare() { assert(false); }
+  UserKeyCompare() : ucmp_(nullptr) {}
   UserKeyCompare(const Comparator *ucmp) : ucmp_(ucmp) {}
   bool operator()(const std::string &lhs, const std::string &rhs) const {
     return ucmp_->Compare(lhs, rhs) < 0;
