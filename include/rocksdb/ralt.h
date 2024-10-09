@@ -125,7 +125,7 @@ class RALT : public Customizable {
   const char *Name() const override = 0;
   virtual void Access(Slice key, size_t vlen) = 0;
   virtual Iter LowerBound(Slice key) = 0;
-  virtual size_t RangeHotSize(Slice smallest, Slice largest) = 0;
+  virtual uint64_t RangeHotSize(Slice smallest, Slice largest) = 0;
   virtual bool IsHot(Slice key) = 0;
 
   // For statistics
