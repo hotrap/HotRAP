@@ -1,0 +1,3 @@
+[submodule "third-party/AutoTuner"]
+	path = third-party/AutoTuner
+	url = https://github.com/hotrap/AutoTuner.git

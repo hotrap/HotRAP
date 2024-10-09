@@ -55,6 +55,8 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {GET_HIT_L0, "rocksdb.l0.hit"},
     {GET_HIT_L1, "rocksdb.l1.hit"},
     {GET_HIT_L2_AND_UP, "rocksdb.l2andup.hit"},
+    {GET_HIT_T0, "rocksdb.t0.hit"},
+    {GET_HIT_T1, "rocksdb.t1.hit"},
     {COMPACTION_KEY_DROP_NEWER_ENTRY, "rocksdb.compaction.key.drop.new"},
     {COMPACTION_KEY_DROP_OBSOLETE, "rocksdb.compaction.key.drop.obsolete"},
     {COMPACTION_KEY_DROP_RANGE_DEL, "rocksdb.compaction.key.drop.range_del"},
