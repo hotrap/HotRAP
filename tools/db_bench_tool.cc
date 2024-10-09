@@ -26,6 +26,10 @@
 #ifdef __FreeBSD__
 #include <sys/sysctl.h>
 #endif
+
+#include <autotuner.h>
+#include <viscnts.h>
+
 #include <atomic>
 #include <cinttypes>
 #include <condition_variable>
@@ -1548,6 +1552,10 @@ DEFINE_string(secondary_cache_uri, "",
 static class std::shared_ptr<ROCKSDB_NAMESPACE::SecondaryCache> secondary_cache;
 #endif  // ROCKSDB_LITE
 
+DEFINE_double(max_hot_set_size, 0, "");
+DEFINE_double(max_ralt_size, 0, "");
+DEFINE_string(ralt_path, "", "Path to RALT");
+
 static const bool FLAGS_soft_rate_limit_dummy __attribute__((__unused__)) =
     RegisterFlagValidator(&FLAGS_soft_rate_limit, &ValidateRateLimit);
 
@@ -2074,9 +2082,10 @@ static std::unordered_map<OperationType, std::string, std::hash<unsigned char>>
 // a class that reports stats to CSV file
 class ReporterAgent {
  public:
-  ReporterAgent(Env* env, const std::string& fname,
+  ReporterAgent(Options& options, Env* env, const std::string& fname,
                 uint64_t report_interval_secs)
-      : env_(env),
+      : options_(options),
+        env_(env),
         total_ops_done_(0),
         last_report_(0),
         last_get_hit_t0_(0),
@@ -2134,6 +2143,9 @@ class ReporterAgent {
     if (dbstats) {
       header += ",get_hit_t0,get_hit_t1";
     }
+    if (options_.ralt) {
+      header += ",real_hot_set_size,real_phy_size";
+    }
     return header;
   }
   void SleepAndReport() {
@@ -2164,6 +2176,11 @@ class ReporterAgent {
                   std::to_string(get_hit_t1 - last_get_hit_t1_);
         last_get_hit_t0_ = get_hit_t0;
         last_get_hit_t1_ = get_hit_t1;
+      }
+      if (options_.ralt) {
+        ::RALT& ralt = *static_cast<::RALT*>(options_.ralt);
+        report += ',' + std::to_string(ralt.GetRealHotSetSize()) + ',' +
+                  std::to_string(ralt.GetRealPhySize());
       }
       report += '\n';
       auto s = report_file_->Append(report);
@@ -2218,6 +2235,7 @@ class ReporterAgent {
     }
   }
 
+  Options& options_;
   Env* env_;
   std::unique_ptr<WritableFile> report_file_;
   std::atomic<int64_t> total_ops_done_;
@@ -3345,6 +3363,15 @@ class Benchmark {
     if (!SanityCheck()) {
       ErrorExit();
     }
+
+    open_options_.max_bytes_for_level_multiplier_additional.clear();
+    if (!FLAGS_ralt_path.empty()) {
+      open_options_.ralt =
+          new ::RALT(open_options_.comparator, FLAGS_ralt_path.c_str(),
+                     FLAGS_max_hot_set_size, FLAGS_max_hot_set_size,
+                     FLAGS_max_hot_set_size, FLAGS_max_ralt_size);
+    }
+
     Open(&open_options_);
     PrintHeader(open_options_);
     std::stringstream benchmark_stream(FLAGS_benchmarks);
@@ -3660,6 +3687,15 @@ class Benchmark {
         Open(&open_options_);  // use open_options for the last accessed
       }
 
+      std::unique_ptr<AutoTuner> autotuner;
+      if (open_options_.ralt) {
+        size_t first_level_in_sd = calc_first_level_in_sd(open_options_);
+        autotuner = std::make_unique<AutoTuner>(
+            *db_.db, first_level_in_sd,
+            open_options_.db_paths[0].target_size * 0.05,
+            open_options_.db_paths[0].target_size * 0.7);
+      }
+
       if (method != nullptr) {
         fprintf(stdout, "DB path: [%s]\n", FLAGS_db.c_str());
 
@@ -3794,6 +3830,7 @@ class Benchmark {
               secondary_db_updates_);
     }
 #endif  // ROCKSDB_LITE
+    delete open_options_.ralt;
   }
 
  private:
@@ -3859,7 +3896,8 @@ class Benchmark {
 
     std::unique_ptr<ReporterAgent> reporter_agent;
     if (FLAGS_report_interval_seconds > 0) {
-      reporter_agent.reset(new ReporterAgent(FLAGS_env, FLAGS_report_file,
+      reporter_agent.reset(new ReporterAgent(open_options_, FLAGS_env,
+                                             FLAGS_report_file,
                                              FLAGS_report_interval_seconds));
     }
 
