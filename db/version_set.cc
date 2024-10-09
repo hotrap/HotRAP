@@ -129,6 +129,7 @@ class FilePicker {
         curr_level_(static_cast<unsigned int>(-1)),
         returned_file_level_(static_cast<unsigned int>(-1)),
         hit_file_level_(static_cast<unsigned int>(-1)),
+        hit_file_path_id_(static_cast<uint32_t>(-1)),
         search_left_bound_(0),
         search_right_bound_(FileIndexer::kLevelMaxIndex),
         level_files_brief_(file_levels),
@@ -160,6 +161,7 @@ class FilePicker {
         // Loops over all files in current level.
         FdWithKeyRange* f = &curr_file_level_->files[curr_index_in_curr_level_];
         hit_file_level_ = curr_level_;
+        hit_file_path_id_ = f->fd.GetPathId();
         is_hit_file_last_in_level_ =
             curr_index_in_curr_level_ == curr_file_level_->num_files - 1;
         int cmp_largest = -1;
@@ -229,6 +231,8 @@ class FilePicker {
   // for GET_HIT_L0, GET_HIT_L1 & GET_HIT_L2_AND_UP counts
   unsigned int GetHitFileLevel() { return hit_file_level_; }
 
+  uint32_t GetHitFilePathId() const { return hit_file_path_id_; }
+
   // Returns true if the most recent "hit file" (i.e., one returned by
   // GetNextFile()) is at the last index in its level.
   bool IsHitFileLastInLevel() { return is_hit_file_last_in_level_; }
@@ -238,6 +242,7 @@ class FilePicker {
   unsigned int curr_level_;
   unsigned int returned_file_level_;
   unsigned int hit_file_level_;
+  uint32_t hit_file_path_id_;
   int32_t search_left_bound_;
   int32_t search_right_bound_;
   autovector<LevelFilesBrief>* level_files_brief_;
@@ -2064,6 +2069,14 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
         // TODO: update per-level perfcontext user_key_return_count for kMerge
         break;
       case GetContext::kFound:
+        switch (fp.GetHitFilePathId()) {
+          case 0:
+            RecordTick(db_statistics_, GET_HIT_T0);
+            break;
+          case 1:
+            RecordTick(db_statistics_, GET_HIT_T1);
+            break;
+        }
         if (fp.GetHitFileLevel() == 0) {
           RecordTick(db_statistics_, GET_HIT_L0);
         } else if (fp.GetHitFileLevel() == 1) {
