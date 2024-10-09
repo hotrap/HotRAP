@@ -1555,6 +1555,7 @@ static class std::shared_ptr<ROCKSDB_NAMESPACE::SecondaryCache> secondary_cache;
 DEFINE_double(max_hot_set_size, 0, "");
 DEFINE_double(max_ralt_size, 0, "");
 DEFINE_string(ralt_path, "", "Path to RALT");
+DEFINE_int32(ralt_bloom_bits, 14, "");
 
 static const bool FLAGS_soft_rate_limit_dummy __attribute__((__unused__)) =
     RegisterFlagValidator(&FLAGS_soft_rate_limit, &ValidateRateLimit);
@@ -3366,10 +3367,10 @@ class Benchmark {
 
     open_options_.max_bytes_for_level_multiplier_additional.clear();
     if (!FLAGS_ralt_path.empty()) {
-      open_options_.ralt =
-          new ::RALT(open_options_.comparator, FLAGS_ralt_path.c_str(),
-                     FLAGS_max_hot_set_size, FLAGS_max_hot_set_size,
-                     FLAGS_max_hot_set_size, FLAGS_max_ralt_size);
+      open_options_.ralt = new ::RALT(
+          open_options_.comparator, FLAGS_ralt_path.c_str(),
+          FLAGS_max_hot_set_size, FLAGS_max_hot_set_size,
+          FLAGS_max_hot_set_size, FLAGS_max_ralt_size, FLAGS_ralt_bloom_bits);
     }
 
     Open(&open_options_);
