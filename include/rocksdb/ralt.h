@@ -133,7 +133,7 @@ class RALT : public Customizable {
   virtual void AccessRange(Slice first, Slice last, uint64_t num_bytes,
                            SequenceNumber sequence) = 0;
   virtual Iter LowerBound(Slice key) = 0;
-  virtual size_t RangeHotSize(Slice smallest, Slice largest) = 0;
+  virtual uint64_t RangeHotSize(Slice smallest, Slice largest) = 0;
   virtual bool IsHot(Slice key) = 0;
   virtual bool IsHot(Slice first, Slice last) = 0;
 
