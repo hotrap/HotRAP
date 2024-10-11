@@ -300,15 +300,7 @@ bool DBIter::FindNextUserEntryInternal(bool skipping_saved_key,
                                    : Slice();
     bool more_recent = false;
     if (IsVisible(ikey_.sequence, ts, &more_recent)) {
-      // If the previous entry is of seqnum 0, the current entry will not
-      // possibly be skipped. This condition can potentially be relaxed to
-      // prev_key.seq <= ikey_.sequence. We are cautious because it will be more
-      // prone to bugs causing the same user key with the same sequence number.
-      // Note that with current timestamp implementation, the same user key can
-      // have different timestamps and zero sequence number on the bottommost
-      // level. This may change in the future.
-      if ((!is_prev_key_seqnum_zero || timestamp_size_ > 0) &&
-          skipping_saved_key &&
+      if (skipping_saved_key &&
           CompareKeyForSkip(ikey_.user_key, saved_key_.GetUserKey()) <= 0) {
         num_skipped++;  // skip this entry
         PERF_COUNTER_ADD(internal_key_skipped_count, 1);
