@@ -3445,8 +3445,8 @@ void PickSSTAccurateHotSize(const Version& version,
 
     uint64_t benefit = file->raw_key_size + file->raw_value_size;
     if (ralt && version.path_id(level) != version.path_id(level + 1)) {
-      size_t hot_size = ralt->RangeHotSize(file->smallest.user_key(),
-                                           file->largest.user_key());
+      uint64_t hot_size = ralt->RangeHotSize(file->smallest.user_key(),
+                                             file->largest.user_key());
       if (benefit < hot_size) {
         benefit = 0;
       } else {
