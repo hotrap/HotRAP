@@ -1783,6 +1783,8 @@ class TieredIterator : public InternalIterator {
     if (!last_promoted_user_key_.empty()) {
       iter_ = fast_disk_it_;
       iter_->Seek(key);
+      // TODO(hotrap): Not needed if marked promoted in RALT after being
+      // promoted.
       SeekInSlowDiskIfNeeded();
       return;
     }
@@ -1798,10 +1800,6 @@ class TieredIterator : public InternalIterator {
   void Next() final override {
     assert(iter_->Valid());
     iter_->Next();
-    if (!iter_->Valid()) {
-      if (iter_ == fast_disk_it_) SeekInSlowDisk();
-      return;
-    }
     if (iter_ != fast_disk_it_) {
       RecordAccess();
       return;
@@ -1843,21 +1841,22 @@ class TieredIterator : public InternalIterator {
                          const ParsedInternalKey& ikey) {
     // Future work: Handle other types
     assert(ikey.type == ValueType::kTypeValue);
-    if (ikey.sequence <= sequence_) {
-      // Visible
-      Slice last_user_key = ikey.user_key;
-      int res = ucmp->Compare(last_user_key, last_user_key_);
-      if (res != 0) {
-        assert(res > 0);
-        last_user_key_.assign(last_user_key.data(), last_user_key.size());
-        // This is the latest visible version of this user key
-        return true;
-      } else {
-        return false;
-      }
-    } else {
-      // A future version
+    Slice user_key = ikey.user_key;
+    int res = ucmp->Compare(user_key, last_user_key_);
+    if (res != 0) {
+      assert(res > 0);
+      last_user_key_.assign(user_key.data(), user_key.size());
+      is_visible_ = (ikey.sequence <= sequence_);
       return true;
+    } else if (ikey.sequence > sequence_) {
+      // A future version
+      assert(!is_visible_);
+      return true;
+    } else if (!is_visible_) {
+      is_visible_ = true;
+      return true;
+    } else {
+      return false;
     }
   }
 
@@ -1889,7 +1888,6 @@ class TieredIterator : public InternalIterator {
     const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
     SeekInSlowDisk(ucmp);
   }
-  // FIXME(hotrap): Not needed if marked promoted in RALT after being promoted.
   void SeekInSlowDiskIfNeeded() {
     Version* version = super_version_->current;
     const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
@@ -1905,7 +1903,7 @@ class TieredIterator : public InternalIterator {
       SeekInSlowDisk(ucmp);
       return;
     }
-    UpdateLastUserKey(ucmp, ikey);
+    RecordAccess();
   }
 
   void RecordAccess(const Comparator* ucmp, Slice internal_key,
@@ -1999,6 +1997,7 @@ class TieredIterator : public InternalIterator {
   std::vector<std::pair<std::string, std::string>> records_to_promote_;
   std::string seek_user_key_;
   std::string last_user_key_;
+  bool is_visible_;
   uint64_t num_accessed_bytes_;
 };
 

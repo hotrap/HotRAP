@@ -426,17 +426,18 @@ void MutablePromotionCache::InsertRanges(
     std::map<std::string, RangeInfo, UserKeyCompare> &&ranges,
     std::vector<std::pair<std::string, ImmPCData>> &&keys) {
   auto key_it = keys_.begin();
-  auto key_it1 = keys.begin();
+  auto new_key_it = keys.begin();
   auto range_it = ranges_.begin();
-  auto range1_it = ranges.begin();
-  auto insert_keys_until = [this, &key_it, &key_it1, &keys](Slice range_first) {
-    while (key_it1 != keys.end()) {
+  auto new_range_it = ranges.begin();
+  auto insert_keys_until = [this, &key_it, &new_key_it,
+                            &keys](Slice range_first) {
+    while (new_key_it != keys.end()) {
       if (range_first.data()) {
-        if (ucmp_->Compare(key_it1->first, range_first) >= 0) break;
+        if (ucmp_->Compare(new_key_it->first, range_first) >= 0) break;
       }
-      std::string &&user_key = std::move(key_it1->first);
-      assert(key_it1->second.only_by_point_query);
-      auto seq_value = std::move(key_it1->second.seq_value);
+      std::string &&user_key = std::move(new_key_it->first);
+      assert(new_key_it->second.only_by_point_query);
+      auto seq_value = std::move(new_key_it->second.seq_value);
       assert(seq_value.size() == 1);
       while (key_it != keys_.end() &&
              ucmp_->Compare(key_it->first, user_key) < 0) {
@@ -451,19 +452,19 @@ void MutablePromotionCache::InsertRanges(
             key_it, std::piecewise_construct,
             std::forward_as_tuple(std::move(user_key)),
             std::forward_as_tuple(std::move(seq_value),
-                                  key_it1->second.repeated_accessed,
+                                  new_key_it->second.repeated_accessed,
                                   /*only_by_point_query=*/true));
       } else {
         assert(key_it->second.only_by_point_query());
         key_it->second.set_repeated_accessed(true);
       }
-      ++key_it1;
+      ++new_key_it;
     }
   };
-  while (range1_it != ranges.end()) {
-    std::string range1_last = range1_it->first;
-    RangeInfo range1 = std::move(range1_it->second);
-    range1_it = ranges.erase(range1_it);
+  while (new_range_it != ranges.end()) {
+    std::string range1_last = new_range_it->first;
+    RangeInfo range1 = std::move(new_range_it->second);
+    new_range_it = ranges.erase(new_range_it);
     while (range_it != ranges_.end() &&
            ucmp_->Compare(range_it->first, range1.first_user_key) < 0) {
       ++range_it;
@@ -473,13 +474,13 @@ void MutablePromotionCache::InsertRanges(
     const std::string &new_range_last = range_it->first;
     SequenceNumber new_range_sequence = range_it->second.sequence;
     insert_keys_until(new_range_first);
-    while (key_it1 != keys.end() &&
-           ucmp_->Compare(key_it1->first, new_range_last) <= 0) {
-      assert(!key_it1->second.only_by_point_query);
-      MergeOneKeyInRange(key_it, std::move(key_it1->first),
-                         std::move(key_it1->second.seq_value),
+    while (new_key_it != keys.end() &&
+           ucmp_->Compare(new_key_it->first, new_range_last) <= 0) {
+      assert(!new_key_it->second.only_by_point_query);
+      MergeOneKeyInRange(key_it, std::move(new_key_it->first),
+                         std::move(new_key_it->second.seq_value),
                          new_range_sequence);
-      ++key_it1;
+      ++new_key_it;
     }
   }
   insert_keys_until(Slice(nullptr, 0));
