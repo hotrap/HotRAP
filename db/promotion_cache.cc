@@ -462,24 +462,24 @@ void MutablePromotionCache::InsertRanges(
     }
   };
   while (new_range_it != ranges.end()) {
-    std::string range1_last = new_range_it->first;
-    RangeInfo range1 = std::move(new_range_it->second);
+    std::string new_range_last = new_range_it->first;
+    RangeInfo new_range = std::move(new_range_it->second);
     new_range_it = ranges.erase(new_range_it);
     while (range_it != ranges_.end() &&
-           ucmp_->Compare(range_it->first, range1.first_user_key) < 0) {
+           ucmp_->Compare(range_it->first, new_range.first_user_key) < 0) {
       ++range_it;
     }
-    MergeRange(range_it, std::move(range1_last), std::move(range1));
-    const std::string &new_range_first = range_it->second.first_user_key;
-    const std::string &new_range_last = range_it->first;
-    SequenceNumber new_range_sequence = range_it->second.sequence;
-    insert_keys_until(new_range_first);
+    MergeRange(range_it, std::move(new_range_last), std::move(new_range));
+    const std::string &merged_range_first = range_it->second.first_user_key;
+    const std::string &merged_range_last = range_it->first;
+    SequenceNumber merged_range_sequence = range_it->second.sequence;
+    insert_keys_until(merged_range_first);
     while (new_key_it != keys.end() &&
-           ucmp_->Compare(new_key_it->first, new_range_last) <= 0) {
+           ucmp_->Compare(new_key_it->first, merged_range_last) <= 0) {
       assert(!new_key_it->second.only_by_point_query);
       MergeOneKeyInRange(key_it, std::move(new_key_it->first),
                          std::move(new_key_it->second.seq_value),
-                         new_range_sequence);
+                         merged_range_sequence);
       ++new_key_it;
     }
   }
@@ -488,9 +488,9 @@ void MutablePromotionCache::InsertRanges(
 
 void MutablePromotionCache::MergeRange(
     std::map<std::string, RangeInfo, UserKeyCompare>::iterator &it,
-    std::string &&range1_last, RangeInfo &&range1) {
+    std::string &&new_range_last, RangeInfo &&new_range) {
   if (it != ranges_.end()) {
-    assert(ucmp_->Compare(it->first, range1.first_user_key) >= 0);
+    assert(ucmp_->Compare(it->first, new_range.first_user_key) >= 0);
     if (it != ranges_.begin()) {
       auto tmp = it;
       --tmp;
@@ -498,50 +498,51 @@ void MutablePromotionCache::MergeRange(
     }
   }
   while (it != ranges_.end() &&
-         ucmp_->Compare(it->second.first_user_key, range1_last) <= 0) {
+         ucmp_->Compare(it->second.first_user_key, new_range_last) <= 0) {
     std::string &&range_first = std::move(it->second.first_user_key);
     // range_first <= range1_last
     std::string range_last = it->first;
     uint64_t range_num_bytes = it->second.num_bytes;
     SequenceNumber range_sequence = it->second.sequence;
-    range1.count += it->second.count;
-    if (ucmp_->Compare(range_last, range1_last) <= 0) {
+    new_range.count += it->second.count;
+    if (ucmp_->Compare(range_last, new_range_last) <= 0) {
       // range_last <= range1_last
-      if (ucmp_->Compare(range_first, range1.first_user_key) < 0) {
+      if (ucmp_->Compare(range_first, new_range.first_user_key) < 0) {
         // range_first < range1_first <= range_last <= range1_last
-        range1.first_user_key = std::move(range_first);
+        new_range.first_user_key = std::move(range_first);
         // Overestimation. Precise estimation requires maintaining length for
         // all accessed keys, which can consume much memory.
-        range1.num_bytes += range_num_bytes;
-        range1.sequence = std::max(range1.sequence, range_sequence);
+        new_range.num_bytes += range_num_bytes;
+        new_range.sequence = std::max(new_range.sequence, range_sequence);
       } else {
         // range1_first <= range_first <= range_last <= range1_last
       }
     } else {
       // range_first <= range1_last < range_last
-      if (ucmp_->Compare(range_first, range1.first_user_key) < 0) {
+      if (ucmp_->Compare(range_first, new_range.first_user_key) < 0) {
         // range_first < range1_first <= range1_last < range_last
-        range1.first_user_key = std::move(range_first);
-        range1.num_bytes = std::max(range1.num_bytes, range_num_bytes);
-        range1.sequence = range_sequence;
+        new_range.first_user_key = std::move(range_first);
+        new_range.num_bytes = std::max(new_range.num_bytes, range_num_bytes);
+        new_range.sequence = range_sequence;
       } else {
         // range1_first <= range_first <= range1_last < range_last
-        range1.num_bytes += range_num_bytes;
-        range1.sequence = std::max(range1.sequence, range_sequence);
+        new_range.num_bytes += range_num_bytes;
+        new_range.sequence = std::max(new_range.sequence, range_sequence);
       }
-      range1_last = std::move(range_last);
+      new_range_last = std::move(range_last);
     }
     it = ranges_.erase(it);
   }
   if (it != ranges_.end()) {
-    assert(ucmp_->Compare(range1_last, it->second.first_user_key) < 0);
+    assert(ucmp_->Compare(new_range_last, it->second.first_user_key) < 0);
   }
   if (it != ranges_.begin()) {
     auto tmp = it;
     --tmp;
-    assert(ucmp_->Compare(tmp->first, range1.first_user_key) < 0);
+    assert(ucmp_->Compare(tmp->first, new_range.first_user_key) < 0);
   }
-  it = ranges_.emplace_hint(it, std::move(range1_last), std::move(range1));
+  it =
+      ranges_.emplace_hint(it, std::move(new_range_last), std::move(new_range));
 }
 void MutablePromotionCache::MergeOneKeyInRange(
     std::map<std::string, PCData, UserKeyCompare>::iterator &it,
