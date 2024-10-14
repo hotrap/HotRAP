@@ -1954,7 +1954,7 @@ class TieredIterator : public InternalIterator {
     if (records_to_promote_.empty()) {
       if (!last_user_key_.empty()) {
         ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
-                          sequence_);
+                          0);
       }
       num_accessed_bytes_ = 0;
       return;
