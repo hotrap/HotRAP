@@ -175,11 +175,11 @@ class MutablePromotionCache {
   // REQUIRES: it->first >= range1.first_user_key
   void MergeRange(
       std::map<std::string, RangeInfo, UserKeyCompare>::iterator &it,
-      std::string &&range1_last, RangeInfo &&range1);
+      std::string &&new_range_last, RangeInfo &&new_range);
   void MergeOneKeyInRange(
       std::map<std::string, PCData, UserKeyCompare>::iterator &it,
       std::string &&user_key,
-      std::deque<std::pair<SequenceNumber, std::string>> &&range1,
+      std::deque<std::pair<SequenceNumber, std::string>> &&seq_values,
       SequenceNumber sequence);
 
   const Comparator *ucmp_;
