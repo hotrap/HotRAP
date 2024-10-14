@@ -230,22 +230,14 @@ void PromotionCache::check(CheckerQueueElem &elem) {
 
   TimerGuard check_newer_version_start =
       hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
-  auto erase_range_containing = [&cache, ucmp](const std::string &user_key) {
-    auto it = cache.ranges.lower_bound(user_key);
-    if (it != cache.ranges.end() &&
-        ucmp->Compare(it->second.first_user_key, user_key) <= 0) {
-      cache.ranges.erase(it);
-    }
-  };
-  for (auto it : candidates) {
-    LookupKey key(it->first, kMaxSequenceNumber);
+  auto key_has_newer_version = [this, sv, cfd](Slice user_key) {
+    LookupKey key(user_key, kMaxSequenceNumber);
     Status s;
     MergeContext merge_context;
     SequenceNumber max_covering_tombstone_seq = 0;
     if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
                      &max_covering_tombstone_seq, ReadOptions())) {
-      erase_range_containing(it->first);
-      continue;
+      return true;
     }
     if (!s.ok()) {
       ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
@@ -255,12 +247,58 @@ void PromotionCache::check(CheckerQueueElem &elem) {
                          &merge_context, &max_covering_tombstone_seq, nullptr,
                          nullptr, nullptr, nullptr, nullptr, false,
                          target_level_)) {
-      erase_range_containing(it->first);
-      continue;
+      return true;
     }
     assert(s.IsNotFound());
-    to_promote.push_back(it);
+    return false;
+  };
+  key_it = candidates.begin();
+  auto check_newer_version_until = [&to_promote, &key_it,
+                                    &key_has_newer_version, &candidates,
+                                    ucmp](Slice range_first) {
+    for (; key_it != candidates.end(); ++key_it) {
+      const std::string &user_key = (*key_it)->first;
+      if (range_first.data()) {
+        if (ucmp->Compare(user_key, range_first) >= 0) break;
+      }
+      const auto &data = (*key_it)->second;
+      assert(data.only_by_point_query);
+      if (!key_has_newer_version((*key_it)->first)) {
+        to_promote.push_back(*key_it);
+      }
+    }
+  };
+  range_it = cache.ranges.begin();
+  while (range_it != cache.ranges.end()) {
+    const std::string &range_first = range_it->second.first_user_key;
+    const std::string &range_last = range_it->first;
+    check_newer_version_until(range_first);
+    bool has_newer_version = false;
+    for (size_t pending = 0; key_it != candidates.end(); ++key_it) {
+      const std::string &user_key = (*key_it)->first;
+      if (ucmp->Compare(user_key, range_last) > 0) break;
+      if (key_has_newer_version(user_key)) {
+        has_newer_version = true;
+        while (pending) {
+          --pending;
+          to_promote.pop_back();
+        }
+        do {
+          ++key_it;
+        } while (key_it != candidates.end() &&
+                 ucmp->Compare((*key_it)->first, range_last) <= 0);
+        break;
+      }
+      ++pending;
+      to_promote.push_back(*key_it);
+    }
+    if (has_newer_version) {
+      range_it = cache.ranges.erase(range_it);
+    } else {
+      ++range_it;
+    }
   }
+  check_newer_version_until(Slice(nullptr, 0));
   std::swap(candidates, to_promote);
   to_promote.clear();
 
