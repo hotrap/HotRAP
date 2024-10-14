@@ -31,6 +31,7 @@ const std::string kPropertiesBlock = "rocksdb.properties";
 const std::string kPropertiesBlockOldName = "rocksdb.stats";
 const std::string kCompressionDictBlock = "rocksdb.compression_dict";
 const std::string kRangeDelBlock = "rocksdb.range_del";
+const std::string kPromotedRangeBlock = "rocksdb.promoted_range";
 
 MetaIndexBuilder::MetaIndexBuilder()
     : meta_index_block_(new BlockBuilder(1 /* restart interval */)) {}
@@ -39,7 +40,9 @@ void MetaIndexBuilder::Add(const std::string& key,
                            const BlockHandle& handle) {
   std::string handle_encoding;
   handle.EncodeTo(&handle_encoding);
-  meta_block_handles_.insert({key, handle_encoding});
+  auto ret = meta_block_handles_.insert({key, handle_encoding});
+  assert(ret.second);
+  (void)ret;
 }
 
 Slice MetaIndexBuilder::Finish() {
@@ -257,8 +260,9 @@ Status ReadTablePropertiesHelper(
   uint64_t block_size = block_contents.data.size();
   Block properties_block(std::move(block_contents));
   DataBlockIter iter;
+  // TODO: Not sure whether it is correct to set is_user_key to be true here.
   properties_block.NewDataIterator(BytewiseComparator(),
-                                   kDisableGlobalSequenceNumber, &iter);
+                                   kDisableGlobalSequenceNumber, true, &iter);
 
   std::unique_ptr<TableProperties> new_table_properties{new TableProperties};
   // All pre-defined properties of type uint64_t
@@ -502,7 +506,7 @@ Status FindMetaBlockInFile(RandomAccessFileReader* file, uint64_t file_size,
 
   std::unique_ptr<InternalIterator> meta_iter;
   meta_iter.reset(metaindex_block.NewDataIterator(
-      BytewiseComparator(), kDisableGlobalSequenceNumber));
+      BytewiseComparator(), kDisableGlobalSequenceNumber, true));
 
   return FindMetaBlock(meta_iter.get(), meta_block_name, block_handle);
 }

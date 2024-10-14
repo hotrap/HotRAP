@@ -104,12 +104,12 @@ class MemTable {
   // If the earliest sequence number is not known, kMaxSequenceNumber may be
   // used, but this may prevent some transactions from succeeding until the
   // first key is inserted into the memtable.
-  explicit MemTable(
-      const InternalKeyComparator& comparator, const ImmutableOptions& ioptions,
-      const MutableCFOptions& mutable_cf_options,
-      WriteBufferManager* write_buffer_manager, SequenceNumber earliest_seq,
-      uint32_t column_family_id,
-      std::map<std::string, RangeInfo, UserKeyCompare>&& promoted_ranges = {});
+  explicit MemTable(const InternalKeyComparator& comparator,
+                    const ImmutableOptions& ioptions,
+                    const MutableCFOptions& mutable_cf_options,
+                    WriteBufferManager* write_buffer_manager,
+                    SequenceNumber earliest_seq, uint32_t column_family_id,
+                    std::vector<PromotedRange>&& promoted_ranges = {});
   // No copying allowed
   MemTable(const MemTable&) = delete;
   MemTable& operator=(const MemTable&) = delete;
@@ -497,8 +497,7 @@ class MemTable {
   // Returns a heuristic flush decision
   bool ShouldFlushNow();
 
-  const std::map<std::string, RangeInfo, UserKeyCompare>& promoted_ranges()
-      const {
+  const std::vector<PromotedRange>& promoted_ranges() const {
     return promoted_ranges_;
   }
 
@@ -584,7 +583,7 @@ class MemTable {
   // Gets refreshed inside `ApproximateMemoryUsage()` or `ShouldFlushNow`
   std::atomic<uint64_t> approximate_memory_usage_;
 
-  std::map<std::string, RangeInfo, UserKeyCompare> promoted_ranges_;
+  std::vector<PromotedRange> promoted_ranges_;
 
 #ifndef ROCKSDB_LITE
   // Flush job info of the current memtable.

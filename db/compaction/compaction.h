@@ -158,6 +158,9 @@ class Compaction {
   cached_records_to_promote() const {
     return cached_records_to_promote_;
   }
+  const std::vector<PromotedRange>& cached_ranges_to_promote() const {
+    return cached_ranges_to_promoted_;
+  }
   int target_level_to_promote() const { return target_level_to_promote_; }
 
   // Returns the LevelFilesBrief of the specified compaction input level.
@@ -382,6 +385,7 @@ class Compaction {
   // Compaction input files organized by level. Constant after construction
   const std::vector<CompactionInputFiles> inputs_;
   std::vector<std::pair<std::string, std::string>> cached_records_to_promote_;
+  std::vector<PromotedRange> cached_ranges_to_promoted_;
   int target_level_to_promote_;
 
   // A copy of inputs_, organized more closely in memory

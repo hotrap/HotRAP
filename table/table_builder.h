@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "db/dbformat.h"
+#include "db/promotion_cache.h"
 #include "db/table_properties_collector.h"
 #include "file/writable_file_writer.h"
 #include "options/cf_options.h"
@@ -176,6 +177,11 @@ class TableBuilder {
   // REQUIRES: key is after any previously added key according to comparator.
   // REQUIRES: Finish(), Abandon() have not been called
   virtual void Add(const Slice& key, const Slice& value) = 0;
+
+  virtual void WritePromotedRanges(
+      const std::vector<PromotedRange>& promoted_ranges) {
+    assert(false);
+  }
 
   // Return non-ok iff some error has been detected.
   virtual Status status() const = 0;

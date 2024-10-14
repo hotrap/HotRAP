@@ -188,6 +188,7 @@ class Block {
   // the key that is just pass the target key.
   DataBlockIter* NewDataIterator(const Comparator* raw_ucmp,
                                  SequenceNumber global_seqno,
+                                 bool is_user_key = false,
                                  DataBlockIter* iter = nullptr,
                                  Statistics* stats = nullptr,
                                  bool block_contents_pinned = false);
@@ -488,10 +489,11 @@ class DataBlockIter final : public BlockIter<Slice> {
                   SequenceNumber global_seqno,
                   BlockReadAmpBitmap* read_amp_bitmap,
                   bool block_contents_pinned,
-                  DataBlockHashIndex* data_block_hash_index) {
+                  DataBlockHashIndex* data_block_hash_index,
+                  bool is_user_key = false) {
     InitializeBase(raw_ucmp, data, restarts, num_restarts, global_seqno,
                    block_contents_pinned);
-    raw_key_.SetIsUserKey(false);
+    raw_key_.SetIsUserKey(is_user_key);
     read_amp_bitmap_ = read_amp_bitmap;
     last_bitmap_offset_ = current_ + 1;
     data_block_hash_index_ = data_block_hash_index;

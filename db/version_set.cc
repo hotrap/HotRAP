@@ -866,16 +866,18 @@ namespace {
 class LevelIterator final : public InternalIterator {
  public:
   // @param read_options Must outlive this iterator.
-  LevelIterator(TableCache* table_cache, const ReadOptions& read_options,
-                const FileOptions& file_options,
-                const InternalKeyComparator& icomparator,
-                const LevelFilesBrief* flevel,
-                const SliceTransform* prefix_extractor, bool should_sample,
-                HistogramImpl* file_read_hist, TableReaderCaller caller,
-                bool skip_filters, int level, RangeDelAggregator* range_del_agg,
-                const std::vector<AtomicCompactionUnitBoundary>*
-                    compaction_boundaries = nullptr,
-                bool allow_unprepared_value = false)
+  LevelIterator(
+      TableCache* table_cache, const ReadOptions& read_options,
+      const FileOptions& file_options, const InternalKeyComparator& icomparator,
+      const LevelFilesBrief* flevel, const SliceTransform* prefix_extractor,
+      bool should_sample, HistogramImpl* file_read_hist,
+      TableReaderCaller caller, bool skip_filters, int level,
+      RangeDelAggregator* range_del_agg,
+      std::map<std::string, PromotedRangeInfo, UserKeyCompare>* promoted_ranges = nullptr,
+      std::string* last_promoted = nullptr,
+      const std::vector<AtomicCompactionUnitBoundary>* compaction_boundaries =
+          nullptr,
+      bool allow_unprepared_value = false)
       : table_cache_(table_cache),
         read_options_(read_options),
         file_options_(file_options),
@@ -891,6 +893,8 @@ class LevelIterator final : public InternalIterator {
         file_index_(flevel_->num_files),
         level_(level),
         range_del_agg_(range_del_agg),
+        promoted_ranges_(promoted_ranges),
+        last_promoted_(last_promoted),
         pinned_iters_mgr_(nullptr),
         compaction_boundaries_(compaction_boundaries),
         is_next_read_sequential_(false) {
@@ -960,7 +964,8 @@ class LevelIterator final : public InternalIterator {
   bool SkipEmptyFileForward();
   void SkipEmptyFileBackward();
   void SetFileIterator(InternalIterator* iter);
-  void InitFileIterator(size_t new_file_index);
+  void InitFileIterator(size_t new_file_index,
+                        TableReader** table_reader_ptr = nullptr);
 
   const Slice& file_smallest_key(size_t file_index) {
     assert(file_index < flevel_->num_files);
@@ -974,7 +979,7 @@ class LevelIterator final : public InternalIterator {
                *read_options_.iterate_upper_bound, /*b_has_ts=*/false) >= 0;
   }
 
-  InternalIterator* NewFileIterator() {
+  InternalIterator* NewFileIterator(TableReader** table_reader_ptr = nullptr) {
     assert(file_index_ < flevel_->num_files);
     auto file_meta = flevel_->files[file_index_];
     if (should_sample_) {
@@ -990,11 +995,11 @@ class LevelIterator final : public InternalIterator {
     CheckMayBeOutOfLowerBound();
     return table_cache_->NewIterator(
         read_options_, file_options_, icomparator_, *file_meta.file_metadata,
-        range_del_agg_, prefix_extractor_,
-        nullptr /* don't need reference to table */, file_read_hist_, caller_,
+        range_del_agg_, prefix_extractor_, table_reader_ptr, file_read_hist_,
+        caller_,
         /*arena=*/nullptr, skip_filters_, level_,
         /*max_file_size_for_l0_meta_pin=*/0, smallest_compaction_key,
-        largest_compaction_key, allow_unprepared_value_);
+        largest_compaction_key, allow_unprepared_value_, promoted_ranges_);
   }
 
   // Check if current file being fully within iterate_lower_bound.
@@ -1030,8 +1035,11 @@ class LevelIterator final : public InternalIterator {
   bool allow_unprepared_value_;
   bool may_be_out_of_lower_bound_ = true;
   size_t file_index_;
+  TableReader* table_reader_ = nullptr;
   int level_;
   RangeDelAggregator* range_del_agg_;
+  std::map<std::string, PromotedRangeInfo, UserKeyCompare>* promoted_ranges_;
+  std::string* last_promoted_;
   IteratorWrapper file_iter_;  // May be nullptr
   PinnedIteratorsManager* pinned_iters_mgr_;
 
@@ -1059,7 +1067,12 @@ void LevelIterator::Seek(const Slice& target) {
   if (need_to_reseek) {
     TEST_SYNC_POINT("LevelIterator::Seek:BeforeFindFile");
     size_t new_file_index = FindFile(icomparator_, *flevel_, target);
-    InitFileIterator(new_file_index);
+    InitFileIterator(new_file_index, &table_reader_);
+  }
+  if (last_promoted_ != nullptr && file_iter_.iter()) {
+    assert(table_reader_);
+    table_reader_->LastPromoted(read_options_, ExtractUserKey(target),
+                                *last_promoted_);
   }
 
   if (file_iter_.iter() != nullptr) {
@@ -1223,7 +1236,8 @@ void LevelIterator::SetFileIterator(InternalIterator* iter) {
   }
 }
 
-void LevelIterator::InitFileIterator(size_t new_file_index) {
+void LevelIterator::InitFileIterator(size_t new_file_index,
+                                     TableReader** table_reader_ptr) {
   if (new_file_index >= flevel_->num_files) {
     file_index_ = new_file_index;
     SetFileIterator(nullptr);
@@ -1239,7 +1253,7 @@ void LevelIterator::InitFileIterator(size_t new_file_index) {
       // no need to change anything
     } else {
       file_index_ = new_file_index;
-      InternalIterator* iter = NewFileIterator();
+      InternalIterator* iter = NewFileIterator(table_reader_ptr);
       SetFileIterator(iter);
     }
   }
@@ -1586,7 +1600,8 @@ double VersionStorageInfo::GetEstimatedCompressionRatioAtLevel(
 
 InternalIterator* Version::NewIterForLevel(
     Arena* arena, const ReadOptions& read_options, const FileOptions& soptions,
-    int level, RangeDelAggregator* range_del_agg, bool allow_unprepared_value) {
+    int level, RangeDelAggregator* range_del_agg, bool allow_unprepared_value,
+    std::string* last_promoted) {
   auto* mem = arena->AllocateAligned(sizeof(LevelIterator));
   return new (mem) LevelIterator(
       cfd_->table_cache(), read_options, soptions, cfd_->internal_comparator(),
@@ -1594,7 +1609,7 @@ InternalIterator* Version::NewIterForLevel(
       mutable_cf_options_.prefix_extractor.get(), should_sample_file_read(),
       cfd_->internal_stats()->GetFileReadHist(level),
       TableReaderCaller::kUserIterator, IsFilterSkipped(level), level,
-      range_del_agg,
+      range_del_agg, nullptr, last_promoted,
       /*compaction_boundaries=*/nullptr, allow_unprepared_value);
 }
 
@@ -1602,7 +1617,8 @@ void Version::AddIteratorsForLevel(const ReadOptions& read_options,
                                    const FileOptions& soptions,
                                    MergeIteratorBuilder* merge_iter_builder,
                                    int level, RangeDelAggregator* range_del_agg,
-                                   bool allow_unprepared_value) {
+                                   bool allow_unprepared_value,
+                                   std::string* last_promoted) {
   assert(storage_info_.finalized_);
   if (level >= storage_info_.num_non_empty_levels()) {
     // This is an empty level
@@ -1627,7 +1643,8 @@ void Version::AddIteratorsForLevel(const ReadOptions& read_options,
           TableReaderCaller::kUserIterator, arena,
           /*skip_filters=*/false, /*level=*/0, max_file_size_for_l0_meta_pin_,
           /*smallest_compaction_key=*/nullptr,
-          /*largest_compaction_key=*/nullptr, allow_unprepared_value));
+          /*largest_compaction_key=*/nullptr, allow_unprepared_value, nullptr,
+          last_promoted));
     }
     if (should_sample) {
       // Count ones for every L0 files. This is done per iterator creation
@@ -1644,7 +1661,7 @@ void Version::AddIteratorsForLevel(const ReadOptions& read_options,
     // lazily.
     merge_iter_builder->AddIterator(
         NewIterForLevel(arena, read_options, soptions, level, range_del_agg,
-                        allow_unprepared_value));
+                        allow_unprepared_value, last_promoted));
   }
 }
 
@@ -6148,6 +6165,7 @@ class InternalIterAppendLevel : public InternalIterator {
 InternalIterator* VersionSet::MakeInputIterator(
     const ReadOptions& read_options, const Compaction* c,
     RangeDelAggregator* range_del_agg,
+    std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges,
     const FileOptions& file_options_compactions) {
   auto cfd = c->column_family_data();
 
@@ -6188,7 +6206,7 @@ InternalIterator* VersionSet::MakeInputIterator(
                      MaxFileSizeForL0MetaPin(*c->mutable_cf_options()),
                      /*smallest_compaction_key=*/nullptr,
                      /*largest_compaction_key=*/nullptr,
-                     /*allow_unprepared_value=*/false));
+                     /*allow_unprepared_value=*/false, &promoted_ranges));
         }
       } else {
         // Create concatenating iterator for the files from this level
@@ -6202,7 +6220,10 @@ InternalIterator* VersionSet::MakeInputIterator(
                 /*no per level latency histogram=*/nullptr,
                 TableReaderCaller::kCompaction, /*skip_filters=*/false,
                 /*level=*/static_cast<int>(c->level(which)), range_del_agg,
-                c->boundaries(which)));
+                c->input_version()->path_id(c->level(which)) == 0
+                    ? &promoted_ranges
+                    : nullptr,
+                nullptr, c->boundaries(which)));
       }
       if (promotion_cache_iter != nullptr &&
           c->level(which) == c->target_level_to_promote()) {

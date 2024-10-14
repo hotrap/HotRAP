@@ -59,6 +59,8 @@ Status BuildTable(
     InternalIterator* iter,
     std::vector<std::unique_ptr<FragmentedRangeTombstoneIterator>>
         range_del_iters,
+    std::vector<std::reference_wrapper<const std::vector<PromotedRange>>>
+        promoted_ranges,
     FileMetaData* meta, std::vector<BlobFileAddition>* blob_file_additions,
     std::vector<SequenceNumber> snapshots,
     SequenceNumber earliest_write_conflict_snapshot,
@@ -237,6 +239,11 @@ Status BuildTable(
                                        tombstone.seq_,
                                        tboptions.internal_comparator);
       }
+    }
+
+    if (!promoted_ranges.empty()) {
+      assert(promoted_ranges.size() == 1);
+      builder->WritePromotedRanges(promoted_ranges[0]);
     }
 
     TEST_SYNC_POINT("BuildTable:BeforeFinishBuildTable");

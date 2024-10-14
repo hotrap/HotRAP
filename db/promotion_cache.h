@@ -97,6 +97,33 @@ class InternalKeyCompare {
   InternalKeyComparator icmp_;
 };
 
+struct PromotedRange {
+  std::string first_user_key;
+  std::string last_user_key;
+  SequenceNumber sequence;
+  PromotedRange(const PromotedRange &a)
+      : first_user_key(a.first_user_key),
+        last_user_key(a.last_user_key),
+        sequence(a.sequence) {}
+  PromotedRange(std::string &&_first_user_key, std::string &&_last_user_key,
+                SequenceNumber _sequence)
+      : first_user_key(std::move(_first_user_key)),
+        last_user_key(std::move(_last_user_key)),
+        sequence(_sequence) {}
+  PromotedRange(const std::string &_first_user_key,
+                const std::string &_last_user_key, SequenceNumber _sequence)
+      : first_user_key(_first_user_key),
+        last_user_key(_last_user_key),
+        sequence(_sequence) {}
+};
+
+struct PromotedRangeInfo {
+  std::string first_user_key;
+  SequenceNumber sequence;
+  PromotedRangeInfo(std::string &&_first_user_key, SequenceNumber _sequence)
+      : first_user_key(std::move(_first_user_key)), sequence(_sequence) {}
+};
+
 struct RangeInfo {
   std::string first_user_key;
   SequenceNumber sequence;
@@ -141,7 +168,8 @@ class MutablePromotionCache {
                     std::vector<std::pair<std::string, ImmPCData>> &&keys);
 
   std::vector<std::pair<std::string, std::string>> TakeRange(
-      InternalStats *internal_stats, RALT *ralt, Slice smallest, Slice largest);
+      std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
+      RALT *ralt, Slice smallest, Slice largest);
 
  private:
   // REQUIRES: it->first >= range1.first_user_key

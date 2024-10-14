@@ -69,6 +69,8 @@ class TableCache {
   //                       not cached), depending on the CF options
   // @param skip_filters Disables loading/accessing the filter block
   // @param level The level this table is at, -1 for "not set / don't know"
+  // @param promoted_ranges Collect promoted ranges when compaction
+  // @param last_promoted Find the last promoted when doing range scan
   InternalIterator* NewIterator(
       const ReadOptions& options, const FileOptions& toptions,
       const InternalKeyComparator& internal_comparator,
@@ -77,7 +79,10 @@ class TableCache {
       HistogramImpl* file_read_hist, TableReaderCaller caller, Arena* arena,
       bool skip_filters, int level, size_t max_file_size_for_l0_meta_pin,
       const InternalKey* smallest_compaction_key,
-      const InternalKey* largest_compaction_key, bool allow_unprepared_value);
+      const InternalKey* largest_compaction_key, bool allow_unprepared_value,
+      std::map<std::string, PromotedRangeInfo, UserKeyCompare>*
+          promoted_ranges = nullptr,
+      std::string* last_promoted = nullptr);
 
   // If a seek to internal key "k" in specified file finds an entry,
   // call get_context->SaveValue() repeatedly until

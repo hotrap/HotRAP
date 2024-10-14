@@ -212,7 +212,9 @@ InternalIterator* TableCache::NewIterator(
     TableReaderCaller caller, Arena* arena, bool skip_filters, int level,
     size_t max_file_size_for_l0_meta_pin,
     const InternalKey* smallest_compaction_key,
-    const InternalKey* largest_compaction_key, bool allow_unprepared_value) {
+    const InternalKey* largest_compaction_key, bool allow_unprepared_value,
+    std::map<std::string, PromotedRangeInfo, UserKeyCompare>* promoted_ranges,
+    std::string* last_promoted) {
   PERF_TIMER_GUARD(new_table_iterator_nanos);
 
   Status s;
@@ -242,9 +244,9 @@ InternalIterator* TableCache::NewIterator(
       result = NewEmptyInternalIterator<Slice>(arena);
     } else {
       result = table_reader->NewIterator(options, prefix_extractor, arena,
-                                   skip_filters, caller,
-                                   file_options.compaction_readahead_size,
-                                   allow_unprepared_value);
+                                         skip_filters, caller,
+                                         file_options.compaction_readahead_size,
+                                         allow_unprepared_value, last_promoted);
     }
     if (handle != nullptr) {
       result->RegisterCleanup(&UnrefEntry, cache_, handle);
@@ -278,6 +280,55 @@ InternalIterator* TableCache::NewIterator(
         range_del_agg->AddTombstones(std::move(range_del_iter), smallest,
                                      largest);
       }
+    }
+  }
+  if (s.ok() && promoted_ranges) {
+    const Comparator* ucmp = icomparator.user_comparator();
+    for (const PromotedRange& promoted_range :
+         *table_reader->promoted_ranges()) {
+      auto it = promoted_ranges->lower_bound(promoted_range.first_user_key);
+      std::string first_user_key, last_user_key;
+      SequenceNumber sequence;
+      if (it != promoted_ranges->end() &&
+          ucmp->Compare(it->second.first_user_key,
+                        promoted_range.last_user_key) <= 0) {
+        // new first <= old last, old first <= new last
+        if (ucmp->Compare(it->first, promoted_range.last_user_key) < 0) {
+          // new first <= old last < new last
+          last_user_key = promoted_range.last_user_key;
+          if (ucmp->Compare(it->second.first_user_key,
+                            promoted_range.first_user_key) < 0) {
+            // old first < new first <= old last < new last
+            first_user_key = std::move(it->second.first_user_key);
+            sequence = std::max(it->second.sequence, promoted_range.sequence);
+          } else {
+            // new first <= old first <= old last < new last
+            first_user_key = promoted_range.first_user_key;
+            sequence = promoted_range.sequence;
+          }
+        } else {
+          // new first <= new last <= old last
+          if (ucmp->Compare(it->second.first_user_key,
+                            promoted_range.first_user_key) <= 0) {
+            // old first <= new first <= new last <= old last
+            continue;
+          } else {
+            // new first < old first <= new last <= old last
+            first_user_key = promoted_range.first_user_key;
+            last_user_key = it->first;
+            sequence = std::max(it->second.sequence, promoted_range.sequence);
+          }
+        }
+        it = promoted_ranges->erase(it);
+      } else {
+        first_user_key = promoted_range.first_user_key;
+        last_user_key = promoted_range.last_user_key;
+        sequence = promoted_range.sequence;
+      }
+      promoted_ranges->emplace_hint(
+          it, std::piecewise_construct,
+          std::forward_as_tuple(std::move(first_user_key)),
+          std::forward_as_tuple(std::move(last_user_key), sequence));
     }
   }
 

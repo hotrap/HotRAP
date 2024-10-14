@@ -665,7 +665,8 @@ class Version {
                                     const ReadOptions& read_options,
                                     const FileOptions& soptions, int level,
                                     RangeDelAggregator* range_del_agg,
-                                    bool allow_unprepared_value);
+                                    bool allow_unprepared_value,
+                                    std::string* last_promoted = nullptr);
 
   // @param read_options Must outlive any iterator built by
   // `merger_iter_builder`.
@@ -673,7 +674,8 @@ class Version {
                             const FileOptions& soptions,
                             MergeIteratorBuilder* merger_iter_builder,
                             int level, RangeDelAggregator* range_del_agg,
-                            bool allow_unprepared_value);
+                            bool allow_unprepared_value,
+                            std::string* last_promoted = nullptr);
 
   Status OverlapWithLevelIterator(const ReadOptions&, const FileOptions&,
                                   const Slice& smallest_user_key,
@@ -1252,6 +1254,7 @@ class VersionSet {
   InternalIterator* MakeInputIterator(
       const ReadOptions& read_options, const Compaction* c,
       RangeDelAggregator* range_del_agg,
+      std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges,
       const FileOptions& file_options_compactions);
 
   // Add all files listed in any live version to *live_table_files and

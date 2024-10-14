@@ -266,6 +266,7 @@ struct BlockBasedTableBuilder::Rep {
   // compressing any data blocks.
   std::vector<std::string> data_block_buffers;
   BlockBuilder range_del_block;
+  BlockBuilder promoted_range_block;
 
   InternalKeySliceTransform internal_prefix_transform;
   std::unique_ptr<IndexBuilder> index_builder;
@@ -419,6 +420,7 @@ struct BlockBasedTableBuilder::Rep {
                        : table_options.data_block_index_type,
                    table_options.data_block_hash_table_util_ratio),
         range_del_block(1 /* block_restart_interval */),
+        promoted_range_block(1),
         internal_prefix_transform(tbo.moptions.prefix_extractor.get()),
         compression_type(tbo.compression_type),
         sample_for_compression(tbo.moptions.sample_for_compression),
@@ -1006,6 +1008,19 @@ void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
     r->props.num_range_deletions++;
   } else if (value_type == kTypeMerge) {
     r->props.num_merge_operands++;
+  }
+}
+
+void BlockBasedTableBuilder::WritePromotedRanges(
+    const std::vector<PromotedRange>& promoted_ranges) {
+  Rep* r = rep_;
+  std::string value;
+  for (const PromotedRange& range : promoted_ranges) {
+    value.clear();
+    value.append((const char*)&range.sequence,
+                 (const char*)(&range.sequence + 1));
+    value.append(range.first_user_key);
+    r->promoted_range_block.Add(range.last_user_key, value);
   }
 }
 
@@ -1785,6 +1800,16 @@ void BlockBasedTableBuilder::WriteRangeDelBlock(
   }
 }
 
+void BlockBasedTableBuilder::WritePromotedRangeBlock(
+    MetaIndexBuilder* meta_index_builder) {
+  if (ok() && !rep_->promoted_range_block.empty()) {
+    BlockHandle handle;
+    WriteRawBlock(rep_->promoted_range_block.Finish(), kNoCompression, &handle,
+                  BlockType::kPromotedRanges);
+    meta_index_builder->Add(kPromotedRangeBlock, handle);
+  }
+}
+
 void BlockBasedTableBuilder::WriteFooter(BlockHandle& metaindex_block_handle,
                                          BlockHandle& index_block_handle) {
   Rep* r = rep_;
@@ -2008,6 +2033,7 @@ Status BlockBasedTableBuilder::Finish(double hot_per_byte) {
   WriteIndexBlock(&meta_index_builder, &index_block_handle);
   WriteCompressionDictBlock(&meta_index_builder);
   WriteRangeDelBlock(&meta_index_builder);
+  WritePromotedRangeBlock(&meta_index_builder);
   WritePropertiesBlock(&meta_index_builder);
   if (ok()) {
     // flush the meta index block

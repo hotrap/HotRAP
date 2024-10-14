@@ -14,6 +14,10 @@ void BlockBasedTableIterator::Seek(const Slice& target) { SeekImpl(&target); }
 void BlockBasedTableIterator::SeekToFirst() { SeekImpl(nullptr); }
 
 void BlockBasedTableIterator::SeekImpl(const Slice* target) {
+  if (last_promoted_) {
+    table_->LastPromoted(read_options_, ExtractUserKey(*target),
+                         *last_promoted_);
+  }
   is_out_of_bound_ = false;
   is_at_first_key_from_index_ = false;
   if (target && !CheckPrefixMayMatch(*target, IterDirection::kForward)) {
