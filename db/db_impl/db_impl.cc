@@ -1245,7 +1245,7 @@ Status DBImpl::SetDBOptions(
       file_options_for_compaction_ = fs_->OptimizeForCompactionTableWrite(
           file_options_for_compaction_, immutable_db_options_);
       versions_->ChangeFileOptions(mutable_db_options_);
-      //TODO(xiez): clarify why apply optimize for read to write options
+      // TODO(xiez): clarify why apply optimize for read to write options
       file_options_for_compaction_ = fs_->OptimizeForCompactionTableRead(
           file_options_for_compaction_, immutable_db_options_);
       file_options_for_compaction_.compaction_readahead_size =
@@ -1949,13 +1949,15 @@ class TieredIterator : public InternalIterator {
   void TryPromote() {
     RALT* ralt = super_version_->mutable_cf_options.ralt;
 
-    if (seek_user_key_.empty() || ralt == nullptr) return;
+    if (seek_user_key_.empty() || ralt == nullptr) {
+      assert(last_user_key_.empty());
+      return;
+    }
+    assert(!last_user_key_.empty());
     ralt->ScanResult(iter_ == fast_disk_it_);
-    if (records_to_promote_.empty()) {
-      if (!last_user_key_.empty()) {
-        ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
-                          0);
-      }
+    if (iter_ == fast_disk_it_) {
+      assert(records_to_promote_.empty());
+      ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_, 0);
       num_accessed_bytes_ = 0;
       return;
     }
@@ -2436,8 +2438,8 @@ std::vector<Status> DBImpl::MultiGet(
     std::string* timestamp = timestamps ? &(*timestamps)[keys_read] : nullptr;
 
     LookupKey lkey(keys[keys_read], consistent_seqnum, read_options.timestamp);
-    auto cfh =
-        static_cast_with_check<ColumnFamilyHandleImpl>(column_family[keys_read]);
+    auto cfh = static_cast_with_check<ColumnFamilyHandleImpl>(
+        column_family[keys_read]);
     SequenceNumber max_covering_tombstone_seq = 0;
     auto mgd_iter = multiget_cf_data.find(cfh->cfd()->GetID());
     assert(mgd_iter != multiget_cf_data.end());
@@ -3860,8 +3862,7 @@ SuperVersion* DBImpl::GetAndRefSuperVersion(uint32_t column_family_id) {
 void DBImpl::CleanupSuperVersion(SuperVersion* sv) {
   // Release SuperVersion
   if (sv->Unref()) {
-    bool defer_purge =
-            immutable_db_options().avoid_unnecessary_blocking_io;
+    bool defer_purge = immutable_db_options().avoid_unnecessary_blocking_io;
     {
       InstrumentedMutexLock l(&mutex_);
       sv->Cleanup();
@@ -5474,8 +5475,7 @@ Status DBImpl::VerifyChecksumInternal(const ReadOptions& read_options,
     }
   }
 
-  bool defer_purge =
-          immutable_db_options().avoid_unnecessary_blocking_io;
+  bool defer_purge = immutable_db_options().avoid_unnecessary_blocking_io;
   {
     InstrumentedMutexLock l(&mutex_);
     for (auto sv : sv_list) {
