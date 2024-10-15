@@ -1798,6 +1798,7 @@ class TieredIterator : public InternalIterator {
       const Comparator* ucmp =
           super_version_->current->cfd()->ioptions()->user_comparator;
       assert(ucmp->Compare(ikey.user_key, last_promoted_user_key_) <= 0);
+      RecordAccess();
       return;
     }
     prepare_merging_it();
