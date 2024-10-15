@@ -205,10 +205,12 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     uint64_t num_bytes = range_it->second.num_bytes;
     check_key_until(range_first);
     assert(range_it->second.count > 0);
+    bool should_promote =
+        range_it->second.count > 1 || ralt->IsHot(range_first, range_last);
     // Promoted ranges are stored in SSTables. So RALT is only responsible for
     // tracking hotness of ranges.
     ralt->AccessRange(range_first, range_last, num_bytes, 0);
-    if (range_it->second.count == 1 && !ralt->IsHot(range_first, range_last)) {
+    if (!should_promote) {
       RecordTick(stats, Tickers::ACCESSED_COLD_BYTES, num_bytes);
       while (key_it != candidates.end() &&
              ucmp->Compare((*key_it)->first, range_last) <= 0) {
