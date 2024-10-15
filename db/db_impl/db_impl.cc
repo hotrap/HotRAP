@@ -1946,6 +1946,8 @@ class TieredIterator : public InternalIterator {
       assert(records_to_promote_.empty());
       ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
                         sequence_);
+      seek_user_key_ = std::string();
+      last_user_key_ = std::string();
       num_accessed_bytes_ = 0;
       return;
     }
