@@ -1948,8 +1948,8 @@ class TieredIterator : public InternalIterator {
 
   void TryPromote() {
     RALT* ralt = super_version_->mutable_cf_options.ralt;
-
-    if (seek_user_key_.empty() || ralt == nullptr) {
+    if (ralt == nullptr) return;
+    if (seek_user_key_.empty()) {
       assert(last_user_key_.empty());
       return;
     }
