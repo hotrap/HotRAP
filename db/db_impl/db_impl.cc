@@ -1936,13 +1936,16 @@ class TieredIterator : public InternalIterator {
   void TryPromote() {
     RALT* ralt = super_version_->mutable_cf_options.ralt;
 
-    if (seek_user_key_.empty() || ralt == nullptr) return;
+    if (seek_user_key_.empty() || ralt == nullptr) {
+      assert(last_user_key_.empty());
+      return;
+    }
+    assert(!last_user_key_.empty());
     ralt->ScanResult(iter_ == fast_disk_it_);
-    if (records_to_promote_.empty()) {
-      if (!last_user_key_.empty()) {
-        ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
-                          sequence_);
-      }
+    if (iter_ == fast_disk_it_) {
+      assert(records_to_promote_.empty());
+      ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
+                        sequence_);
       num_accessed_bytes_ = 0;
       return;
     }
