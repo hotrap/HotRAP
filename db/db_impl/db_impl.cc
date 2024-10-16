@@ -1783,8 +1783,6 @@ class TieredIterator : public InternalIterator {
     if (!last_promoted_user_key_.empty()) {
       iter_ = fast_disk_it_;
       iter_->Seek(key);
-      // TODO(hotrap): Not needed if marked promoted in RALT after being
-      // promoted.
       SeekInSlowDiskIfNeeded();
       return;
     }
