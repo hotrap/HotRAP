@@ -1781,24 +1781,21 @@ class TieredIterator : public InternalIterator {
   void SeekForPrev(const Slice& target) final override { assert(false); }
   void Prev() final override { assert(false); }
 
-  void Seek(const Slice& key) final override {
+  void Seek(const Slice& internal_key) final override {
     TryPromote();
 
     RALT* ralt = super_version_->mutable_cf_options.ralt;
 
     ParsedInternalKey ikey;
-    Status s = ParseInternalKey(key, &ikey, false);
+    Status s = ParseInternalKey(internal_key, &ikey, false);
     assert(s.ok());
     seek_user_key_.assign(ikey.user_key.data(), ikey.user_key.size());
 
-    fast_disk_it_->Seek(key);
+    fast_disk_it_->Seek(internal_key);
     if (!last_promoted_user_key_.empty()) {
       iter_ = fast_disk_it_;
-      assert(Valid());
-      const Comparator* ucmp =
-          super_version_->current->cfd()->ioptions()->user_comparator;
-      assert(ucmp->Compare(ikey.user_key, last_promoted_user_key_) <= 0);
-      RecordAccess();
+      // It's possible that the last key in the promoted range has been deleted.
+      SeekInSlowDiskIfNeeded();
       return;
     }
     prepare_merging_it();
