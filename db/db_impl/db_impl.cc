@@ -1897,11 +1897,6 @@ class TieredIterator : public InternalIterator {
     assert(s.ok());
     RecordAccess(ucmp, internal_key, ikey);
   }
-  void SeekInSlowDisk() {
-    Version* version = super_version_->current;
-    const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
-    SeekInSlowDisk(ucmp);
-  }
   void SeekInSlowDiskIfNeeded() {
     Version* version = super_version_->current;
     const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
@@ -1917,7 +1912,7 @@ class TieredIterator : public InternalIterator {
       SeekInSlowDisk(ucmp);
       return;
     }
-    RecordAccess();
+    RecordAccess(ucmp, internal_key, ikey);
   }
 
   void RecordAccess(const Comparator* ucmp, Slice internal_key,
@@ -1959,8 +1954,8 @@ class TieredIterator : public InternalIterator {
     if (iter_ == fast_disk_it_) {
       assert(records_to_promote_.empty());
       ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_, 0);
-      seek_user_key_ = std::string();
-      last_user_key_ = std::string();
+      seek_user_key_.clear();
+      last_user_key_.clear();
       num_accessed_bytes_ = 0;
       return;
     }
