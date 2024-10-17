@@ -28,7 +28,6 @@
 #endif
 
 #include <autotuner.h>
-#include <viscnts.h>
 
 #include <atomic>
 #include <cinttypes>

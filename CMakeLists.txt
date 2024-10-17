@@ -1404,7 +1404,7 @@ if(WITH_BENCHMARK_TOOLS)
     tools/db_bench.cc
     tools/db_bench_tool.cc)
   target_link_libraries(db_bench${ARTIFACT_SUFFIX}
-    ${ROCKSDB_LIB} ${THIRDPARTY_LIBS} viscnts autotuner)
+    ${ROCKSDB_LIB} ${THIRDPARTY_LIBS} ralt autotuner)
   target_link_directories(db_bench${ARTIFACT_SUFFIX} PUBLIC ${RALT_LIB_DIR})
   target_include_directories(db_bench${ARTIFACT_SUFFIX} PUBLIC
     ${RALT_INCLUDE_DIR})

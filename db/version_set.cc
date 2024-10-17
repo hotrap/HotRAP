@@ -2180,7 +2180,7 @@ bool Version::GetInFile(EnvGet& env_get, GetContext& get_context,
       break;
     case GetContext::kMerge:
       // TODO: update per-level perfcontext user_key_return_count for kMerge
-      // TODO: How to update VisCnts?
+      // TODO: How to update RALT?
       break;
     case GetContext::kFound:
       if (num_cache_data_miss > prev_num_cache_data_miss) {
