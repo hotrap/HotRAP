@@ -442,21 +442,21 @@ size_t MutablePromotionCache::InsertOneRange(
   Status s = ParseInternalKey(record_it->first, &ikey, false);
   assert(s.ok());
   std::string user_key = ikey.user_key.ToString();
-  std::deque<std::pair<SequenceNumber, std::string>> seq_value;
+  std::deque<std::pair<SequenceNumber, std::string>> seq_values;
   auto key_it = keys_.lower_bound(user_key);
   for (;;) {
-    seq_value.emplace_back(ikey.sequence, std::move(record_it->second));
+    seq_values.emplace_back(ikey.sequence, std::move(record_it->second));
     ++record_it;
     if (record_it != records.end()) {
       s = ParseInternalKey(record_it->first, &ikey, false);
       assert(s.ok());
       if (ucmp_->Compare(ikey.user_key, user_key) == 0) continue;
     }
-    MergeOneKeyInRange(key_it, std::move(user_key), std::move(seq_value),
+    MergeOneKeyInRange(key_it, std::move(user_key), std::move(seq_values),
                        sequence);
     if (record_it == records.end()) break;
     user_key = ikey.user_key.ToString();
-    seq_value = std::deque<std::pair<SequenceNumber, std::string>>();
+    seq_values = std::deque<std::pair<SequenceNumber, std::string>>();
   }
   return size_;
 }
@@ -600,31 +600,34 @@ void MutablePromotionCache::MergeOneKeyInRange(
                                              /*repeated_accessed=*/false,
                                              /*only_by_point_query=*/false));
   } else {
-    auto &seq_value = it->second.seq_value();
-    assert(!seq_value.empty());
-    auto it1 = seq_values.begin();
+    auto &saved_seq_values = it->second.seq_value();
+    assert(!saved_seq_values.empty());
+    auto new_it = seq_values.begin();
     // Insert new versions
-    while (it1 != seq_values.end() && it1->first > seq_value.front().first) {
-      size_ += user_key.size() + it1->second.size();
-      seq_value.emplace_front(it1->first, std::move(it1->second));
-      ++it1;
+    while (new_it != seq_values.end() &&
+           new_it->first > saved_seq_values.front().first) {
+      size_ += user_key.size() + new_it->second.size();
+      saved_seq_values.emplace_front(new_it->first, std::move(new_it->second));
+      ++new_it;
     }
     // Skip versions we already have
-    while (it1 != seq_values.end() && it1->first >= seq_value.back().first) {
-      ++it1;
+    while (new_it != seq_values.end() &&
+           new_it->first >= saved_seq_values.back().first) {
+      ++new_it;
     }
     // Drop stale versions
-    while (seq_value.size() >= 2 && seq_value.back().first < sequence) {
-      size_ -= user_key.size() + seq_value.back().second.size();
-      seq_value.pop_back();
+    while (saved_seq_values.size() >= 2 &&
+           saved_seq_values.back().first < sequence) {
+      size_ -= user_key.size() + saved_seq_values.back().second.size();
+      saved_seq_values.pop_back();
     }
     // Insert versions we don't have (possible if this key was inserted by a
     // point query)
-    while (it1 != seq_values.end() && it1->first >= sequence) {
+    while (new_it != seq_values.end() && new_it->first >= sequence) {
       assert(it->second.only_by_point_query());
-      size_ += user_key.size() + it1->second.size();
-      seq_value.emplace_back(it1->first, std::move(it1->second));
-      ++it1;
+      size_ += user_key.size() + new_it->second.size();
+      saved_seq_values.emplace_back(new_it->first, std::move(new_it->second));
+      ++new_it;
     }
     it->second.set_repeated_accessed(true);
     it->second.set_only_by_point_query(false);
