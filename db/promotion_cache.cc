@@ -612,23 +612,32 @@ void MutablePromotionCache::MergeOneKeyInRange(
     }
     // Skip versions we already have
     while (new_it != seq_values.end() &&
-           new_it->first >= saved_seq_values.back().first) {
+           new_it->first == saved_seq_values.back().first) {
       ++new_it;
     }
     // Drop stale versions
     while (saved_seq_values.size() >= 2 &&
-           saved_seq_values.back().first < sequence) {
+           saved_seq_values[saved_seq_values.size() - 2].first <= sequence) {
       size_ -= user_key.size() + saved_seq_values.back().second.size();
       saved_seq_values.pop_back();
     }
     // Insert versions we don't have (possible if this key was inserted by a
     // point query)
-    while (new_it != seq_values.end() && new_it->first >= sequence) {
+    while (new_it != seq_values.end()) {
+      if (new_it->first <= sequence && !saved_seq_values.empty() &&
+          saved_seq_values.back().first <= sequence)
+        break;
       assert(it->second.only_by_point_query());
       size_ += user_key.size() + new_it->second.size();
       saved_seq_values.emplace_back(new_it->first, std::move(new_it->second));
       ++new_it;
     }
+    // Now there should be a visible version
+    assert(!saved_seq_values.empty());
+    assert(saved_seq_values.back().first <= sequence);
+    // There shouldn't be more than one visible version
+    assert(saved_seq_values.size() == 1 ||
+           saved_seq_values[saved_seq_values.size() - 2].first > sequence);
     it->second.set_repeated_accessed(true);
     it->second.set_only_by_point_query(false);
   }
