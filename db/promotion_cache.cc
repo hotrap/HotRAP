@@ -361,7 +361,6 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     SuperVersionContext svc(true);
     for (auto it : to_promote) {
       for (const auto &seq_value : it->second.seq_value) {
-        assert(seq_value.first > 0);
         Status s = m->Add(seq_value.first, kTypeValue, it->first,
                           seq_value.second, nullptr);
         if (!s.ok()) {
