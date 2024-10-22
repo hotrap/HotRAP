@@ -1798,7 +1798,7 @@ class TieredIterator : public InternalIterator {
   void Next() final override {
     assert(iter_->Valid());
     iter_->Next();
-    if (iter_ != fast_disk_it_) {
+    if (iter_ != fast_disk_it_ && iter_->Valid()) {
       RecordAccess();
       return;
     }
