@@ -418,6 +418,7 @@ size_t MutablePromotionCache::InsertOneRange(
     std::vector<std::pair<std::string, std::string>> &&records,
     std::string &&first_user_key, std::string &&last_user_key,
     SequenceNumber sequence, uint64_t num_bytes) {
+  assert(sequence > 0);
   auto it = ranges_.lower_bound(first_user_key);
   RangeInfo range{
       .first_user_key = std::move(first_user_key),
