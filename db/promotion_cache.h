@@ -153,6 +153,9 @@ class MutablePromotionCache {
       std::string &&user_key,
       std::deque<std::pair<SequenceNumber, std::string>> &&seq_values,
       SequenceNumber sequence);
+  void MarkNotOnlyByPointQuery(
+      std::map<std::string, PCData, UserKeyCompare>::iterator &it,
+      Slice range_last);
 
   const Comparator *ucmp_;
 

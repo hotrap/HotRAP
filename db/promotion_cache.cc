@@ -437,27 +437,29 @@ size_t MutablePromotionCache::InsertOneRange(
   }
 
   auto record_it = records.begin();
-  if (record_it == records.end()) return size_;
-  ParsedInternalKey ikey;
-  Status s = ParseInternalKey(record_it->first, &ikey, false);
-  assert(s.ok());
-  std::string user_key = ikey.user_key.ToString();
-  std::deque<std::pair<SequenceNumber, std::string>> seq_values;
-  auto key_it = keys_.lower_bound(user_key);
-  for (;;) {
-    seq_values.emplace_back(ikey.sequence, std::move(record_it->second));
-    ++record_it;
-    if (record_it != records.end()) {
-      s = ParseInternalKey(record_it->first, &ikey, false);
-      assert(s.ok());
-      if (ucmp_->Compare(ikey.user_key, user_key) == 0) continue;
+  auto key_it = keys_.lower_bound(new_range_first);
+  if (record_it != records.end()) {
+    ParsedInternalKey ikey;
+    Status s = ParseInternalKey(record_it->first, &ikey, false);
+    assert(s.ok());
+    std::string user_key = ikey.user_key.ToString();
+    std::deque<std::pair<SequenceNumber, std::string>> seq_values;
+    for (;;) {
+      seq_values.emplace_back(ikey.sequence, std::move(record_it->second));
+      ++record_it;
+      if (record_it != records.end()) {
+        s = ParseInternalKey(record_it->first, &ikey, false);
+        assert(s.ok());
+        if (ucmp_->Compare(ikey.user_key, user_key) == 0) continue;
+      }
+      MergeOneKeyInRange(key_it, std::move(user_key), std::move(seq_values),
+                         sequence);
+      if (record_it == records.end()) break;
+      user_key = ikey.user_key.ToString();
+      seq_values = std::deque<std::pair<SequenceNumber, std::string>>();
     }
-    MergeOneKeyInRange(key_it, std::move(user_key), std::move(seq_values),
-                       sequence);
-    if (record_it == records.end()) break;
-    user_key = ikey.user_key.ToString();
-    seq_values = std::deque<std::pair<SequenceNumber, std::string>>();
   }
+  MarkNotOnlyByPointQuery(key_it, new_range_last);
   return size_;
 }
 void MutablePromotionCache::InsertRanges(
@@ -493,7 +495,7 @@ void MutablePromotionCache::InsertRanges(
                                   new_key_it->second.repeated_accessed,
                                   /*only_by_point_query=*/true));
       } else {
-        assert(key_it->second.only_by_point_query());
+        // key_it may be in a range
         key_it->second.set_repeated_accessed(true);
       }
       ++new_key_it;
@@ -512,6 +514,11 @@ void MutablePromotionCache::InsertRanges(
     const std::string &merged_range_last = range_it->first;
     SequenceNumber merged_range_sequence = range_it->second.sequence;
     insert_keys_until(merged_range_first);
+    while (key_it != keys_.end() &&
+           ucmp_->Compare(key_it->first, merged_range_first) < 0) {
+      // key_it may be in a range
+      ++key_it;
+    }
     while (new_key_it != keys.end() &&
            ucmp_->Compare(new_key_it->first, merged_range_last) <= 0) {
       assert(!new_key_it->second.only_by_point_query);
@@ -520,6 +527,7 @@ void MutablePromotionCache::InsertRanges(
                          merged_range_sequence);
       ++new_key_it;
     }
+    MarkNotOnlyByPointQuery(key_it, merged_range_last);
   }
   insert_keys_until(Slice(nullptr, 0));
 }
@@ -582,12 +590,14 @@ void MutablePromotionCache::MergeRange(
   it =
       ranges_.emplace_hint(it, std::move(new_range_last), std::move(new_range));
 }
+// REQUIRES: it->first is in range
 void MutablePromotionCache::MergeOneKeyInRange(
     std::map<std::string, PCData, UserKeyCompare>::iterator &it,
     std::string &&user_key,
     std::deque<std::pair<SequenceNumber, std::string>> &&seq_values,
     SequenceNumber sequence) {
   while (it != keys_.end() && ucmp_->Compare(it->first, user_key) < 0) {
+    it->second.set_only_by_point_query(false);
     ++it;
   }
   if (it == keys_.end() || ucmp_->Compare(it->first, user_key) > 0) {
@@ -640,6 +650,14 @@ void MutablePromotionCache::MergeOneKeyInRange(
            saved_seq_values[saved_seq_values.size() - 2].first > sequence);
     it->second.set_repeated_accessed(true);
     it->second.set_only_by_point_query(false);
+  }
+}
+void MutablePromotionCache::MarkNotOnlyByPointQuery(
+    std::map<std::string, PCData, UserKeyCompare>::iterator &it,
+    Slice range_last) {
+  while (it != keys_.end() && ucmp_->Compare(it->first, range_last) <= 0) {
+    it->second.set_only_by_point_query(false);
+    ++it;
   }
 }
 
