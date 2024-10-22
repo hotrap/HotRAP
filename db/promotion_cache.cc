@@ -388,13 +388,14 @@ void PromotionCache::check(CheckerQueueElem &elem) {
 size_t MutablePromotionCache::Insert(std::string &&user_key,
                                      SequenceNumber sequence,
                                      std::string &&value) {
+  auto range_it = ranges_.lower_bound(user_key);
+  if (range_it != ranges_.end() &&
+      ucmp_->Compare(range_it->second.first_user_key, user_key) <= 0) {
+    range_it->second.count += 1;
+    return size_;
+  }
   auto it = keys_.lower_bound(user_key);
   if (it == keys_.end() || ucmp_->Compare(it->first, user_key) != 0) {
-    // It's definitely not contained by a range.
-    auto range_it = ranges_.lower_bound(user_key);
-    assert(range_it == ranges_.end() ||
-           ucmp_->Compare(range_it->second.first_user_key, user_key) > 0);
-
     size_ += user_key.size() + value.size();
     std::deque<std::pair<SequenceNumber, std::string>> seq_value{
         {sequence, std::move(value)}};
@@ -404,11 +405,10 @@ size_t MutablePromotionCache::Insert(std::string &&user_key,
                                              /*repeated_accessed=*/false,
                                              /*only_by_point_query=*/true));
   } else {
-    if (it->second.only_by_point_query()) {
-      const auto &seq_value = it->second.seq_value();
-      assert(seq_value.size() == 1);
-      assert(seq_value[0].first == sequence);
-    }
+    assert(it->second.only_by_point_query());
+    const auto &seq_value = it->second.seq_value();
+    assert(seq_value.size() == 1);
+    assert(seq_value[0].first == sequence);
     it->second.set_repeated_accessed(true);
   }
   return size_;
