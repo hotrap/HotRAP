@@ -26,7 +26,8 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
       std::unique_ptr<InternalIteratorBase<IndexValue>>&& index_iter,
       bool check_filter, bool need_upper_bound_check,
       const SliceTransform* prefix_extractor, TableReaderCaller caller,
-      size_t compaction_readahead_size = 0, bool allow_unprepared_value = false)
+      size_t compaction_readahead_size = 0, bool allow_unprepared_value = false,
+      std::string* last_promoted = nullptr)
       : index_iter_(std::move(index_iter)),
         table_(table),
         read_options_(read_options),
@@ -37,6 +38,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
         lookup_context_(caller),
         block_prefetcher_(compaction_readahead_size),
         allow_unprepared_value_(allow_unprepared_value),
+        last_promoted_(last_promoted),
         block_iter_points_to_real_block_(false),
         check_filter_(check_filter),
         need_upper_bound_check_(need_upper_bound_check) {}
@@ -219,6 +221,7 @@ class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   BlockPrefetcher block_prefetcher_;
 
   const bool allow_unprepared_value_;
+  std::string* last_promoted_;
   // True if block_iter_ is initialized and points to the same block
   // as index iterator.
   bool block_iter_points_to_real_block_;

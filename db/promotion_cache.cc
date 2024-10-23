@@ -205,8 +205,12 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     uint64_t num_bytes = range_it->second.num_bytes;
     check_key_until(range_first);
     assert(range_it->second.count > 0);
-    if (range_it->second.count == 1 && !ralt->IsHot(range_first, range_last)) {
-      ralt->AccessRange(range_first, range_last, num_bytes, 0);
+    bool should_promote =
+        range_it->second.count > 1 || ralt->IsHot(range_first, range_last);
+    // Promoted ranges are stored in SSTables. So RALT is only responsible for
+    // tracking hotness of ranges.
+    ralt->AccessRange(range_first, range_last, num_bytes, 0);
+    if (!should_promote) {
       RecordTick(stats, Tickers::ACCESSED_COLD_BYTES, num_bytes);
       while (key_it != candidates.end() &&
              ucmp->Compare((*key_it)->first, range_last) <= 0) {
@@ -356,6 +360,8 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     // No need to SetNextLogNumber, because we don't delete any log file
     MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0,
                                             std::move(cache.ranges));
+    // FIXME(hotrap): Promoted ranges in SSTables above the last level in FD
+    // should be retained unconditionally.
     m->Ref();
     autovector<MemTable *> memtables_to_free;
     SuperVersionContext svc(true);
@@ -749,8 +755,10 @@ void PromotionCache::SwitchMutablePromotionCache(
   signal_check_.notify_one();
 }
 std::vector<std::pair<std::string, std::string>>
-MutablePromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
+MutablePromotionCache::TakeRange(std::vector<PromotedRange> &ranges,
+                                 InternalStats *internal_stats, RALT *ralt,
                                  Slice smallest, Slice largest) {
+  assert(ranges.empty());
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<std::string, std::string>> ret;
@@ -819,9 +827,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
                         range_it->second.num_bytes, 0);
       erase_keys_in_range(range_last);
     } else {
-      // FIXME(hotrap): AccessRange after installing results
-      ralt->AccessRange(range_first, range_last, range_it->second.num_bytes,
-                        range_it->second.sequence);
+      ralt->AccessRange(range_first, range_last, range_it->second.num_bytes, 0);
+      ranges.emplace_back(range_first, range_last, range_it->second.sequence);
       while (key_it != keys_.end()) {
         const std::string &user_key = key_it->first;
         if (ucmp_->Compare(user_key, range_last) > 0) {

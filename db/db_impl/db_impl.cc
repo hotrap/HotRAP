@@ -1245,7 +1245,7 @@ Status DBImpl::SetDBOptions(
       file_options_for_compaction_ = fs_->OptimizeForCompactionTableWrite(
           file_options_for_compaction_, immutable_db_options_);
       versions_->ChangeFileOptions(mutable_db_options_);
-      //TODO(xiez): clarify why apply optimize for read to write options
+      // TODO(xiez): clarify why apply optimize for read to write options
       file_options_for_compaction_ = fs_->OptimizeForCompactionTableRead(
           file_options_for_compaction_, immutable_db_options_);
       file_options_for_compaction_.compaction_readahead_size =
@@ -1724,13 +1724,12 @@ class Merge2Iters : public InternalIteratorBase<std::pair<size_t, Slice>> {
 
 class TieredIterator : public InternalIterator {
  public:
-  TieredIterator(InternalIterator* fast_disk_it, Arena* arena,
+  TieredIterator(Arena* arena, MergeIteratorBuilder& merge_iter_builder,
                  SequenceNumber sequence, size_t first_level_in_slow_disk,
                  DBImpl& db, const ReadOptions& read_options,
                  SuperVersion* super_version, const FileOptions& file_options,
                  RangeDelAggregator* range_del_agg, bool allow_unprepared_value)
-      : fast_disk_it_(fast_disk_it),
-        arena_(arena),
+      : arena_(arena),
         sequence_(sequence),
         first_level_in_slow_disk_(first_level_in_slow_disk),
         db_(db),
@@ -1739,11 +1738,24 @@ class TieredIterator : public InternalIterator {
         file_options_(file_options),
         range_del_agg_(range_del_agg),
         allow_unprepared_value_(allow_unprepared_value),
-        iter_(fast_disk_it_),
         slow_disk_it_(nullptr),
         merging_it_with_src_(nullptr),
         merging_it_(nullptr),
-        num_accessed_bytes_(0) {}
+        num_accessed_bytes_(0) {
+    Version* version = super_version_->current;
+    VersionStorageInfo* storage_info = version->storage_info();
+
+    // We don't want to add a new interface to InternalIterators to get the last
+    // promoted key. So we pass the pointer of last_promoted_user_key_ to the
+    // iterators and they will set last_promoted_user_key_ when Seek.
+    for (size_t level = 0; level < first_level_in_slow_disk_; ++level) {
+      version->AddIteratorsForLevel(
+          read_options, file_options_, &merge_iter_builder, level,
+          range_del_agg, allow_unprepared_value, &last_promoted_user_key_);
+    }
+    fast_disk_it_ = merge_iter_builder.Finish();
+    iter_ = fast_disk_it_;
+  }
   ~TieredIterator() {
     TryPromote();
     if (merging_it_ != nullptr) {
@@ -1769,29 +1781,30 @@ class TieredIterator : public InternalIterator {
   void SeekForPrev(const Slice& target) final override { assert(false); }
   void Prev() final override { assert(false); }
 
-  void Seek(const Slice& key) final override {
+  void Seek(const Slice& internal_key) final override {
     TryPromote();
 
     RALT* ralt = super_version_->mutable_cf_options.ralt;
 
     ParsedInternalKey ikey;
-    Status s = ParseInternalKey(key, &ikey, false);
+    Status s = ParseInternalKey(internal_key, &ikey, false);
     assert(s.ok());
     seek_user_key_.assign(ikey.user_key.data(), ikey.user_key.size());
 
-    last_promoted_user_key_ = ralt->LastPromoted(ikey.user_key, sequence_);
+    fast_disk_it_->Seek(internal_key);
     if (!last_promoted_user_key_.empty()) {
       iter_ = fast_disk_it_;
-      iter_->Seek(key);
+      // It's possible that the last key in the promoted range has been deleted.
       SeekInSlowDiskIfNeeded();
       return;
     }
     prepare_merging_it();
-    iter_ = merging_it_;
     // Make sure that all newer versions of seek_user_key will be promoted.
     InternalKey k;
     k.SetMinPossibleForUserKey(ikey.user_key);
-    iter_->Seek(k.Encode());
+    slow_disk_it_->Seek(k.Encode());
+    merging_it_with_src_->rebuild();
+    iter_ = merging_it_;
     RecordAccess();
   }
 
@@ -1940,8 +1953,7 @@ class TieredIterator : public InternalIterator {
     ralt->ScanResult(iter_ == fast_disk_it_);
     if (iter_ == fast_disk_it_) {
       assert(records_to_promote_.empty());
-      ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_,
-                        sequence_);
+      ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_, 0);
       seek_user_key_.clear();
       last_user_key_.clear();
       num_accessed_bytes_ = 0;
@@ -1978,7 +1990,6 @@ class TieredIterator : public InternalIterator {
   static constexpr size_t kSrcFastDisk = 0;
   static constexpr size_t kSrcSlowDisk = 1;
 
-  InternalIterator* fast_disk_it_;
   Arena* arena_;
   SequenceNumber sequence_;
   size_t first_level_in_slow_disk_;
@@ -1989,12 +2000,13 @@ class TieredIterator : public InternalIterator {
   RangeDelAggregator* range_del_agg_;
   bool allow_unprepared_value_;
 
+  std::string last_promoted_user_key_;
+  InternalIterator* fast_disk_it_;
   InternalIterator* iter_;
   InternalIterator* slow_disk_it_;
   Merge2Iters* merging_it_with_src_;
   IgnoreSource* merging_it_;
 
-  std::string last_promoted_user_key_;
   std::vector<std::pair<std::string, std::string>> records_to_promote_;
   std::string seek_user_key_;
   std::string last_user_key_;
@@ -2045,22 +2057,25 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
       VersionStorageInfo* storage_info = version->storage_info();
       RALT* ralt = super_version->mutable_cf_options.ralt;
 
-      int level = 0;
-      for (; level < storage_info->num_non_empty_levels(); level++) {
-        if (version->path_id(level) == 1) {
-          break;
-        }
-        version->AddIteratorsForLevel(read_options, file_options_,
-                                      &merge_iter_builder, level, range_del_agg,
-                                      allow_unprepared_value);
-      }
-      internal_iter = merge_iter_builder.Finish();
-      if (level < storage_info->num_non_empty_levels()) {
+      int first_level_in_sd = 0;
+      for (; first_level_in_sd < storage_info->num_non_empty_levels() &&
+             version->path_id(first_level_in_sd) == 0;
+           ++first_level_in_sd)
+        ;
+      if (first_level_in_sd < storage_info->num_non_empty_levels()) {
         auto* mem = arena->AllocateAligned(sizeof(TieredIterator));
-        internal_iter = new (mem)
-            TieredIterator(internal_iter, arena, sequence, level, *this,
-                           read_options, super_version, file_options_,
-                           range_del_agg, allow_unprepared_value);
+        internal_iter = new (mem) TieredIterator(
+            arena, merge_iter_builder, sequence, first_level_in_sd, *this,
+            read_options, super_version, file_options_, range_del_agg,
+            allow_unprepared_value);
+      } else {
+        for (int level = 0; level < storage_info->num_non_empty_levels();
+             level++) {
+          version->AddIteratorsForLevel(read_options, file_options_,
+                                        &merge_iter_builder, level,
+                                        range_del_agg, allow_unprepared_value);
+        }
+        internal_iter = merge_iter_builder.Finish();
       }
     } else {
       internal_iter = merge_iter_builder.Finish();
@@ -2068,7 +2083,7 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
     IterState* cleanup =
         new IterState(this, &mutex_, super_version,
                       read_options.background_purge_on_iterator_cleanup ||
-                      immutable_db_options_.avoid_unnecessary_blocking_io);
+                          immutable_db_options_.avoid_unnecessary_blocking_io);
     internal_iter->RegisterCleanup(CleanupIteratorState, cleanup, nullptr);
 
     return internal_iter;
@@ -2421,8 +2436,8 @@ std::vector<Status> DBImpl::MultiGet(
     std::string* timestamp = timestamps ? &(*timestamps)[keys_read] : nullptr;
 
     LookupKey lkey(keys[keys_read], consistent_seqnum, read_options.timestamp);
-    auto cfh =
-        static_cast_with_check<ColumnFamilyHandleImpl>(column_family[keys_read]);
+    auto cfh = static_cast_with_check<ColumnFamilyHandleImpl>(
+        column_family[keys_read]);
     SequenceNumber max_covering_tombstone_seq = 0;
     auto mgd_iter = multiget_cf_data.find(cfh->cfd()->GetID());
     assert(mgd_iter != multiget_cf_data.end());
@@ -3845,8 +3860,7 @@ SuperVersion* DBImpl::GetAndRefSuperVersion(uint32_t column_family_id) {
 void DBImpl::CleanupSuperVersion(SuperVersion* sv) {
   // Release SuperVersion
   if (sv->Unref()) {
-    bool defer_purge =
-            immutable_db_options().avoid_unnecessary_blocking_io;
+    bool defer_purge = immutable_db_options().avoid_unnecessary_blocking_io;
     {
       InstrumentedMutexLock l(&mutex_);
       sv->Cleanup();
@@ -5459,8 +5473,7 @@ Status DBImpl::VerifyChecksumInternal(const ReadOptions& read_options,
     }
   }
 
-  bool defer_purge =
-          immutable_db_options().avoid_unnecessary_blocking_io;
+  bool defer_purge = immutable_db_options().avoid_unnecessary_blocking_io;
   {
     InstrumentedMutexLock l(&mutex_);
     for (auto sv : sv_list) {

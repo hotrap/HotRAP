@@ -972,7 +972,8 @@ Block::Block(BlockContents&& contents, size_t read_amp_bytes_per_bit,
 
 DataBlockIter* Block::NewDataIterator(const Comparator* raw_ucmp,
                                       SequenceNumber global_seqno,
-                                      DataBlockIter* iter, Statistics* stats,
+                                      bool is_user_key, DataBlockIter* iter,
+                                      Statistics* stats,
                                       bool block_contents_pinned) {
   DataBlockIter* ret_iter;
   if (iter != nullptr) {
@@ -992,7 +993,8 @@ DataBlockIter* Block::NewDataIterator(const Comparator* raw_ucmp,
     ret_iter->Initialize(
         raw_ucmp, data_, restart_offset_, num_restarts_, global_seqno,
         read_amp_bitmap_.get(), block_contents_pinned,
-        data_block_hash_index_.Valid() ? &data_block_hash_index_ : nullptr);
+        data_block_hash_index_.Valid() ? &data_block_hash_index_ : nullptr,
+        is_user_key);
     if (read_amp_bitmap_) {
       if (read_amp_bitmap_->GetStatistics() != stats) {
         // DB changed the Statistics pointer, we need to notify read_amp_bitmap_

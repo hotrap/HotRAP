@@ -9,6 +9,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "db/promotion_cache.h"
 #include "db/range_tombstone_fragmenter.h"
 #include "db/table_properties_collector.h"
 #include "logging/event_logger.h"
@@ -54,6 +56,8 @@ extern Status BuildTable(
     InternalIterator* iter,
     std::vector<std::unique_ptr<FragmentedRangeTombstoneIterator>>
         range_del_iters,
+    std::vector<std::reference_wrapper<const std::vector<PromotedRange>>>
+        promoted_ranges,
     FileMetaData* meta, std::vector<BlobFileAddition>* blob_file_additions,
     std::vector<SequenceNumber> snapshots,
     SequenceNumber earliest_write_conflict_snapshot,

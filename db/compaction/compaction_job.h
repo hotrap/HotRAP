@@ -257,6 +257,7 @@ class CompactionJob {
       SubcompactionState::LevelOutput* level_output,
       CompactionRangeDelAggregator* range_del_agg,
       CompactionIterationStats* range_del_out_stats,
+      std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges,
       const Slice* next_table_min_key = nullptr);
   Status WriteCompactionOutputFile(
     const Status& input_status, SubcompactionState* sub_compact,

@@ -200,8 +200,8 @@ void PlainTableReader::SetupForCompaction() {
 InternalIterator* PlainTableReader::NewIterator(
     const ReadOptions& options, const SliceTransform* /* prefix_extractor */,
     Arena* arena, bool /*skip_filters*/, TableReaderCaller /*caller*/,
-    size_t /*compaction_readahead_size*/,
-    bool /* allow_unprepared_value */) {
+    size_t /*compaction_readahead_size*/, bool /* allow_unprepared_value */,
+    std::string*) {
   // Not necessarily used here, but make sure this has been initialized
   assert(table_properties_);
 

@@ -20,6 +20,7 @@
 #include "db/compaction/compaction_picker.h"
 #include "db/dbformat.h"
 #include "db/pinned_iterators_manager.h"
+#include "db/promotion_cache.h"
 #include "file/file_prefetch_buffer.h"
 #include "file/file_util.h"
 #include "file/random_access_file_reader.h"
@@ -672,6 +673,12 @@ Status BlockBasedTable::Open(
   }
   SetupCacheKeyPrefix(rep, db_session_id, file_num);
 
+  s = new_table->ReadPromotedRangeBlock(ro, prefetch_buffer.get(),
+                                        metaindex_iter.get(),
+                                        internal_comparator, &lookup_context);
+  if (!s.ok()) {
+    return s;
+  }
   s = new_table->ReadRangeDelBlock(ro, prefetch_buffer.get(),
                                    metaindex_iter.get(), internal_comparator,
                                    &lookup_context);
@@ -755,6 +762,7 @@ Status BlockBasedTable::PrefetchTail(
 Status BlockBasedTable::ReadPropertiesBlock(
     const ReadOptions& ro, FilePrefetchBuffer* prefetch_buffer,
     InternalIterator* meta_iter, const SequenceNumber largest_seqno) {
+  fprintf(stderr, "Read %s from meta block\n", kPropertiesBlock.c_str());
   Status s;
   BlockHandle handle;
   s = FindOptionalMetaBlock(meta_iter, kPropertiesBlock, &handle);
@@ -879,6 +887,44 @@ Status BlockBasedTable::ReadRangeDelBlock(
       rep_->fragmented_range_dels =
           std::make_shared<FragmentedRangeTombstoneList>(std::move(iter),
                                                          internal_comparator);
+    }
+  }
+  return s;
+}
+
+Status BlockBasedTable::ReadPromotedRangeBlock(
+    const ReadOptions& read_options, FilePrefetchBuffer* prefetch_buffer,
+    InternalIterator* meta_iter,
+    const InternalKeyComparator& internal_comparator,
+    BlockCacheLookupContext* lookup_context) {
+  Status s;
+  BlockHandle handle;
+  s = FindOptionalMetaBlock(meta_iter, kPromotedRangeBlock, &handle);
+  if (!s.ok()) {
+    ROCKS_LOG_WARN(rep_->ioptions.logger,
+                   "Error when seeking to promoted range block from file: %s",
+                   s.ToString().c_str());
+  } else if (!handle.IsNull()) {
+    std::unique_ptr<InternalIterator> iter(NewDataBlockIterator<DataBlockIter>(
+        read_options, handle, nullptr, BlockType::kPromotedRanges, nullptr,
+        lookup_context, Status(), prefetch_buffer));
+    assert(iter != nullptr);
+    s = iter->status();
+    if (!s.ok()) {
+      ROCKS_LOG_WARN(
+          rep_->ioptions.logger,
+          "Encountered error while reading data from promoted range block %s",
+          s.ToString().c_str());
+      IGNORE_STATUS_IF_ERROR(s);
+    } else {
+      for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+        const SequenceNumber* sequence =
+            (const SequenceNumber*)iter->value().data();
+        Slice first_user_key((const char*)(sequence + 1),
+                             iter->value().size() - sizeof(SequenceNumber));
+        rep_->promoted_ranges_.emplace_back(first_user_key.ToString(),
+                                            iter->key().ToString(), *sequence);
+      }
     }
   }
   return s;
@@ -1115,7 +1161,7 @@ Status BlockBasedTable::ReadMetaIndexBlock(
   *metaindex_block = std::move(metaindex);
   // meta block uses bytewise comparator.
   iter->reset(metaindex_block->get()->NewDataIterator(
-      BytewiseComparator(), kDisableGlobalSequenceNumber));
+      BytewiseComparator(), kDisableGlobalSequenceNumber, true));
   return Status::OK();
 }
 
@@ -1408,8 +1454,9 @@ DataBlockIter* BlockBasedTable::InitBlockIterator<DataBlockIter>(
     const Rep* rep, Block* block, BlockType block_type,
     DataBlockIter* input_iter, bool block_contents_pinned) {
   return block->NewDataIterator(rep->internal_comparator.user_comparator(),
-                                rep->get_global_seqno(block_type), input_iter,
-                                rep->ioptions.stats, block_contents_pinned);
+                                rep->get_global_seqno(block_type), false,
+                                input_iter, rep->ioptions.stats,
+                                block_contents_pinned);
 }
 
 template <>
@@ -2163,11 +2210,11 @@ bool BlockBasedTable::PrefixMayMatch(
   return may_match;
 }
 
-
 InternalIterator* BlockBasedTable::NewIterator(
     const ReadOptions& read_options, const SliceTransform* prefix_extractor,
     Arena* arena, bool skip_filters, TableReaderCaller caller,
-    size_t compaction_readahead_size, bool allow_unprepared_value) {
+    size_t compaction_readahead_size, bool allow_unprepared_value,
+    std::string* last_promoted) {
   BlockCacheLookupContext lookup_context{caller};
   bool need_upper_bound_check =
       read_options.auto_prefix_mode ||
@@ -2183,7 +2230,7 @@ InternalIterator* BlockBasedTable::NewIterator(
         !skip_filters && !read_options.total_order_seek &&
             prefix_extractor != nullptr,
         need_upper_bound_check, prefix_extractor, caller,
-        compaction_readahead_size, allow_unprepared_value);
+        compaction_readahead_size, allow_unprepared_value, last_promoted);
   } else {
     auto* mem = arena->AllocateAligned(sizeof(BlockBasedTableIterator));
     return new (mem) BlockBasedTableIterator(
@@ -2191,7 +2238,7 @@ InternalIterator* BlockBasedTable::NewIterator(
         !skip_filters && !read_options.total_order_seek &&
             prefix_extractor != nullptr,
         need_upper_bound_check, prefix_extractor, caller,
-        compaction_readahead_size, allow_unprepared_value);
+        compaction_readahead_size, allow_unprepared_value, last_promoted);
   }
 }
 
@@ -2206,6 +2253,31 @@ FragmentedRangeTombstoneIterator* BlockBasedTable::NewRangeTombstoneIterator(
   }
   return new FragmentedRangeTombstoneIterator(
       rep_->fragmented_range_dels, rep_->internal_comparator, snapshot);
+}
+
+const std::vector<PromotedRange>* BlockBasedTable::promoted_ranges() const {
+  return &rep_->promoted_ranges_;
+}
+
+void BlockBasedTable::LastPromoted(const ReadOptions& read_options,
+                                   Slice user_key,
+                                   std::string& last_promoted) const {
+  const Comparator* ucmp = rep_->ioptions.user_comparator;
+  auto it = std::lower_bound(
+      rep_->promoted_ranges_.begin(), rep_->promoted_ranges_.end(), user_key,
+      [ucmp](const PromotedRange& range, const Slice& k) {
+        return ucmp->Compare(range.last_user_key, k) < 0;
+      });
+  if (it == rep_->promoted_ranges_.end()) return;
+  // it->last_user_key >= user_key
+  if (read_options.snapshot != nullptr) {
+    if (it->sequence > read_options.snapshot->GetSequenceNumber()) return;
+  }
+  if (ucmp->Compare(it->first_user_key, user_key) > 0) return;
+  if (last_promoted.empty() ||
+      ucmp->Compare(it->last_user_key, last_promoted) > 0) {
+    last_promoted.assign(it->last_user_key);
+  }
 }
 
 bool BlockBasedTable::FullFilterKeyMayMatch(
@@ -3028,6 +3100,10 @@ BlockType BlockBasedTable::GetBlockTypeForMetaBlockByName(
     return BlockType::kHashIndexMetadata;
   }
 
+  if (meta_block_name == kPromotedRangeBlock) {
+    return BlockType::kPromotedRanges;
+  }
+
   assert(false);
   return BlockType::kInvalid;
 }
@@ -3369,6 +3445,9 @@ Status BlockBasedTable::DumpTable(WritableFile* out_file) {
                    << metaindex_iter->value().ToString(true) << "\n";
       } else if (metaindex_iter->key() == kRangeDelBlock) {
         out_stream << "  Range deletion block handle: "
+                   << metaindex_iter->value().ToString(true) << "\n";
+      } else if (metaindex_iter->key() == kPromotedRangeBlock) {
+        out_stream << "  Promoted range block handle: "
                    << metaindex_iter->value().ToString(true) << "\n";
       }
     }

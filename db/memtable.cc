@@ -64,12 +64,12 @@ ImmutableMemTableOptions::ImmutableMemTableOptions(
       info_log(ioptions.logger),
       allow_data_in_errors(ioptions.allow_data_in_errors) {}
 
-MemTable::MemTable(
-    const InternalKeyComparator& cmp, const ImmutableOptions& ioptions,
-    const MutableCFOptions& mutable_cf_options,
-    WriteBufferManager* write_buffer_manager, SequenceNumber latest_seq,
-    uint32_t column_family_id,
-    std::map<std::string, RangeInfo, UserKeyCompare>&& promoted_ranges)
+MemTable::MemTable(const InternalKeyComparator& cmp,
+                   const ImmutableOptions& ioptions,
+                   const MutableCFOptions& mutable_cf_options,
+                   WriteBufferManager* write_buffer_manager,
+                   SequenceNumber latest_seq, uint32_t column_family_id,
+                   std::vector<PromotedRange> &&promoted_ranges)
     : comparator_(cmp),
       moptions_(ioptions, mutable_cf_options),
       refs_(0),

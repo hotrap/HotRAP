@@ -1461,6 +1461,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     if (ucmp_->Compare(first, kv.ikey.user_key) <= 0) {
       return Decision::kStartLevel;
     } else {
+      // FIXME(hotrap): Remove promoted ranges that are not retained.
       return Decision::kNextLevel;
     }
   }
@@ -1628,11 +1629,14 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   read_options.iterate_lower_bound = start;
   read_options.iterate_upper_bound = end;
 
+  std::map<std::string, PromotedRangeInfo, UserKeyCompare> promoted_ranges(
+      UserKeyCompare{ucmp});
+
   // Although the v2 aggregator is what the level iterator(s) know about,
   // the AddTombstones calls will be propagated down to the v1 aggregator.
-  std::unique_ptr<InternalIterator> raw_input(
-      versions_->MakeInputIterator(read_options, sub_compact->compaction,
-                                   &range_del_agg, file_options_for_read_));
+  std::unique_ptr<InternalIterator> raw_input(versions_->MakeInputIterator(
+      read_options, sub_compact->compaction, &range_del_agg, promoted_ranges,
+      file_options_for_read_));
   InternalIterator* input = raw_input.get();
 
   IterKey start_ikey;
@@ -1881,9 +1885,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         next_key = &router_iter.key();
       }
       CompactionIterationStats range_del_out_stats;
-      status = FinishCompactionOutputFile(input->status(), sub_compact,
-                                          level_output, &range_del_agg,
-                                          &range_del_out_stats, next_key);
+      status = FinishCompactionOutputFile(
+          input->status(), sub_compact, level_output, &range_del_agg,
+          &range_del_out_stats, promoted_ranges, next_key);
       RecordDroppedKeys(range_del_out_stats,
                         &sub_compact->compaction_job_stats);
     }
@@ -1956,9 +1960,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   // close the output file.
   if (sub_compact->start_level_output.builder != nullptr) {
     CompactionIterationStats range_del_out_stats;
-    Status s = FinishCompactionOutputFile(status, sub_compact,
-                                          &sub_compact->start_level_output,
-                                          &range_del_agg, &range_del_out_stats);
+    Status s = FinishCompactionOutputFile(
+        status, sub_compact, &sub_compact->start_level_output, &range_del_agg,
+        &range_del_out_stats, promoted_ranges);
     if (!s.ok() && status.ok()) {
       status = s;
     }
@@ -1966,9 +1970,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
   if (sub_compact->latter_level_output.builder != nullptr) {
     CompactionIterationStats range_del_out_stats;
-    Status s = FinishCompactionOutputFile(status, sub_compact,
-                                          &sub_compact->latter_level_output,
-                                          &range_del_agg, &range_del_out_stats);
+    Status s = FinishCompactionOutputFile(
+        status, sub_compact, &sub_compact->latter_level_output, &range_del_agg,
+        &range_del_out_stats, promoted_ranges);
     if (!s.ok() && status.ok()) {
       status = s;
     }
@@ -2073,6 +2077,7 @@ Status CompactionJob::FinishCompactionOutputFile(
     SubcompactionState::LevelOutput* level_output,
     CompactionRangeDelAggregator* range_del_agg,
     CompactionIterationStats* range_del_out_stats,
+    std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges,
     const Slice* next_table_min_key /* = nullptr */) {
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_SYNC_FILE);
@@ -2248,6 +2253,28 @@ Status CompactionJob::FinishCompactionOutputFile(
       assert(smallest_ikey_seqnum == 0 ||
              ExtractInternalKeyFooter(meta->smallest.Encode()) !=
                  PackSequenceAndType(0, kTypeRangeDeletion));
+    }
+    if (level_output->path_id() == 0) {
+      if (lower_bound) {
+        // For simplicity, we just drop promoted ranges that cross the boundary
+        // of SSTables.
+        while (!promoted_ranges.empty() &&
+               ucmp->Compare(promoted_ranges.begin()->second.first_user_key,
+                             *lower_bound) < 0) {
+          promoted_ranges.erase(promoted_ranges.begin());
+        }
+      }
+      std::vector<PromotedRange> promoted_ranges_vec;
+      while (
+          !promoted_ranges.empty() &&
+          (upper_bound == nullptr ||
+           ucmp->Compare(promoted_ranges.begin()->first, *upper_bound) < 0)) {
+        auto range = promoted_ranges.begin();
+        promoted_ranges_vec.emplace_back(range->second.first_user_key,
+                                         range->first, range->second.sequence);
+        promoted_ranges.erase(range);
+      }
+      level_output->builder->WritePromotedRanges(promoted_ranges_vec);
     }
   }
   return WriteCompactionOutputFile(s, sub_compact, level_output);

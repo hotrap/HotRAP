@@ -11,6 +11,7 @@
 
 #include <cstdint>
 
+#include "db/promotion_cache.h"
 #include "db/range_tombstone_fragmenter.h"
 #include "file/filename.h"
 #include "table/block_based/block.h"
@@ -127,10 +128,16 @@ class BlockBasedTable : public TableReader {
                                 Arena* arena, bool skip_filters,
                                 TableReaderCaller caller,
                                 size_t compaction_readahead_size = 0,
-                                bool allow_unprepared_value = false) override;
+                                bool allow_unprepared_value = false,
+                                std::string* last_promoted = nullptr) override;
 
   FragmentedRangeTombstoneIterator* NewRangeTombstoneIterator(
       const ReadOptions& read_options) override;
+
+  const std::vector<PromotedRange>* promoted_ranges() const override;
+
+  void LastPromoted(const ReadOptions&, Slice user_key,
+                    std::string& last_promoted) const override;
 
   // @param skip_filters Disables loading/accessing the filter block
   Status Get(const ReadOptions& readOptions, const Slice& key,
@@ -463,6 +470,11 @@ class BlockBasedTable : public TableReader {
                            InternalIterator* meta_iter,
                            const InternalKeyComparator& internal_comparator,
                            BlockCacheLookupContext* lookup_context);
+  Status ReadPromotedRangeBlock(
+      const ReadOptions& read_options, FilePrefetchBuffer* prefetch_buffer,
+      InternalIterator* meta_iter,
+      const InternalKeyComparator& internal_comparator,
+      BlockCacheLookupContext* lookup_context);
   Status PrefetchIndexAndFilterBlocks(
       const ReadOptions& ro, FilePrefetchBuffer* prefetch_buffer,
       InternalIterator* meta_iter, BlockBasedTable* new_table,
@@ -623,6 +635,8 @@ struct BlockBasedTable::Rep {
   std::shared_ptr<const SliceTransform> table_prefix_extractor;
 
   std::shared_ptr<const FragmentedRangeTombstoneList> fragmented_range_dels;
+
+  std::vector<PromotedRange> promoted_ranges_;
 
   // If global_seqno is used, all Keys in this file will have the same
   // seqno with value `global_seqno`.

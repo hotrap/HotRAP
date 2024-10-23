@@ -9,6 +9,8 @@
 
 #pragma once
 #include <memory>
+
+#include "db/promotion_cache.h"
 #include "db/range_tombstone_fragmenter.h"
 #include "rocksdb/slice_transform.h"
 #include "table/get_context.h"
@@ -52,13 +54,22 @@ class TableReader {
   virtual InternalIterator* NewIterator(
       const ReadOptions& read_options, const SliceTransform* prefix_extractor,
       Arena* arena, bool skip_filters, TableReaderCaller caller,
-      size_t compaction_readahead_size = 0,
-      bool allow_unprepared_value = false) = 0;
+      size_t compaction_readahead_size = 0, bool allow_unprepared_value = false,
+      std::string* last_promoted = nullptr) = 0;
 
   virtual FragmentedRangeTombstoneIterator* NewRangeTombstoneIterator(
       const ReadOptions& /*read_options*/) {
     return nullptr;
   }
+
+  virtual const std::vector<PromotedRange>* promoted_ranges() const {
+    return nullptr;
+  }
+
+  virtual void LastPromoted(const ReadOptions& read_options, Slice key,
+                            std::string& last_promoted) const {
+    assert(false);
+  };
 
   // Given a key, return an approximate byte offset in the file where
   // the data for that key begins (or would begin if the key were

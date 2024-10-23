@@ -52,7 +52,8 @@ class CuckooTableReader: public TableReader {
                                 Arena* arena, bool skip_filters,
                                 TableReaderCaller caller,
                                 size_t compaction_readahead_size = 0,
-                                bool allow_unprepared_value = false) override;
+                                bool allow_unprepared_value = false,
+                                std::string* last_promoted = nullptr) override;
   void Prepare(const Slice& target) override;
 
   // Report an approximation of how much memory has been used.

@@ -167,6 +167,7 @@ class BlocklikeTraits<Block> {
         assert(false);
         FALLTHROUGH_INTENDED;
       case BlockType::kRangeDeletion:
+      case BlockType::kPromotedRanges:
         return GetCacheItemHelperForRole<Block, CacheEntryRole::kOtherBlock>();
     }
   }
