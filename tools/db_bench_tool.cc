@@ -2088,8 +2088,6 @@ class ReporterAgent {
         env_(env),
         total_ops_done_(0),
         last_report_(0),
-        last_get_hit_t0_(0),
-        last_get_hit_t1_(0),
         report_interval_secs_(report_interval_secs),
         stop_(false) {
     auto s = env_->NewWritableFile(fname, &report_file_, EnvOptions());
@@ -2141,7 +2139,11 @@ class ReporterAgent {
   std::string Header() const {
     std::string header = "secs_elapsed,interval_qps";
     if (dbstats) {
-      header += ",get_hit_t0,get_hit_t1";
+      for (Tickers ticker : tickers_to_report_) {
+        header += ',';
+        assert(ticker == TickersNameMap[ticker].first);
+        header += TickersNameMap[ticker].second;
+      }
     }
     if (options_.ralt) {
       header += ",real_hot_set_size,real_phy_size";
@@ -2170,12 +2172,12 @@ class ReporterAgent {
       std::string report = ToString(secs_elapsed) + "," +
                            ToString(total_ops_done_snapshot - last_report_);
       if (dbstats) {
-        uint64_t get_hit_t0 = dbstats->getTickerCount(GET_HIT_T0);
-        uint64_t get_hit_t1 = dbstats->getTickerCount(GET_HIT_T1);
-        report += ',' + std::to_string(get_hit_t0 - last_get_hit_t0_) + ',' +
-                  std::to_string(get_hit_t1 - last_get_hit_t1_);
-        last_get_hit_t0_ = get_hit_t0;
-        last_get_hit_t1_ = get_hit_t1;
+        for (Tickers ticker : tickers_to_report_) {
+          uint64_t cur = dbstats->getTickerCount(ticker);
+          uint64_t& last = last_ticker_[ticker];
+          report += ',' + std::to_string(cur - last);
+          last = cur;
+        }
       }
       if (options_.ralt) {
         ::RALT& ralt = *static_cast<::RALT*>(options_.ralt);
@@ -2240,9 +2242,17 @@ class ReporterAgent {
   std::unique_ptr<WritableFile> report_file_;
   std::atomic<int64_t> total_ops_done_;
   int64_t last_report_;
-  uint64_t last_get_hit_t0_;
-  uint64_t last_get_hit_t1_;
   const uint64_t report_interval_secs_;
+
+  const std::vector<Tickers> tickers_to_report_{GET_HIT_T0,
+                                                GET_HIT_T1,
+                                                PROMOTED_FLUSH_BYTES,
+                                                PROMOTED_2FDLAST_BYTES,
+                                                PROMOTED_2SDFRONT_BYTES,
+                                                RETAINED_BYTES,
+                                                ACCESSED_COLD_BYTES,
+                                                HAS_NEWER_VERSION_BYTES};
+  std::unordered_map<Tickers, uint64_t> last_ticker_;
 
   std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
       op_report_file_;

@@ -226,8 +226,18 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {COLD_FILE_READ_COUNT, "rocksdb.cold.file.read.count"},
     {LEADER_WRITE_COUNT, "rocksdb.leader.write.count"},
     {NON_LEADER_WRITE_COUNT, "rocksdb.nonleader.write.count"},
+    {ACCESSED_COLD_BYTES, "hotrap.accessed.cold.bytes"},
+    {HAS_NEWER_VERSION_BYTES, "hotrap.has_newer_version.bytes"},
     {PROMOTED_2FDLAST_BYTES, "hotrap.promoted.2fdlast.bytes"},
+    {PROMOTED_2SDFRONT_BYTES, "hotrap.promoted.2sdfront.bytes"},
     {PROMOTED_FLUSH_BYTES, "hotrap.promoted.flush.bytes"},
+    {RETAINED_BYTES, "hotrap.retained.bytes"},
+    {PROMOTION_CACHE_GET_HIT, "hotrap.promotion_cache.get.hit"},
+    {PROMOTION_CACHE_INSERT_FAIL_LOCK,
+     "hotrap.promotion_cache.insert.fail.lock"},
+    {PROMOTION_CACHE_INSERT_FAIL_COMPACTED,
+     "hotrap.promotion_cache.insert.fail.compacted"},
+    {PROMOTION_CACHE_INSERT, "hotrap.promotion_cache.insert"},
 };
 
 const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap = {
