@@ -762,7 +762,6 @@ Status BlockBasedTable::PrefetchTail(
 Status BlockBasedTable::ReadPropertiesBlock(
     const ReadOptions& ro, FilePrefetchBuffer* prefetch_buffer,
     InternalIterator* meta_iter, const SequenceNumber largest_seqno) {
-  fprintf(stderr, "Read %s from meta block\n", kPropertiesBlock.c_str());
   Status s;
   BlockHandle handle;
   s = FindOptionalMetaBlock(meta_iter, kPropertiesBlock, &handle);
