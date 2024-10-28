@@ -1898,8 +1898,7 @@ class TieredIterator : public InternalIterator {
     RecordAccess(ucmp, internal_key, ikey);
   }
   void SeekInSlowDiskIfNeeded() {
-    Version* version = super_version_->current;
-    const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
+    const Comparator* ucmp = super_version_->cfd->ioptions()->user_comparator;
     if (!Valid()) {
       SeekInSlowDisk(ucmp);
       return;
@@ -1931,8 +1930,7 @@ class TieredIterator : public InternalIterator {
   }
 
   void RecordAccess() {
-    Version* version = super_version_->current;
-    const Comparator* ucmp = version->cfd()->ioptions()->user_comparator;
+    const Comparator* ucmp = super_version_->cfd->ioptions()->user_comparator;
 
     Slice internal_key = key();
     ParsedInternalKey ikey;
@@ -1950,8 +1948,9 @@ class TieredIterator : public InternalIterator {
       return;
     }
     assert(!last_user_key_.empty());
-    ralt->ScanResult(iter_ == fast_disk_it_);
+    Statistics* stats = super_version_->cfd->ioptions()->stats;
     if (iter_ == fast_disk_it_) {
+      RecordTick(stats, SCAN_HIT_T0, 1);
       assert(records_to_promote_.empty());
       ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_, 0);
       seek_user_key_.clear();
@@ -1959,6 +1958,7 @@ class TieredIterator : public InternalIterator {
       num_accessed_bytes_ = 0;
       return;
     }
+    RecordTick(stats, SCAN_HIT_T1, 1);
 
     const PromotionCache& cache =
         super_version_->cfd->get_or_create_promotion_cache(

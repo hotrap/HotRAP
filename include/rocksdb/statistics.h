@@ -444,6 +444,10 @@ enum Tickers : uint32_t {
   // Successful insert
   PROMOTION_CACHE_INSERT,
 
+  // Range scan
+  SCAN_HIT_T0,
+  SCAN_HIT_T1,
+
   TICKER_ENUM_MAX
 };
 

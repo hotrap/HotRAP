@@ -144,7 +144,6 @@ class RALT : public Customizable {
 
   // For statistics
   virtual void HitLevel(int, rocksdb::Slice){};
-  virtual void ScanResult(bool){};
 };
 
 }  // namespace ROCKSDB_NAMESPACE

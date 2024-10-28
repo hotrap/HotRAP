@@ -2251,7 +2251,9 @@ class ReporterAgent {
                                                 PROMOTED_2SDFRONT_BYTES,
                                                 RETAINED_BYTES,
                                                 ACCESSED_COLD_BYTES,
-                                                HAS_NEWER_VERSION_BYTES};
+                                                HAS_NEWER_VERSION_BYTES,
+                                                SCAN_HIT_T0,
+                                                SCAN_HIT_T1};
   std::unordered_map<Tickers, uint64_t> last_ticker_;
 
   std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
