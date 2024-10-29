@@ -515,13 +515,20 @@ void MutablePromotionCache::InsertRanges(
   };
   while (new_range_it != ranges.end()) {
     std::string new_range_last = new_range_it->first;
-    RangeInfo new_range = std::move(new_range_it->second);
-    new_range_it = ranges.erase(new_range_it);
+    RangeInfo &&new_range = std::move(new_range_it->second);
     while (range_it != ranges_.end() &&
            ucmp_->Compare(range_it->first, new_range.first_user_key) < 0) {
+      insert_keys_until(range_it->second.first_user_key);
+      // Don't insert point query records if it's in a range
+      while (new_key_it != keys.end() &&
+             ucmp_->Compare(new_key_it->first, range_it->first) <= 0) {
+        assert(new_key_it->second.only_by_point_query);
+        ++new_key_it;
+      }
       ++range_it;
     }
     MergeRange(range_it, std::move(new_range_last), std::move(new_range));
+    new_range_it = ranges.erase(new_range_it);
     const std::string &merged_range_first = range_it->second.first_user_key;
     const std::string &merged_range_last = range_it->first;
     SequenceNumber merged_range_sequence = range_it->second.sequence;
