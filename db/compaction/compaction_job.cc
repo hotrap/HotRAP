@@ -1430,15 +1430,19 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
 
 class RouterIteratorFD2SD : public TraitIterator<Elem> {
  public:
-  RouterIteratorFD2SD(RALT& ralt, const Compaction& c,
-                      CompactionIterator& c_iter, Slice start, Bound end)
+  RouterIteratorFD2SD(
+      RALT& ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
+      Bound end,
+      std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges)
       : ralt_(ralt),
         c_(c),
         start_(start),
         end_(end),
+        promoted_ranges_(promoted_ranges),
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(c_iter),
         hot_iter_(ralt.LowerBound(start_)),
+        ranges_it_(promoted_ranges_.begin()),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
   ~RouterIteratorFD2SD() {
@@ -1461,7 +1465,6 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     if (ucmp_->Compare(first, kv.ikey.user_key) <= 0) {
       return Decision::kStartLevel;
     } else {
-      // FIXME(hotrap): Remove promoted ranges that are not retained.
       return Decision::kNextLevel;
     }
   }
@@ -1493,6 +1496,15 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
       }
     } else {
       assert(decision == Decision::kNextLevel);
+      while (ranges_it_ != promoted_ranges_.end() &&
+             ucmp_->Compare(ranges_it_->first, kv.ikey.user_key) < 0) {
+        ++ranges_it_;
+      }
+      if (ranges_it_ != promoted_ranges_.end() &&
+          ucmp_->Compare(ranges_it_->second.first_user_key, kv.ikey.user_key) <=
+              0) {
+        ranges_it_ = promoted_ranges_.erase(ranges_it_);
+      }
     }
     return make_optional<Elem>(decision, kv);
   }
@@ -1502,18 +1514,22 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   const Compaction& c_;
   const Slice start_;
   const Bound end_;
+  std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges_;
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
   Peekable<RALT::Iter> hot_iter_;
+  std::map<std::string, PromotedRangeInfo, UserKeyCompare>::iterator ranges_it_;
 
   size_t kvsize_promoted_;
   size_t kvsize_retained_;
 };
 class RouterIterator {
  public:
-  RouterIterator(RALT* ralt, const Compaction& c, CompactionIterator& c_iter,
-                 Slice start, Bound end)
+  RouterIterator(
+      RALT* ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
+      Bound end,
+      std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges)
       : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
     int start_level = c.level();
     int latter_level = c.output_level();
@@ -1528,8 +1544,8 @@ class RouterIterator {
       uint32_t start_tier = version.path_id(start_level);
       uint32_t latter_tier = version.path_id(latter_level);
       if (start_tier != latter_tier) {
-        iter_ = std::unique_ptr<RouterIteratorFD2SD>(
-            new RouterIteratorFD2SD(*ralt, c, c_iter, start, end));
+        iter_ = std::unique_ptr<RouterIteratorFD2SD>(new RouterIteratorFD2SD(
+            *ralt, c, c_iter, start, end, promoted_ranges));
       } else if (version.path_id(latter_level + 1) != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorIntraTier>(
             new RouterIteratorIntraTier(*ralt, c, c_iter, start, end,
@@ -1638,6 +1654,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       read_options, sub_compact->compaction, &range_del_agg, promoted_ranges,
       file_options_for_read_));
   InternalIterator* input = raw_input.get();
+
+  InsertPromotedRanges(promoted_ranges, ucmp, c->cached_ranges_to_promote());
 
   IterKey start_ikey;
   IterKey end_ikey;
@@ -1778,7 +1796,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                        .excluded = false,
                    });
   RouterIterator router_iter(ralt, *c, *c_iter, promotable_start,
-                             promotable_end);
+                             promotable_end, promoted_ranges);
 
   std::string previous_user_key;
   auto compaction_start = rusty::time::Instant::now();

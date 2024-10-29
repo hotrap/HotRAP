@@ -29,6 +29,57 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+void InsertPromotedRanges(
+    std::map<std::string, PromotedRangeInfo, UserKeyCompare> &promoted_ranges,
+    const Comparator *ucmp,
+    const std::vector<PromotedRange> &new_promoted_ranges) {
+  for (const PromotedRange &promoted_range : new_promoted_ranges) {
+    auto it = promoted_ranges.lower_bound(promoted_range.first_user_key);
+    std::string first_user_key, last_user_key;
+    SequenceNumber sequence;
+    if (it != promoted_ranges.end() &&
+        ucmp->Compare(it->second.first_user_key,
+                      promoted_range.last_user_key) <= 0) {
+      // new first <= old last, old first <= new last
+      if (ucmp->Compare(it->first, promoted_range.last_user_key) < 0) {
+        // new first <= old last < new last
+        last_user_key = promoted_range.last_user_key;
+        if (ucmp->Compare(it->second.first_user_key,
+                          promoted_range.first_user_key) < 0) {
+          // old first < new first <= old last < new last
+          first_user_key = std::move(it->second.first_user_key);
+          sequence = std::max(it->second.sequence, promoted_range.sequence);
+        } else {
+          // new first <= old first <= old last < new last
+          first_user_key = promoted_range.first_user_key;
+          sequence = promoted_range.sequence;
+        }
+      } else {
+        // new first <= new last <= old last
+        if (ucmp->Compare(it->second.first_user_key,
+                          promoted_range.first_user_key) <= 0) {
+          // old first <= new first <= new last <= old last
+          continue;
+        } else {
+          // new first < old first <= new last <= old last
+          first_user_key = promoted_range.first_user_key;
+          last_user_key = it->first;
+          sequence = std::max(it->second.sequence, promoted_range.sequence);
+        }
+      }
+      it = promoted_ranges.erase(it);
+    } else {
+      first_user_key = promoted_range.first_user_key;
+      last_user_key = promoted_range.last_user_key;
+      sequence = promoted_range.sequence;
+    }
+    promoted_ranges.emplace_hint(
+        it, std::piecewise_construct,
+        std::forward_as_tuple(std::move(first_user_key)),
+        std::forward_as_tuple(std::move(last_user_key), sequence));
+  }
+}
+
 PromotionCache::PromotionCache(DBImpl &db, int target_level,
                                const Comparator *ucmp)
     : db_(db),
@@ -853,7 +904,6 @@ MutablePromotionCache::TakeRange(std::vector<PromotedRange> &ranges,
         for (auto &&seq_value : key_it->second.seq_value()) {
           std::string &&value = std::move(seq_value.second);
           size_ -= user_key.size() + value.size();
-          // FIXME(hotrap): Enforce retainment of this range
           InternalKey key(user_key, seq_value.first, kTypeValue);
           ret.emplace_back(std::move(*key.rep()), std::move(value));
         }

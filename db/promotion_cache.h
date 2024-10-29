@@ -124,6 +124,11 @@ struct PromotedRangeInfo {
       : first_user_key(std::move(_first_user_key)), sequence(_sequence) {}
 };
 
+void InsertPromotedRanges(
+    std::map<std::string, PromotedRangeInfo, UserKeyCompare> &promoted_ranges,
+    const Comparator *ucmp,
+    const std::vector<PromotedRange> &new_promoted_ranges);
+
 struct RangeInfo {
   std::string first_user_key;
   SequenceNumber sequence;

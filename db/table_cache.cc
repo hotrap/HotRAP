@@ -283,53 +283,8 @@ InternalIterator* TableCache::NewIterator(
     }
   }
   if (s.ok() && promoted_ranges) {
-    const Comparator* ucmp = icomparator.user_comparator();
-    for (const PromotedRange& promoted_range :
-         *table_reader->promoted_ranges()) {
-      auto it = promoted_ranges->lower_bound(promoted_range.first_user_key);
-      std::string first_user_key, last_user_key;
-      SequenceNumber sequence;
-      if (it != promoted_ranges->end() &&
-          ucmp->Compare(it->second.first_user_key,
-                        promoted_range.last_user_key) <= 0) {
-        // new first <= old last, old first <= new last
-        if (ucmp->Compare(it->first, promoted_range.last_user_key) < 0) {
-          // new first <= old last < new last
-          last_user_key = promoted_range.last_user_key;
-          if (ucmp->Compare(it->second.first_user_key,
-                            promoted_range.first_user_key) < 0) {
-            // old first < new first <= old last < new last
-            first_user_key = std::move(it->second.first_user_key);
-            sequence = std::max(it->second.sequence, promoted_range.sequence);
-          } else {
-            // new first <= old first <= old last < new last
-            first_user_key = promoted_range.first_user_key;
-            sequence = promoted_range.sequence;
-          }
-        } else {
-          // new first <= new last <= old last
-          if (ucmp->Compare(it->second.first_user_key,
-                            promoted_range.first_user_key) <= 0) {
-            // old first <= new first <= new last <= old last
-            continue;
-          } else {
-            // new first < old first <= new last <= old last
-            first_user_key = promoted_range.first_user_key;
-            last_user_key = it->first;
-            sequence = std::max(it->second.sequence, promoted_range.sequence);
-          }
-        }
-        it = promoted_ranges->erase(it);
-      } else {
-        first_user_key = promoted_range.first_user_key;
-        last_user_key = promoted_range.last_user_key;
-        sequence = promoted_range.sequence;
-      }
-      promoted_ranges->emplace_hint(
-          it, std::piecewise_construct,
-          std::forward_as_tuple(std::move(first_user_key)),
-          std::forward_as_tuple(std::move(last_user_key), sequence));
-    }
+    InsertPromotedRanges(*promoted_ranges, icomparator.user_comparator(),
+                         *table_reader->promoted_ranges());
   }
 
   if (handle != nullptr) {
