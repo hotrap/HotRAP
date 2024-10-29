@@ -424,6 +424,12 @@ size_t MutablePromotionCache::InsertOneRange(
     std::string &&first_user_key, std::string &&last_user_key,
     SequenceNumber sequence, uint64_t num_bytes) {
   assert(sequence > 0);
+  if (!records.empty()) {
+    assert(ucmp_->Compare(ExtractUserKey(records.front().first),
+                          first_user_key) >= 0);
+    assert(ucmp_->Compare(ExtractUserKey(records.back().first),
+                          last_user_key) <= 0);
+  }
   auto it = ranges_.lower_bound(first_user_key);
   RangeInfo range{
       .first_user_key = std::move(first_user_key),
@@ -527,7 +533,8 @@ void MutablePromotionCache::InsertRanges(
     }
     while (new_key_it != keys.end() &&
            ucmp_->Compare(new_key_it->first, merged_range_last) <= 0) {
-      assert(!new_key_it->second.only_by_point_query);
+      // It's possible that new_key is only_by_point_query because the merged
+      // range is larger than the original one.
       MergeOneKeyInRange(key_it, std::move(new_key_it->first),
                          std::move(new_key_it->second.seq_value),
                          merged_range_sequence);
@@ -549,39 +556,40 @@ void MutablePromotionCache::MergeRange(
       assert(ucmp_->Compare(tmp->first, it->second.first_user_key) < 0);
     }
   }
+  // new first <= old last
   while (it != ranges_.end() &&
          ucmp_->Compare(it->second.first_user_key, new_range_last) <= 0) {
-    std::string &&range_first = std::move(it->second.first_user_key);
-    // range_first <= range1_last
-    std::string range_last = it->first;
-    uint64_t range_num_bytes = it->second.num_bytes;
-    SequenceNumber range_sequence = it->second.sequence;
+    std::string &&old_first = std::move(it->second.first_user_key);
+    // old first <= new last
+    const std::string &old_last = it->first;
+    uint64_t old_num_bytes = it->second.num_bytes;
+    SequenceNumber old_sequence = it->second.sequence;
     new_range.count += it->second.count;
-    if (ucmp_->Compare(range_last, new_range_last) <= 0) {
-      // range_last <= range1_last
-      if (ucmp_->Compare(range_first, new_range.first_user_key) < 0) {
-        // range_first < range1_first <= range_last <= range1_last
-        new_range.first_user_key = std::move(range_first);
+    if (ucmp_->Compare(old_last, new_range_last) < 0) {
+      // old last < new last
+      if (ucmp_->Compare(old_first, new_range.first_user_key) < 0) {
+        // old first < new first <= old last < new last
+        new_range.first_user_key = std::move(old_first);
         // Overestimation. Precise estimation requires maintaining length for
         // all accessed keys, which can consume much memory.
-        new_range.num_bytes += range_num_bytes;
-        new_range.sequence = std::max(new_range.sequence, range_sequence);
+        new_range.num_bytes += old_num_bytes;
+        new_range.sequence = std::max(new_range.sequence, old_sequence);
       } else {
-        // range1_first <= range_first <= range_last <= range1_last
+        // new first <= old first <= old last < new last
       }
     } else {
-      // range_first <= range1_last < range_last
-      if (ucmp_->Compare(range_first, new_range.first_user_key) < 0) {
-        // range_first < range1_first <= range1_last < range_last
-        new_range.first_user_key = std::move(range_first);
-        new_range.num_bytes = std::max(new_range.num_bytes, range_num_bytes);
-        new_range.sequence = range_sequence;
+      // old first <= new last <= old last
+      if (ucmp_->Compare(old_first, new_range.first_user_key) <= 0) {
+        // old first <= new first <= new last <= old last
+        new_range.first_user_key = std::move(old_first);
+        new_range.num_bytes = std::max(new_range.num_bytes, old_num_bytes);
+        new_range.sequence = old_sequence;
       } else {
-        // range1_first <= range_first <= range1_last < range_last
-        new_range.num_bytes += range_num_bytes;
-        new_range.sequence = std::max(new_range.sequence, range_sequence);
+        // new first < old first <= new last <= old last
+        new_range.num_bytes += old_num_bytes;
+        new_range.sequence = std::max(new_range.sequence, old_sequence);
       }
-      new_range_last = std::move(range_last);
+      new_range_last.assign(old_last);
     }
     it = ranges_.erase(it);
   }

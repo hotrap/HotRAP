@@ -2268,7 +2268,7 @@ void BlockBasedTable::LastPromoted(const ReadOptions& read_options,
         return ucmp->Compare(range.last_user_key, k) < 0;
       });
   if (it == rep_->promoted_ranges_.end()) return;
-  // it->last_user_key >= user_key
+  assert(ucmp->Compare(it->last_user_key, user_key) >= 0);
   if (read_options.snapshot != nullptr) {
     if (it->sequence > read_options.snapshot->GetSequenceNumber()) return;
   }

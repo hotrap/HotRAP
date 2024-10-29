@@ -1791,8 +1791,11 @@ class TieredIterator : public InternalIterator {
     assert(s.ok());
     seek_user_key_.assign(ikey.user_key.data(), ikey.user_key.size());
 
+    last_promoted_user_key_.clear();
     fast_disk_it_->Seek(internal_key);
     if (!last_promoted_user_key_.empty()) {
+      assert(super_version_->cfd->ioptions()->user_comparator->Compare(
+                 last_promoted_user_key_, seek_user_key_) >= 0);
       iter_ = fast_disk_it_;
       // It's possible that the last key in the promoted range has been deleted.
       SeekInSlowDiskIfNeeded();
@@ -1879,7 +1882,9 @@ class TieredIterator : public InternalIterator {
     prepare_merging_it();
 
     // Seek to first not promoted
-    InternalKey k(last_promoted_user_key_, 0, static_cast<ValueType>(0));
+    assert(!last_promoted_user_key_.empty());
+    InternalKey k;
+    k.SetMaxPossibleForUserKey(last_promoted_user_key_);
     slow_disk_it_->Seek(k.Encode());
     while (slow_disk_it_->Valid()) {
       Status s = ParseInternalKey(slow_disk_it_->key(), &ikey, false);

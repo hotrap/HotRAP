@@ -134,6 +134,7 @@ class RALT : public Customizable {
                            SequenceNumber sequence) = 0;
   virtual Iter LowerBound(Slice key) = 0;
   virtual uint64_t RangeHotSize(Slice smallest, Slice largest) = 0;
+  // The key is considered hot if itself is hot or it's in a hot range
   virtual bool IsHot(Slice key) = 0;
   virtual bool IsHot(Slice first, Slice last) = 0;
 
