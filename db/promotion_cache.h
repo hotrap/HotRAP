@@ -78,10 +78,11 @@ struct MutablePromotionCache {
   // Return the size of the mutable promotion cache
   size_t Insert(std::string &&user_key, SequenceNumber sequence,
                 std::string &&value) const;
+
+ private:
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, RALT *ralt, Slice smallest, Slice largest);
 
- private:
   const Comparator *ucmp_;
   mutable PCHashTable cache;
   mutable std::atomic<size_t> size_;
@@ -94,10 +95,12 @@ class PromotionCache {
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
   ~PromotionCache();
+
   // Should be called with db mutex held
   void stop_checker_no_wait();
   // Not thread-safe
   void wait_for_checker_to_stop();
+
   bool Get(InternalStats *internal_stats, Slice user_key,
            PinnableSlice *value) const;
   void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
@@ -111,15 +114,20 @@ class PromotionCache {
   const RWMutexProtected<MutablePromotionCache> &mut() const { return mut_; }
   size_t InsertToMut(std::string &&user_key, SequenceNumber sequence,
                      std::string &&value) const;
-  void ConsumeBuffer(WriteGuard<MutablePromotionCache> &mut) const;
 
   const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
     return imm_list_;
   }
 
+  std::vector<std::pair<std::string, std::string>> TakeRange(
+      InternalStats *internal_stats, RALT *ralt, Slice smallest,
+      Slice largest) const;
+
   std::atomic<size_t> &max_size() const { return max_size_; }
 
  private:
+  void ConsumeBuffer(WriteGuard<MutablePromotionCache> &mut) const;
+
   struct CheckerQueueElem {
     DBImpl *db;
     SuperVersion *sv;

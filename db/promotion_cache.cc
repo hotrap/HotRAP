@@ -308,6 +308,39 @@ size_t MutablePromotionCache::Insert(std::string &&user_key,
   }
   return size;
 }
+std::vector<std::pair<std::string, std::string>>
+MutablePromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
+                                 Slice smallest, Slice largest) {
+  auto guard =
+      internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
+  std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
+      records_in_range;
+  for (const auto &record : cache) {
+    if (ucmp_->Compare(record.first, largest) <= 0 &&
+        ucmp_->Compare(record.first, smallest) >= 0) {
+      InternalKey key(record.first, record.second.sequence, kTypeValue);
+      records_in_range.emplace_back(
+          std::move(key),
+          std::make_pair(record.second.value, record.second.count));
+    }
+  }
+  std::vector<std::pair<std::string, std::string>> ret;
+  for (auto &record : records_in_range) {
+    InternalKey key = std::move(record.first);
+    Slice user_key = key.user_key();
+    std::string value = std::move(record.second.first);
+    uint64_t count = record.second.second;
+    assert(cache.erase(user_key.ToString()));
+    size_.fetch_sub(key.size() + value.size(), std::memory_order_relaxed);
+    bool is_hot = ralt->IsHot(user_key);
+    ralt->Access(user_key, value.size());
+    if (count > 1 || is_hot) {
+      ret.emplace_back(std::move(*key.rep()), std::move(value));
+    }
+  }
+  std::sort(ret.begin(), ret.end(), InternalKeyCompare(ucmp_));
+  return ret;
+}
 
 // Return the mutable promotion size, or 0 if inserted to buffer.
 size_t PromotionCache::InsertToMut(std::string &&user_key,
@@ -383,37 +416,12 @@ void PromotionCache::SwitchMutablePromotionCache(
                  queue_len);
   signal_check_.notify_one();
 }
-std::vector<std::pair<std::string, std::string>>
-MutablePromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
-                                 Slice smallest, Slice largest) {
-  auto guard =
-      internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
-  std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
-      records_in_range;
-  for (const auto &record : cache) {
-    if (ucmp_->Compare(record.first, largest) <= 0 &&
-        ucmp_->Compare(record.first, smallest) >= 0) {
-      InternalKey key(record.first, record.second.sequence, kTypeValue);
-      records_in_range.emplace_back(
-          std::move(key),
-          std::make_pair(record.second.value, record.second.count));
-    }
-  }
-  std::vector<std::pair<std::string, std::string>> ret;
-  for (auto &record : records_in_range) {
-    InternalKey key = std::move(record.first);
-    Slice user_key = key.user_key();
-    std::string value = std::move(record.second.first);
-    uint64_t count = record.second.second;
-    assert(cache.erase(user_key.ToString()));
-    size_.fetch_sub(key.size() + value.size(), std::memory_order_relaxed);
-    bool is_hot = ralt->IsHot(user_key);
-    ralt->Access(user_key, value.size());
-    if (count > 1 || is_hot) {
-      ret.emplace_back(std::move(*key.rep()), std::move(value));
-    }
-  }
-  std::sort(ret.begin(), ret.end(), InternalKeyCompare(ucmp_));
-  return ret;
+std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
+    InternalStats *internal_stats, RALT *ralt, Slice smallest,
+    Slice largest) const {
+  auto mut = mut_.Write();
+  ConsumeBuffer(mut);
+  return mut->TakeRange(internal_stats, ralt, smallest, largest);
 }
+
 }  // namespace ROCKSDB_NAMESPACE
