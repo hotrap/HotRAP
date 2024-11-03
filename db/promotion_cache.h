@@ -185,14 +185,15 @@ class PromotionCache {
       std::string &&first_user_key, std::string &&last_user_key,
       SequenceNumber sequence, uint64_t num_bytes) const;
 
-  const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
-    return imm_list_;
-  }
-
   std::vector<std::pair<std::string, std::string>> TakeRange(
       std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
       RALT *ralt, Slice smallest, Slice largest) const;
 
+  const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
+    return imm_list_;
+  }
+
+  // For statistics
   std::atomic<size_t> &max_size() const { return max_size_; }
 
  private:
@@ -293,12 +294,14 @@ class PromotionCache {
   RWMutexProtected<Mutable> mut_;
 
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
-  mutable std::atomic<size_t> max_size_;
 
   mutable std::mutex checker_lock_;
   mutable std::queue<CheckerQueueElem> checker_queue_;
   mutable std::condition_variable signal_check_;
   bool should_stop_;
   std::thread checker_;
+
+  // For statistics
+  mutable std::atomic<size_t> max_size_;
 };
 }  // namespace ROCKSDB_NAMESPACE
