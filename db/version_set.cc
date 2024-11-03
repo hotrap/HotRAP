@@ -2031,8 +2031,7 @@ void Version::TryPromote(
     }
   }
   cache->being_or_has_been_compacted_lock().ReadUnlock();
-  size_t mut_size =
-      cache->InsertToMut(user_key.ToString(), seq, value->ToString());
+  size_t mut_size = cache->Insert(user_key.ToString(), seq, value->ToString());
   RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
   size_t tot = mut_size + cache->imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);

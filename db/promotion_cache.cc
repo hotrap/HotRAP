@@ -233,7 +233,7 @@ void PromotionCache::checker() {
       TimerGuard start =
           hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
               .start();
-      auto mut = elem.pc->mut().Write();
+      auto mut = elem.pc->mut_.Write();
       for (const auto &item : cache.cache) {
         mut->Insert(std::string(item.first), item.second.sequence,
                     std::string(item.second.value));
@@ -291,9 +291,9 @@ void PromotionCache::checker() {
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
-size_t MutablePromotionCache::Insert(std::string &&user_key,
-                                     SequenceNumber sequence,
-                                     std::string &&value) const {
+size_t PromotionCache::Mutable::Insert(std::string &&user_key,
+                                       SequenceNumber sequence,
+                                       std::string &&value) const {
   size_t size;
 
   PCHashTable::accessor it;
@@ -309,8 +309,8 @@ size_t MutablePromotionCache::Insert(std::string &&user_key,
   return size;
 }
 std::vector<std::pair<std::string, std::string>>
-MutablePromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
-                                 Slice smallest, Slice largest) {
+PromotionCache::Mutable::TakeRange(InternalStats *internal_stats, RALT *ralt,
+                                   Slice smallest, Slice largest) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
@@ -343,9 +343,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
 }
 
 // Return the mutable promotion size, or 0 if inserted to buffer.
-size_t PromotionCache::InsertToMut(std::string &&user_key,
-                                   SequenceNumber sequence,
-                                   std::string &&value) const {
+size_t PromotionCache::Insert(std::string &&user_key, SequenceNumber sequence,
+                              std::string &&value) const {
   auto mut = mut_.TryRead();
   if (!mut.has_value()) {
     mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
@@ -355,8 +354,7 @@ size_t PromotionCache::InsertToMut(std::string &&user_key,
   return mut.value()->Insert(std::move(user_key), sequence, std::move(value));
 }
 
-void PromotionCache::ConsumeBuffer(
-    WriteGuard<MutablePromotionCache> &mut) const {
+void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
   auto mut_buffer = mut_buffer_.Lock();
   if (mut_buffer->empty()) return;
   std::vector<MutBufItem> buffer;

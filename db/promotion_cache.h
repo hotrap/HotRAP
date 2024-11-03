@@ -68,26 +68,6 @@ struct ImmPromotionCacheList {
   std::list<ImmPromotionCache> list;
   size_t size = 0;
 };
-struct MutablePromotionCache {
-  MutablePromotionCache(const Comparator *ucmp) : ucmp_(ucmp), size_(0) {}
-  MutablePromotionCache(const MutablePromotionCache &&rhs)
-      : ucmp_(rhs.ucmp_),
-        cache(std::move(rhs.cache)),
-        size_(rhs.size_.load(std::memory_order_relaxed)) {}
-
-  // Return the size of the mutable promotion cache
-  size_t Insert(std::string &&user_key, SequenceNumber sequence,
-                std::string &&value) const;
-
- private:
-  std::vector<std::pair<std::string, std::string>> TakeRange(
-      InternalStats *internal_stats, RALT *ralt, Slice smallest, Slice largest);
-
-  const Comparator *ucmp_;
-  mutable PCHashTable cache;
-  mutable std::atomic<size_t> size_;
-  friend class PromotionCache;
-};
 
 class PromotionCache {
  public:
@@ -111,9 +91,8 @@ class PromotionCache {
   const port::RWMutex &being_or_has_been_compacted_lock() const {
     return being_or_has_been_compacted_lock_;
   }
-  const RWMutexProtected<MutablePromotionCache> &mut() const { return mut_; }
-  size_t InsertToMut(std::string &&user_key, SequenceNumber sequence,
-                     std::string &&value) const;
+  size_t Insert(std::string &&user_key, SequenceNumber sequence,
+                std::string &&value) const;
 
   const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
     return imm_list_;
@@ -126,7 +105,30 @@ class PromotionCache {
   std::atomic<size_t> &max_size() const { return max_size_; }
 
  private:
-  void ConsumeBuffer(WriteGuard<MutablePromotionCache> &mut) const;
+  class Mutable {
+   public:
+    Mutable(const Comparator *ucmp) : ucmp_(ucmp), size_(0) {}
+    Mutable(const Mutable &&rhs)
+        : ucmp_(rhs.ucmp_),
+          cache(std::move(rhs.cache)),
+          size_(rhs.size_.load(std::memory_order_relaxed)) {}
+
+    // Return the size of the mutable promotion cache
+    size_t Insert(std::string &&user_key, SequenceNumber sequence,
+                  std::string &&value) const;
+
+    std::vector<std::pair<std::string, std::string>> TakeRange(
+        InternalStats *internal_stats, RALT *ralt, Slice smallest,
+        Slice largest);
+
+   private:
+    const Comparator *ucmp_;
+    mutable PCHashTable cache;
+    mutable std::atomic<size_t> size_;
+    friend class PromotionCache;
+  };
+
+  void ConsumeBuffer(WriteGuard<Mutable> &mut) const;
 
   struct CheckerQueueElem {
     DBImpl *db;
@@ -175,7 +177,7 @@ class PromotionCache {
         : user_key(std::move(_user_key)), seq(_seq), value(std::move(_value)) {}
   };
   MutexProtected<std::vector<MutBufItem>> mut_buffer_;
-  RWMutexProtected<MutablePromotionCache> mut_;
+  RWMutexProtected<Mutable> mut_;
 
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
   mutable std::atomic<size_t> max_size_;
