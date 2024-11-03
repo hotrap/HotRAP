@@ -866,18 +866,19 @@ namespace {
 class LevelIterator final : public InternalIterator {
  public:
   // @param read_options Must outlive this iterator.
-  LevelIterator(
-      TableCache* table_cache, const ReadOptions& read_options,
-      const FileOptions& file_options, const InternalKeyComparator& icomparator,
-      const LevelFilesBrief* flevel, const SliceTransform* prefix_extractor,
-      bool should_sample, HistogramImpl* file_read_hist,
-      TableReaderCaller caller, bool skip_filters, int level,
-      RangeDelAggregator* range_del_agg,
-      std::map<std::string, PromotedRangeInfo, UserKeyCompare>* promoted_ranges = nullptr,
-      std::string* last_promoted = nullptr,
-      const std::vector<AtomicCompactionUnitBoundary>* compaction_boundaries =
-          nullptr,
-      bool allow_unprepared_value = false)
+  LevelIterator(TableCache* table_cache, const ReadOptions& read_options,
+                const FileOptions& file_options,
+                const InternalKeyComparator& icomparator,
+                const LevelFilesBrief* flevel,
+                const SliceTransform* prefix_extractor, bool should_sample,
+                HistogramImpl* file_read_hist, TableReaderCaller caller,
+                bool skip_filters, int level, RangeDelAggregator* range_del_agg,
+                std::map<std::string, PromotedRangeInfo, UserKeyCompare>*
+                    promoted_ranges = nullptr,
+                std::string* last_promoted = nullptr,
+                const std::vector<AtomicCompactionUnitBoundary>*
+                    compaction_boundaries = nullptr,
+                bool allow_unprepared_value = false)
       : table_cache_(table_cache),
         read_options_(read_options),
         file_options_(file_options),
@@ -2016,8 +2017,7 @@ void Version::TryPromote(
     }
   }
   cache.being_or_has_been_compacted_lock().ReadUnlock();
-  size_t mut_size =
-      cache.InsertToMut(user_key.ToString(), seq, value->ToString());
+  size_t mut_size = cache.Insert(user_key.ToString(), seq, value->ToString());
   RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
   size_t tot = mut_size + cache.imm_list().Read()->size;
   rusty::intrinsics::atomic_max_relaxed(cache.max_size(), tot);

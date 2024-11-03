@@ -156,51 +156,6 @@ struct ImmPromotionCacheList {
   size_t size = 0;
 };
 
-class MutablePromotionCache {
- public:
-  MutablePromotionCache() = delete;
-  MutablePromotionCache(const Comparator *ucmp)
-      : ucmp_(ucmp), keys_(ucmp_), size_(0), ranges_(UserKeyCompare(ucmp_)) {}
-
-  // Return the size of the mutable promotion cache
-  size_t Insert(std::string &&user_key, SequenceNumber sequencd,
-                std::string &&value);
-  void InsertRanges(std::map<std::string, RangeInfo, UserKeyCompare> &&ranges,
-                    std::vector<std::pair<std::string, ImmPCData>> &&keys);
-
- private:
-  size_t InsertOneRange(
-      std::vector<std::pair<std::string, std::string>> &&records,
-      std::string &&first_user_key, std::string &&last_user_key,
-      SequenceNumber sequence, uint64_t num_bytes);
-
-  // REQUIRES: it->first >= range1.first_user_key
-  void MergeRange(
-      std::map<std::string, RangeInfo, UserKeyCompare>::iterator &it,
-      std::string &&new_range_last, RangeInfo &&new_range);
-  void MergeOneKeyInRange(
-      std::map<std::string, PCData, UserKeyCompare>::iterator &it,
-      std::string &&user_key,
-      std::deque<std::pair<SequenceNumber, std::string>> &&seq_values,
-      SequenceNumber sequence);
-  void MarkNotOnlyByPointQuery(
-      std::map<std::string, PCData, UserKeyCompare>::iterator &it,
-      Slice range_last);
-
-  std::vector<std::pair<std::string, std::string>> TakeRange(
-      std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
-      RALT *ralt, Slice smallest, Slice largest);
-
-  const Comparator *ucmp_;
-
-  std::map<std::string, PCData, UserKeyCompare> keys_;
-  size_t size_;
-  // key: The last user key in the range
-  std::map<std::string, RangeInfo, UserKeyCompare> ranges_;
-
-  friend class PromotionCache;
-};
-
 class PromotionCache {
  public:
   PromotionCache(DBImpl &db, int target_level, const Comparator *ucmp);
@@ -223,9 +178,8 @@ class PromotionCache {
   const port::RWMutex &being_or_has_been_compacted_lock() const {
     return being_or_has_been_compacted_lock_;
   }
-  const RWMutexProtected<MutablePromotionCache> &mut() const { return mut_; }
-  size_t InsertToMut(std::string &&user_key, SequenceNumber sequence,
-                     std::string &&value) const;
+  size_t Insert(std::string &&user_key, SequenceNumber sequence,
+                std::string &&value) const;
   size_t InsertOneRange(
       std::vector<std::pair<std::string, std::string>> &&records,
       std::string &&first_user_key, std::string &&last_user_key,
@@ -242,7 +196,51 @@ class PromotionCache {
   std::atomic<size_t> &max_size() const { return max_size_; }
 
  private:
-  void ConsumeBuffer(WriteGuard<MutablePromotionCache> &mut) const;
+  class Mutable {
+   public:
+    Mutable() = delete;
+    Mutable(const Comparator *ucmp)
+        : ucmp_(ucmp), keys_(ucmp_), size_(0), ranges_(UserKeyCompare(ucmp_)) {}
+
+    // Return the size of the mutable promotion cache
+    size_t Insert(std::string &&user_key, SequenceNumber sequencd,
+                  std::string &&value);
+    size_t InsertOneRange(
+        std::vector<std::pair<std::string, std::string>> &&records,
+        std::string &&first_user_key, std::string &&last_user_key,
+        SequenceNumber sequence, uint64_t num_bytes);
+    void InsertRanges(std::map<std::string, RangeInfo, UserKeyCompare> &&ranges,
+                      std::vector<std::pair<std::string, ImmPCData>> &&keys);
+
+    // REQUIRES: it->first >= range1.first_user_key
+    void MergeRange(
+        std::map<std::string, RangeInfo, UserKeyCompare>::iterator &it,
+        std::string &&new_range_last, RangeInfo &&new_range);
+    void MergeOneKeyInRange(
+        std::map<std::string, PCData, UserKeyCompare>::iterator &it,
+        std::string &&user_key,
+        std::deque<std::pair<SequenceNumber, std::string>> &&seq_values,
+        SequenceNumber sequence);
+    void MarkNotOnlyByPointQuery(
+        std::map<std::string, PCData, UserKeyCompare>::iterator &it,
+        Slice range_last);
+
+    std::vector<std::pair<std::string, std::string>> TakeRange(
+        std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
+        RALT *ralt, Slice smallest, Slice largest);
+
+   private:
+    const Comparator *ucmp_;
+
+    std::map<std::string, PCData, UserKeyCompare> keys_;
+    size_t size_;
+    // key: The last user key in the range
+    std::map<std::string, RangeInfo, UserKeyCompare> ranges_;
+
+    friend class PromotionCache;
+  };
+
+  void ConsumeBuffer(WriteGuard<Mutable> &mut) const;
 
   struct CheckerQueueElem {
     DBImpl *db;
@@ -292,7 +290,7 @@ class PromotionCache {
         : user_key(std::move(_user_key)), seq(_seq), value(std::move(_value)) {}
   };
   MutexProtected<std::vector<MutBufItem>> mut_buffer_;
-  RWMutexProtected<MutablePromotionCache> mut_;
+  RWMutexProtected<Mutable> mut_;
 
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
   mutable std::atomic<size_t> max_size_;

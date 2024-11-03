@@ -401,7 +401,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
       keys.push_back(std::move(*it));
     }
 
-    auto mut = elem.pc->mut().Write();
+    auto mut = elem.pc->mut_.Write();
     mut->InsertRanges(std::move(cache.ranges), std::move(keys));
     db->mutex()->Unlock();
     elem.pc->ConsumeBuffer(mut);
@@ -441,9 +441,9 @@ void PromotionCache::check(CheckerQueueElem &elem) {
   }
 }
 
-size_t MutablePromotionCache::Insert(std::string &&user_key,
-                                     SequenceNumber sequence,
-                                     std::string &&value) {
+size_t PromotionCache::Mutable::Insert(std::string &&user_key,
+                                       SequenceNumber sequence,
+                                       std::string &&value) {
   auto range_it = ranges_.lower_bound(user_key);
   if (range_it != ranges_.end() &&
       ucmp_->Compare(range_it->second.first_user_key, user_key) <= 0) {
@@ -470,7 +470,7 @@ size_t MutablePromotionCache::Insert(std::string &&user_key,
   return size_;
 }
 
-size_t MutablePromotionCache::InsertOneRange(
+size_t PromotionCache::Mutable::InsertOneRange(
     std::vector<std::pair<std::string, std::string>> &&records,
     std::string &&first_user_key, std::string &&last_user_key,
     SequenceNumber sequence, uint64_t num_bytes) {
@@ -525,7 +525,7 @@ size_t MutablePromotionCache::InsertOneRange(
   MarkNotOnlyByPointQuery(key_it, new_range_last);
   return size_;
 }
-void MutablePromotionCache::InsertRanges(
+void PromotionCache::Mutable::InsertRanges(
     std::map<std::string, RangeInfo, UserKeyCompare> &&ranges,
     std::vector<std::pair<std::string, ImmPCData>> &&keys) {
   auto key_it = keys_.begin();
@@ -603,7 +603,7 @@ void MutablePromotionCache::InsertRanges(
   insert_keys_until(Slice(nullptr, 0));
 }
 
-void MutablePromotionCache::MergeRange(
+void PromotionCache::Mutable::MergeRange(
     std::map<std::string, RangeInfo, UserKeyCompare>::iterator &it,
     std::string &&new_range_last, RangeInfo &&new_range) {
   if (it != ranges_.end()) {
@@ -663,7 +663,7 @@ void MutablePromotionCache::MergeRange(
       ranges_.emplace_hint(it, std::move(new_range_last), std::move(new_range));
 }
 // REQUIRES: it->first is in range
-void MutablePromotionCache::MergeOneKeyInRange(
+void PromotionCache::Mutable::MergeOneKeyInRange(
     std::map<std::string, PCData, UserKeyCompare>::iterator &it,
     std::string &&user_key,
     std::deque<std::pair<SequenceNumber, std::string>> &&seq_values,
@@ -724,7 +724,7 @@ void MutablePromotionCache::MergeOneKeyInRange(
     it->second.set_only_by_point_query(false);
   }
 }
-void MutablePromotionCache::MarkNotOnlyByPointQuery(
+void PromotionCache::Mutable::MarkNotOnlyByPointQuery(
     std::map<std::string, PCData, UserKeyCompare>::iterator &it,
     Slice range_last) {
   while (it != keys_.end() && ucmp_->Compare(it->first, range_last) <= 0) {
@@ -733,9 +733,9 @@ void MutablePromotionCache::MarkNotOnlyByPointQuery(
   }
 }
 std::vector<std::pair<std::string, std::string>>
-MutablePromotionCache::TakeRange(std::vector<PromotedRange> &ranges,
-                                 InternalStats *internal_stats, RALT *ralt,
-                                 Slice smallest, Slice largest) {
+PromotionCache::Mutable::TakeRange(std::vector<PromotedRange> &ranges,
+                                   InternalStats *internal_stats, RALT *ralt,
+                                   Slice smallest, Slice largest) {
   assert(ranges.empty());
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
@@ -842,9 +842,8 @@ MutablePromotionCache::TakeRange(std::vector<PromotedRange> &ranges,
 }
 
 // Return the mutable promotion size, or 0 if inserted to buffer.
-size_t PromotionCache::InsertToMut(std::string &&user_key,
-                                   SequenceNumber sequence,
-                                   std::string &&value) const {
+size_t PromotionCache::Insert(std::string &&user_key, SequenceNumber sequence,
+                              std::string &&value) const {
   auto mut = mut_.TryWrite();
   if (!mut.has_value()) {
     mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
@@ -865,8 +864,7 @@ size_t PromotionCache::InsertOneRange(
   return mut_size;
 }
 
-void PromotionCache::ConsumeBuffer(
-    WriteGuard<MutablePromotionCache> &mut) const {
+void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
   auto mut_buffer = mut_buffer_.Lock();
   if (mut_buffer->empty()) return;
   std::vector<MutBufItem> buffer;
