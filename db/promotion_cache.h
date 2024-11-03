@@ -165,18 +165,15 @@ class MutablePromotionCache {
   // Return the size of the mutable promotion cache
   size_t Insert(std::string &&user_key, SequenceNumber sequencd,
                 std::string &&value);
+  void InsertRanges(std::map<std::string, RangeInfo, UserKeyCompare> &&ranges,
+                    std::vector<std::pair<std::string, ImmPCData>> &&keys);
+
+ private:
   size_t InsertOneRange(
       std::vector<std::pair<std::string, std::string>> &&records,
       std::string &&first_user_key, std::string &&last_user_key,
       SequenceNumber sequence, uint64_t num_bytes);
-  void InsertRanges(std::map<std::string, RangeInfo, UserKeyCompare> &&ranges,
-                    std::vector<std::pair<std::string, ImmPCData>> &&keys);
 
-  std::vector<std::pair<std::string, std::string>> TakeRange(
-      std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
-      RALT *ralt, Slice smallest, Slice largest);
-
- private:
   // REQUIRES: it->first >= range1.first_user_key
   void MergeRange(
       std::map<std::string, RangeInfo, UserKeyCompare>::iterator &it,
@@ -189,6 +186,10 @@ class MutablePromotionCache {
   void MarkNotOnlyByPointQuery(
       std::map<std::string, PCData, UserKeyCompare>::iterator &it,
       Slice range_last);
+
+  std::vector<std::pair<std::string, std::string>> TakeRange(
+      std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
+      RALT *ralt, Slice smallest, Slice largest);
 
   const Comparator *ucmp_;
 
@@ -206,10 +207,12 @@ class PromotionCache {
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
   ~PromotionCache();
+
   // Should be called with db mutex held
   void stop_checker_no_wait();
   // Not thread-safe
   void wait_for_checker_to_stop();
+
   bool Get(InternalStats *internal_stats, Slice user_key,
            PinnableSlice *value) const;
   void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
@@ -223,15 +226,24 @@ class PromotionCache {
   const RWMutexProtected<MutablePromotionCache> &mut() const { return mut_; }
   size_t InsertToMut(std::string &&user_key, SequenceNumber sequence,
                      std::string &&value) const;
-  void ConsumeBuffer(WriteGuard<MutablePromotionCache> &mut) const;
+  size_t InsertOneRange(
+      std::vector<std::pair<std::string, std::string>> &&records,
+      std::string &&first_user_key, std::string &&last_user_key,
+      SequenceNumber sequence, uint64_t num_bytes) const;
 
   const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
     return imm_list_;
   }
 
+  std::vector<std::pair<std::string, std::string>> TakeRange(
+      std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
+      RALT *ralt, Slice smallest, Slice largest) const;
+
   std::atomic<size_t> &max_size() const { return max_size_; }
 
  private:
+  void ConsumeBuffer(WriteGuard<MutablePromotionCache> &mut) const;
+
   struct CheckerQueueElem {
     DBImpl *db;
     SuperVersion *sv;

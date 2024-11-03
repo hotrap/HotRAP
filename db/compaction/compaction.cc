@@ -128,11 +128,9 @@ void Compaction::SetInputVersion(Version* _input_version) {
       cache.being_or_has_been_compacted_lock().WriteLock();
       mark_fn();
       cache.being_or_has_been_compacted_lock().WriteUnlock();
-      auto mut = it->second.mut().Write();
-      cache.ConsumeBuffer(mut);
-      cached_records_to_promote_ =
-          mut->TakeRange(cached_ranges_to_promoted_, cfd_->internal_stats(),
-                         ralt, smallest_user_key_, largest_user_key_);
+      cached_records_to_promote_ = it->second.TakeRange(
+          cached_ranges_to_promoted_, cfd_->internal_stats(), ralt,
+          smallest_user_key_, largest_user_key_);
     }
   }
   auto caches = cfd_->promotion_caches().Read();
@@ -143,11 +141,9 @@ void Compaction::SetInputVersion(Version* _input_version) {
     assert(cached_records_to_promote_.empty());
     assert(cached_ranges_to_promoted_.empty());
     target_level_to_promote_ = output_level_;
-    auto mut = it->second.mut().Write();
-    it->second.ConsumeBuffer(mut);
     cached_records_to_promote_ =
-        mut->TakeRange(cached_ranges_to_promoted_, cfd_->internal_stats(), ralt,
-                       smallest_user_key_, largest_user_key_);
+        it->second.TakeRange(cached_ranges_to_promoted_, cfd_->internal_stats(),
+                             ralt, smallest_user_key_, largest_user_key_);
   }
 }
 

@@ -732,94 +732,6 @@ void MutablePromotionCache::MarkNotOnlyByPointQuery(
     ++it;
   }
 }
-
-// Return the mutable promotion size, or 0 if inserted to buffer.
-size_t PromotionCache::InsertToMut(std::string &&user_key,
-                                   SequenceNumber sequence,
-                                   std::string &&value) const {
-  auto mut = mut_.TryWrite();
-  if (!mut.has_value()) {
-    mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
-                                     std::move(value));
-    return 0;
-  }
-  return mut.value()->Insert(std::move(user_key), sequence, std::move(value));
-}
-
-void PromotionCache::ConsumeBuffer(
-    WriteGuard<MutablePromotionCache> &mut) const {
-  auto mut_buffer = mut_buffer_.Lock();
-  if (mut_buffer->empty()) return;
-  std::vector<MutBufItem> buffer;
-  std::swap(buffer, *mut_buffer);
-  for (MutBufItem &item : buffer) {
-    mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
-  }
-}
-
-void PromotionCache::SwitchMutablePromotionCache(
-    DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
-  std::unordered_map<std::string, ImmPCData> cache;
-  size_t mut_size;
-  std::map<std::string, RangeInfo, UserKeyCompare> ranges(
-      cfd.ioptions()->user_comparator);
-  {
-    auto start = cfd.internal_stats()
-                     ->hotrap_timers()
-                     .timer(TimerType::kSwitchMutablePromotionCache)
-                     .start();
-    auto mut = mut_.Write();
-    mut_size = mut->size_;
-    if (mut_size < write_buffer_size) {
-      return;
-    }
-    uint64_t size = 0;
-    for (auto &&a : mut->keys_) {
-      for (const auto &seq_value : a.second.seq_value()) {
-        size += a.first.size() + seq_value.second.size();
-      }
-      auto ret = cache.emplace(
-          std::move(a.first),
-          ImmPCData{
-              .seq_value = std::move(a.second.seq_value()),
-              .only_by_point_query = a.second.only_by_point_query(),
-              .repeated_accessed = a.second.repeated_accessed(),
-          });
-      assert(ret.second);
-    }
-    mut->keys_.clear();
-    assert(size == mut->size_);
-    mut->size_ = 0;
-    std::swap(ranges, mut->ranges_);
-  }
-  db.mutex()->Lock();
-  std::list<rocksdb::ImmPromotionCache>::iterator iter;
-  {
-    auto imm_list = imm_list_.Write();
-    imm_list->size += mut_size;
-    iter = imm_list->list.emplace(imm_list->list.end(), std::move(cache),
-                                  mut_size, std::move(ranges));
-  }
-  SuperVersion *sv = cfd.GetSuperVersion();
-  // check_newer_version is responsible to unref it
-  sv->Ref();
-  db.mutex()->Unlock();
-
-  size_t queue_len;
-  {
-    std::unique_lock<std::mutex> lock_(checker_lock_);
-    checker_queue_.emplace(CheckerQueueElem{
-        .db = &db,
-        .sv = sv,
-        .iter = iter,
-        .pc = this,
-    });
-    queue_len = checker_queue_.size();
-  }
-  ROCKS_LOG_INFO(db.immutable_db_options().logger, "Checker queue length %zu\n",
-                 queue_len);
-  signal_check_.notify_one();
-}
 std::vector<std::pair<std::string, std::string>>
 MutablePromotionCache::TakeRange(std::vector<PromotedRange> &ranges,
                                  InternalStats *internal_stats, RALT *ralt,
@@ -928,4 +840,111 @@ MutablePromotionCache::TakeRange(std::vector<PromotedRange> &ranges,
   std::sort(ret.begin(), ret.end(), InternalKeyCompare(ucmp_));
   return ret;
 }
+
+// Return the mutable promotion size, or 0 if inserted to buffer.
+size_t PromotionCache::InsertToMut(std::string &&user_key,
+                                   SequenceNumber sequence,
+                                   std::string &&value) const {
+  auto mut = mut_.TryWrite();
+  if (!mut.has_value()) {
+    mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
+                                     std::move(value));
+    return 0;
+  }
+  return mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+}
+size_t PromotionCache::InsertOneRange(
+    std::vector<std::pair<std::string, std::string>> &&records,
+    std::string &&first_user_key, std::string &&last_user_key,
+    SequenceNumber sequence, uint64_t num_bytes) const {
+  auto mut = mut_.Write();
+  size_t mut_size =
+      mut->InsertOneRange(std::move(records), std::move(first_user_key),
+                          std::move(last_user_key), sequence, num_bytes);
+  ConsumeBuffer(mut);
+  return mut_size;
+}
+
+void PromotionCache::ConsumeBuffer(
+    WriteGuard<MutablePromotionCache> &mut) const {
+  auto mut_buffer = mut_buffer_.Lock();
+  if (mut_buffer->empty()) return;
+  std::vector<MutBufItem> buffer;
+  std::swap(buffer, *mut_buffer);
+  for (MutBufItem &item : buffer) {
+    mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
+  }
+}
+
+void PromotionCache::SwitchMutablePromotionCache(
+    DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
+  std::unordered_map<std::string, ImmPCData> cache;
+  size_t mut_size;
+  std::map<std::string, RangeInfo, UserKeyCompare> ranges(
+      cfd.ioptions()->user_comparator);
+  {
+    auto start = cfd.internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kSwitchMutablePromotionCache)
+                     .start();
+    auto mut = mut_.Write();
+    mut_size = mut->size_;
+    if (mut_size < write_buffer_size) {
+      return;
+    }
+    uint64_t size = 0;
+    for (auto &&a : mut->keys_) {
+      for (const auto &seq_value : a.second.seq_value()) {
+        size += a.first.size() + seq_value.second.size();
+      }
+      auto ret = cache.emplace(
+          std::move(a.first),
+          ImmPCData{
+              .seq_value = std::move(a.second.seq_value()),
+              .only_by_point_query = a.second.only_by_point_query(),
+              .repeated_accessed = a.second.repeated_accessed(),
+          });
+      assert(ret.second);
+    }
+    mut->keys_.clear();
+    assert(size == mut->size_);
+    mut->size_ = 0;
+    std::swap(ranges, mut->ranges_);
+  }
+  db.mutex()->Lock();
+  std::list<rocksdb::ImmPromotionCache>::iterator iter;
+  {
+    auto imm_list = imm_list_.Write();
+    imm_list->size += mut_size;
+    iter = imm_list->list.emplace(imm_list->list.end(), std::move(cache),
+                                  mut_size, std::move(ranges));
+  }
+  SuperVersion *sv = cfd.GetSuperVersion();
+  // check_newer_version is responsible to unref it
+  sv->Ref();
+  db.mutex()->Unlock();
+
+  size_t queue_len;
+  {
+    std::unique_lock<std::mutex> lock_(checker_lock_);
+    checker_queue_.emplace(CheckerQueueElem{
+        .db = &db,
+        .sv = sv,
+        .iter = iter,
+        .pc = this,
+    });
+    queue_len = checker_queue_.size();
+  }
+  ROCKS_LOG_INFO(db.immutable_db_options().logger, "Checker queue length %zu\n",
+                 queue_len);
+  signal_check_.notify_one();
+}
+std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
+    std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
+    RALT *ralt, Slice smallest, Slice largest) const {
+  auto mut = mut_.Write();
+  ConsumeBuffer(mut);
+  return mut->TakeRange(ranges, internal_stats, ralt, smallest, largest);
+}
+
 }  // namespace ROCKSDB_NAMESPACE

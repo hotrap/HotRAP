@@ -1968,15 +1968,9 @@ class TieredIterator : public InternalIterator {
     const PromotionCache& cache =
         super_version_->cfd->get_or_create_promotion_cache(
             db_, first_level_in_slow_disk_ - 1);
-    size_t mut_size;
-    {
-      auto mut = cache.mut().Write();
-      // FIXME(hotrap): Check being_or_has_been_compacted
-      mut_size = mut->InsertOneRange(
-          std::move(records_to_promote_), std::move(seek_user_key_),
-          std::move(last_user_key_), sequence_, num_accessed_bytes_);
-      cache.ConsumeBuffer(mut);
-    }
+    size_t mut_size = cache.InsertOneRange(
+        std::move(records_to_promote_), std::move(seek_user_key_),
+        std::move(last_user_key_), sequence_, num_accessed_bytes_);
     records_to_promote_ = std::vector<std::pair<std::string, std::string>>();
     seek_user_key_ = std::string();
     last_user_key_ = std::string();
