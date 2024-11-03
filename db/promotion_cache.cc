@@ -34,9 +34,9 @@ PromotionCache::PromotionCache(DBImpl &db, int target_level,
     : db_(db),
       target_level_(target_level),
       mut_(ucmp),
-      max_size_(0),
       should_stop_(false),
-      checker_([this] { this->checker(); }) {}
+      checker_([this] { this->checker(); }),
+      max_size_(0) {}
 
 PromotionCache::~PromotionCache() {
   assert(should_stop_);
