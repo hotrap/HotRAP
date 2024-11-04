@@ -2254,7 +2254,7 @@ FragmentedRangeTombstoneIterator* BlockBasedTable::NewRangeTombstoneIterator(
       rep_->fragmented_range_dels, rep_->internal_comparator, snapshot);
 }
 
-const std::vector<PromotedRange>* BlockBasedTable::promoted_ranges() const {
+const std::vector<RangeSeq>* BlockBasedTable::promoted_ranges() const {
   return &rep_->promoted_ranges_;
 }
 
@@ -2262,11 +2262,11 @@ void BlockBasedTable::LastPromoted(const ReadOptions& read_options,
                                    Slice user_key,
                                    std::string& last_promoted) const {
   const Comparator* ucmp = rep_->ioptions.user_comparator;
-  auto it = std::lower_bound(
-      rep_->promoted_ranges_.begin(), rep_->promoted_ranges_.end(), user_key,
-      [ucmp](const PromotedRange& range, const Slice& k) {
-        return ucmp->Compare(range.last_user_key, k) < 0;
-      });
+  auto it = std::lower_bound(rep_->promoted_ranges_.begin(),
+                             rep_->promoted_ranges_.end(), user_key,
+                             [ucmp](const RangeSeq& range, const Slice& k) {
+                               return ucmp->Compare(range.last_user_key, k) < 0;
+                             });
   if (it == rep_->promoted_ranges_.end()) return;
   assert(ucmp->Compare(it->last_user_key, user_key) >= 0);
   if (read_options.snapshot != nullptr) {

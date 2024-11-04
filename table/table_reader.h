@@ -62,7 +62,7 @@ class TableReader {
     return nullptr;
   }
 
-  virtual const std::vector<PromotedRange>* promoted_ranges() const {
+  virtual const std::vector<RangeSeq>* promoted_ranges() const {
     return nullptr;
   }
 

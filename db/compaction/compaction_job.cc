@@ -2282,7 +2282,7 @@ Status CompactionJob::FinishCompactionOutputFile(
           promoted_ranges.erase(promoted_ranges.begin());
         }
       }
-      std::vector<PromotedRange> promoted_ranges_vec;
+      std::vector<RangeSeq> promoted_ranges_vec;
       while (
           !promoted_ranges.empty() &&
           (upper_bound == nullptr ||

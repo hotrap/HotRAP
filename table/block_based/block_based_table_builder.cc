@@ -1012,10 +1012,10 @@ void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
 }
 
 void BlockBasedTableBuilder::WritePromotedRanges(
-    const std::vector<PromotedRange>& promoted_ranges) {
+    const std::vector<RangeSeq>& promoted_ranges) {
   Rep* r = rep_;
   std::string value;
-  for (const PromotedRange& range : promoted_ranges) {
+  for (const RangeSeq& range : promoted_ranges) {
     value.clear();
     value.append((const char*)&range.sequence,
                  (const char*)(&range.sequence + 1));

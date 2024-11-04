@@ -179,7 +179,7 @@ class TableBuilder {
   virtual void Add(const Slice& key, const Slice& value) = 0;
 
   virtual void WritePromotedRanges(
-      const std::vector<PromotedRange>& promoted_ranges) {
+      const std::vector<RangeSeq>& promoted_ranges) {
     assert(false);
   }
 

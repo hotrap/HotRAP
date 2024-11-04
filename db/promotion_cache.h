@@ -97,21 +97,21 @@ class InternalKeyCompare {
   InternalKeyComparator icmp_;
 };
 
-struct PromotedRange {
+struct RangeSeq {
   std::string first_user_key;
   std::string last_user_key;
   SequenceNumber sequence;
-  PromotedRange(const PromotedRange &a)
+  RangeSeq(const RangeSeq &a)
       : first_user_key(a.first_user_key),
         last_user_key(a.last_user_key),
         sequence(a.sequence) {}
-  PromotedRange(std::string &&_first_user_key, std::string &&_last_user_key,
-                SequenceNumber _sequence)
+  RangeSeq(std::string &&_first_user_key, std::string &&_last_user_key,
+           SequenceNumber _sequence)
       : first_user_key(std::move(_first_user_key)),
         last_user_key(std::move(_last_user_key)),
         sequence(_sequence) {}
-  PromotedRange(const std::string &_first_user_key,
-                const std::string &_last_user_key, SequenceNumber _sequence)
+  RangeSeq(const std::string &_first_user_key,
+           const std::string &_last_user_key, SequenceNumber _sequence)
       : first_user_key(_first_user_key),
         last_user_key(_last_user_key),
         sequence(_sequence) {}
@@ -126,7 +126,7 @@ struct RangeFirstSeq {
 
 void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
                   const Comparator *ucmp,
-                  const std::vector<PromotedRange> &new_ranges);
+                  const std::vector<RangeSeq> &new_ranges);
 
 struct RangeInfo {
   std::string first_user_key;
@@ -185,8 +185,8 @@ class PromotionCache {
       SequenceNumber sequence, uint64_t num_bytes) const;
 
   std::vector<std::pair<std::string, std::string>> TakeRange(
-      std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
-      RALT *ralt, Slice smallest, Slice largest) const;
+      std::vector<RangeSeq> &ranges, InternalStats *internal_stats, RALT *ralt,
+      Slice smallest, Slice largest) const;
 
   const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
     return imm_list_;
@@ -226,7 +226,7 @@ class PromotionCache {
         Slice range_last);
 
     std::vector<std::pair<std::string, std::string>> TakeRange(
-        std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
+        std::vector<RangeSeq> &ranges, InternalStats *internal_stats,
         RALT *ralt, Slice smallest, Slice largest);
 
    private:

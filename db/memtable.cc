@@ -69,7 +69,7 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
                    const MutableCFOptions& mutable_cf_options,
                    WriteBufferManager* write_buffer_manager,
                    SequenceNumber latest_seq, uint32_t column_family_id,
-                   std::vector<PromotedRange> &&promoted_ranges)
+                   std::vector<RangeSeq>&& promoted_ranges)
     : comparator_(cmp),
       moptions_(ioptions, mutable_cf_options),
       refs_(0),

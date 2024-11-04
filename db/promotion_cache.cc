@@ -31,8 +31,8 @@ namespace ROCKSDB_NAMESPACE {
 
 void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
                   const Comparator *ucmp,
-                  const std::vector<PromotedRange> &new_ranges) {
-  for (const PromotedRange &range : new_ranges) {
+                  const std::vector<RangeSeq> &new_ranges) {
+  for (const RangeSeq &range : new_ranges) {
     auto it = ranges.lower_bound(range.first_user_key);
     std::string first_user_key, last_user_key;
     SequenceNumber sequence;
@@ -731,7 +731,7 @@ void PromotionCache::Mutable::MarkNotOnlyByPointQuery(
   }
 }
 std::vector<std::pair<std::string, std::string>>
-PromotionCache::Mutable::TakeRange(std::vector<PromotedRange> &ranges,
+PromotionCache::Mutable::TakeRange(std::vector<RangeSeq> &ranges,
                                    InternalStats *internal_stats, RALT *ralt,
                                    Slice smallest, Slice largest) {
   assert(ranges.empty());
@@ -936,8 +936,8 @@ void PromotionCache::SwitchMutablePromotionCache(
   signal_check_.notify_one();
 }
 std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
-    std::vector<PromotedRange> &ranges, InternalStats *internal_stats,
-    RALT *ralt, Slice smallest, Slice largest) const {
+    std::vector<RangeSeq> &ranges, InternalStats *internal_stats, RALT *ralt,
+    Slice smallest, Slice largest) const {
   auto mut = mut_.Write();
   ConsumeBuffer(mut);
   return mut->TakeRange(ranges, internal_stats, ralt, smallest, largest);

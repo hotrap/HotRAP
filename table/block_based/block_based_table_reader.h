@@ -134,7 +134,7 @@ class BlockBasedTable : public TableReader {
   FragmentedRangeTombstoneIterator* NewRangeTombstoneIterator(
       const ReadOptions& read_options) override;
 
-  const std::vector<PromotedRange>* promoted_ranges() const override;
+  const std::vector<RangeSeq>* promoted_ranges() const override;
 
   void LastPromoted(const ReadOptions&, Slice user_key,
                     std::string& last_promoted) const override;
@@ -636,7 +636,7 @@ struct BlockBasedTable::Rep {
 
   std::shared_ptr<const FragmentedRangeTombstoneList> fragmented_range_dels;
 
-  std::vector<PromotedRange> promoted_ranges_;
+  std::vector<RangeSeq> promoted_ranges_;
 
   // If global_seqno is used, all Keys in this file will have the same
   // seqno with value `global_seqno`.

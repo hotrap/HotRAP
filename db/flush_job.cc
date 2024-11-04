@@ -810,7 +810,7 @@ Status FlushJob::WriteLevel0Table() {
     std::vector<InternalIterator*> memtables;
     std::vector<std::unique_ptr<FragmentedRangeTombstoneIterator>>
         range_del_iters;
-    std::vector<std::reference_wrapper<const std::vector<PromotedRange>>>
+    std::vector<std::reference_wrapper<const std::vector<RangeSeq>>>
         promoted_ranges;
     ReadOptions ro;
     ro.total_order_seek = true;

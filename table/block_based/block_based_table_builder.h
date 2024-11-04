@@ -58,7 +58,7 @@ class BlockBasedTableBuilder : public TableBuilder {
   void Add(const Slice& key, const Slice& value) override;
 
   void WritePromotedRanges(
-      const std::vector<PromotedRange>& promoted_ranges) override;
+      const std::vector<RangeSeq>& promoted_ranges) override;
 
   // Return non-ok iff some error has been detected.
   Status status() const override;
