@@ -101,8 +101,8 @@ void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
       it = ranges.erase(it);
     }
     ranges.emplace_hint(it, std::piecewise_construct,
-                        std::forward_as_tuple(std::move(new_first)),
-                        std::forward_as_tuple(std::move(new_last), new_seq));
+                        std::forward_as_tuple(std::move(new_last)),
+                        std::forward_as_tuple(std::move(new_first), new_seq));
   }
 }
 
