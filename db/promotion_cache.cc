@@ -427,10 +427,10 @@ void PromotionCache::check(CheckerQueueElem &elem) {
       keys.push_back(std::move(*it));
     }
 
-    auto mut = elem.pc->mut_.Write();
+    auto mut = mut_.Write();
     mut->InsertRanges(std::move(cache.ranges), std::move(keys));
     db->mutex()->Unlock();
-    elem.pc->ConsumeBuffer(mut);
+    ConsumeBuffer(mut);
   } else {
     RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
 
@@ -940,7 +940,6 @@ void PromotionCache::SwitchMutablePromotionCache(
         .db = &db,
         .sv = sv,
         .iter = iter,
-        .pc = this,
     });
     queue_len = checker_queue_.size();
   }
