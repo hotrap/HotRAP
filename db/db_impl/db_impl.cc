@@ -1855,7 +1855,7 @@ class TieredIterator : public InternalIterator {
   // If not a stale version, return true, otherwise return false.
   bool UpdateLastUserKey(const Comparator* ucmp,
                          const ParsedInternalKey& ikey) {
-    // Future work: Handle other types
+    // Future work(hotrap): Handle other types
     assert(ikey.type == ValueType::kTypeValue);
     Slice user_key = ikey.user_key;
     int res = ucmp->Compare(user_key, last_user_key_);
