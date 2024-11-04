@@ -213,7 +213,7 @@ InternalIterator* TableCache::NewIterator(
     size_t max_file_size_for_l0_meta_pin,
     const InternalKey* smallest_compaction_key,
     const InternalKey* largest_compaction_key, bool allow_unprepared_value,
-    std::map<std::string, PromotedRangeInfo, UserKeyCompare>* promoted_ranges,
+    std::map<std::string, RangeFirstSeq, UserKeyCompare>* promoted_ranges,
     std::string* last_promoted) {
   PERF_TIMER_GUARD(new_table_iterator_nanos);
 
@@ -283,8 +283,8 @@ InternalIterator* TableCache::NewIterator(
     }
   }
   if (s.ok() && promoted_ranges) {
-    InsertPromotedRanges(*promoted_ranges, icomparator.user_comparator(),
-                         *table_reader->promoted_ranges());
+    InsertRanges(*promoted_ranges, icomparator.user_comparator(),
+                 *table_reader->promoted_ranges());
   }
 
   if (handle != nullptr) {

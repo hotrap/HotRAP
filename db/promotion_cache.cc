@@ -29,51 +29,49 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-void InsertPromotedRanges(
-    std::map<std::string, PromotedRangeInfo, UserKeyCompare> &promoted_ranges,
-    const Comparator *ucmp,
-    const std::vector<PromotedRange> &new_promoted_ranges) {
-  for (const PromotedRange &promoted_range : new_promoted_ranges) {
-    auto it = promoted_ranges.lower_bound(promoted_range.first_user_key);
+void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
+                  const Comparator *ucmp,
+                  const std::vector<PromotedRange> &new_ranges) {
+  for (const PromotedRange &range : new_ranges) {
+    auto it = ranges.lower_bound(range.first_user_key);
     std::string first_user_key, last_user_key;
     SequenceNumber sequence;
-    if (it != promoted_ranges.end() &&
-        ucmp->Compare(it->second.first_user_key,
-                      promoted_range.last_user_key) <= 0) {
+    if (it != ranges.end() &&
+        ucmp->Compare(it->second.first_user_key, range.last_user_key) <= 0) {
       // new first <= old last, old first <= new last
-      if (ucmp->Compare(it->first, promoted_range.last_user_key) < 0) {
+      if (ucmp->Compare(it->first, range.last_user_key) < 0) {
         // new first <= old last < new last
-        last_user_key = promoted_range.last_user_key;
-        if (ucmp->Compare(it->second.first_user_key,
-                          promoted_range.first_user_key) < 0) {
+        last_user_key = range.last_user_key;
+        if (ucmp->Compare(it->second.first_user_key, range.first_user_key) <
+            0) {
           // old first < new first <= old last < new last
           first_user_key = std::move(it->second.first_user_key);
-          sequence = std::max(it->second.sequence, promoted_range.sequence);
+          sequence = std::max(it->second.sequence, range.sequence);
         } else {
           // new first <= old first <= old last < new last
-          first_user_key = promoted_range.first_user_key;
-          sequence = promoted_range.sequence;
+          first_user_key = range.first_user_key;
+          sequence = range.sequence;
         }
       } else {
         // new first <= new last <= old last
-        if (ucmp->Compare(it->second.first_user_key,
-                          promoted_range.first_user_key) <= 0) {
+        if (ucmp->Compare(it->second.first_user_key, range.first_user_key) <=
+            0) {
           // old first <= new first <= new last <= old last
           continue;
         } else {
           // new first < old first <= new last <= old last
-          first_user_key = promoted_range.first_user_key;
+          first_user_key = range.first_user_key;
           last_user_key = it->first;
-          sequence = std::max(it->second.sequence, promoted_range.sequence);
+          sequence = std::max(it->second.sequence, range.sequence);
         }
       }
-      it = promoted_ranges.erase(it);
+      it = ranges.erase(it);
     } else {
-      first_user_key = promoted_range.first_user_key;
-      last_user_key = promoted_range.last_user_key;
-      sequence = promoted_range.sequence;
+      first_user_key = range.first_user_key;
+      last_user_key = range.last_user_key;
+      sequence = range.sequence;
     }
-    promoted_ranges.emplace_hint(
+    ranges.emplace_hint(
         it, std::piecewise_construct,
         std::forward_as_tuple(std::move(first_user_key)),
         std::forward_as_tuple(std::move(last_user_key), sequence));

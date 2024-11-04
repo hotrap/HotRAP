@@ -866,19 +866,19 @@ namespace {
 class LevelIterator final : public InternalIterator {
  public:
   // @param read_options Must outlive this iterator.
-  LevelIterator(TableCache* table_cache, const ReadOptions& read_options,
-                const FileOptions& file_options,
-                const InternalKeyComparator& icomparator,
-                const LevelFilesBrief* flevel,
-                const SliceTransform* prefix_extractor, bool should_sample,
-                HistogramImpl* file_read_hist, TableReaderCaller caller,
-                bool skip_filters, int level, RangeDelAggregator* range_del_agg,
-                std::map<std::string, PromotedRangeInfo, UserKeyCompare>*
-                    promoted_ranges = nullptr,
-                std::string* last_promoted = nullptr,
-                const std::vector<AtomicCompactionUnitBoundary>*
-                    compaction_boundaries = nullptr,
-                bool allow_unprepared_value = false)
+  LevelIterator(
+      TableCache* table_cache, const ReadOptions& read_options,
+      const FileOptions& file_options, const InternalKeyComparator& icomparator,
+      const LevelFilesBrief* flevel, const SliceTransform* prefix_extractor,
+      bool should_sample, HistogramImpl* file_read_hist,
+      TableReaderCaller caller, bool skip_filters, int level,
+      RangeDelAggregator* range_del_agg,
+      std::map<std::string, RangeFirstSeq, UserKeyCompare>* promoted_ranges =
+          nullptr,
+      std::string* last_promoted = nullptr,
+      const std::vector<AtomicCompactionUnitBoundary>* compaction_boundaries =
+          nullptr,
+      bool allow_unprepared_value = false)
       : table_cache_(table_cache),
         read_options_(read_options),
         file_options_(file_options),
@@ -1039,7 +1039,7 @@ class LevelIterator final : public InternalIterator {
   TableReader* table_reader_ = nullptr;
   int level_;
   RangeDelAggregator* range_del_agg_;
-  std::map<std::string, PromotedRangeInfo, UserKeyCompare>* promoted_ranges_;
+  std::map<std::string, RangeFirstSeq, UserKeyCompare>* promoted_ranges_;
   std::string* last_promoted_;
   IteratorWrapper file_iter_;  // May be nullptr
   PinnedIteratorsManager* pinned_iters_mgr_;
@@ -6165,7 +6165,7 @@ class InternalIterAppendLevel : public InternalIterator {
 InternalIterator* VersionSet::MakeInputIterator(
     const ReadOptions& read_options, const Compaction* c,
     RangeDelAggregator* range_del_agg,
-    std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges,
+    std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges,
     const FileOptions& file_options_compactions) {
   auto cfd = c->column_family_data();
 

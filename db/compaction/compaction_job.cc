@@ -1433,7 +1433,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   RouterIteratorFD2SD(
       RALT& ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
       Bound end,
-      std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges)
+      std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges)
       : ralt_(ralt),
         c_(c),
         start_(start),
@@ -1514,12 +1514,12 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   const Compaction& c_;
   const Slice start_;
   const Bound end_;
-  std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges_;
+  std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges_;
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
   Peekable<RALT::Iter> hot_iter_;
-  std::map<std::string, PromotedRangeInfo, UserKeyCompare>::iterator ranges_it_;
+  std::map<std::string, RangeFirstSeq, UserKeyCompare>::iterator ranges_it_;
 
   size_t kvsize_promoted_;
   size_t kvsize_retained_;
@@ -1529,7 +1529,7 @@ class RouterIterator {
   RouterIterator(
       RALT* ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
       Bound end,
-      std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges)
+      std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges)
       : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
     int start_level = c.level();
     int latter_level = c.output_level();
@@ -1645,7 +1645,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   read_options.iterate_lower_bound = start;
   read_options.iterate_upper_bound = end;
 
-  std::map<std::string, PromotedRangeInfo, UserKeyCompare> promoted_ranges(
+  std::map<std::string, RangeFirstSeq, UserKeyCompare> promoted_ranges(
       UserKeyCompare{ucmp});
 
   // Although the v2 aggregator is what the level iterator(s) know about,
@@ -1655,7 +1655,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       file_options_for_read_));
   InternalIterator* input = raw_input.get();
 
-  InsertPromotedRanges(promoted_ranges, ucmp, c->cached_ranges_to_promote());
+  InsertRanges(promoted_ranges, ucmp, c->cached_ranges_to_promote());
 
   IterKey start_ikey;
   IterKey end_ikey;
@@ -2095,7 +2095,7 @@ Status CompactionJob::FinishCompactionOutputFile(
     SubcompactionState::LevelOutput* level_output,
     CompactionRangeDelAggregator* range_del_agg,
     CompactionIterationStats* range_del_out_stats,
-    std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges,
+    std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges,
     const Slice* next_table_min_key /* = nullptr */) {
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_SYNC_FILE);

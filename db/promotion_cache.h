@@ -117,17 +117,16 @@ struct PromotedRange {
         sequence(_sequence) {}
 };
 
-struct PromotedRangeInfo {
+struct RangeFirstSeq {
   std::string first_user_key;
   SequenceNumber sequence;
-  PromotedRangeInfo(std::string &&_first_user_key, SequenceNumber _sequence)
+  RangeFirstSeq(std::string &&_first_user_key, SequenceNumber _sequence)
       : first_user_key(std::move(_first_user_key)), sequence(_sequence) {}
 };
 
-void InsertPromotedRanges(
-    std::map<std::string, PromotedRangeInfo, UserKeyCompare> &promoted_ranges,
-    const Comparator *ucmp,
-    const std::vector<PromotedRange> &new_promoted_ranges);
+void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
+                  const Comparator *ucmp,
+                  const std::vector<PromotedRange> &new_ranges);
 
 struct RangeInfo {
   std::string first_user_key;

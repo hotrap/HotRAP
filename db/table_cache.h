@@ -80,8 +80,8 @@ class TableCache {
       bool skip_filters, int level, size_t max_file_size_for_l0_meta_pin,
       const InternalKey* smallest_compaction_key,
       const InternalKey* largest_compaction_key, bool allow_unprepared_value,
-      std::map<std::string, PromotedRangeInfo, UserKeyCompare>*
-          promoted_ranges = nullptr,
+      std::map<std::string, RangeFirstSeq, UserKeyCompare>* promoted_ranges =
+          nullptr,
       std::string* last_promoted = nullptr);
 
   // If a seek to internal key "k" in specified file finds an entry,

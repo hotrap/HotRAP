@@ -1254,7 +1254,7 @@ class VersionSet {
   InternalIterator* MakeInputIterator(
       const ReadOptions& read_options, const Compaction* c,
       RangeDelAggregator* range_del_agg,
-      std::map<std::string, PromotedRangeInfo, UserKeyCompare>& promoted_ranges,
+      std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges,
       const FileOptions& file_options_compactions);
 
   // Add all files listed in any live version to *live_table_files and
