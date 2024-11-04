@@ -78,7 +78,7 @@ static void MergeBytesSeq(BytesSeq &new_info, BytesSeq &&old_info) {
   new_info.num_bytes += old_info.num_bytes;
   new_info.seq = std::max(new_info.seq, old_info.seq);
 }
-void AssignBytesSeq(BytesSeq &new_info, BytesSeq &&old_info) {
+static void AssignBytesSeq(BytesSeq &new_info, BytesSeq &&old_info) {
   new_info.num_bytes = std::max(new_info.num_bytes, old_info.num_bytes);
   new_info.seq = old_info.seq;
 }
