@@ -135,9 +135,6 @@ class PromotionCache {
     DBImpl *db;
     SuperVersion *sv;
     std::list<ImmPromotionCache>::iterator iter;
-    // Data will be inserted back to this mutable promotion cache if there are
-    // too few data to flush.
-    const PromotionCache *pc;
   };
   void checker();
 

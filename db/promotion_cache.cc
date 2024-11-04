@@ -233,13 +233,13 @@ void PromotionCache::checker() {
       TimerGuard start =
           hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
               .start();
-      auto mut = elem.pc->mut_.Write();
+      auto mut = mut_.Write();
       for (const auto &item : cache.cache) {
         mut->Insert(std::string(item.first), item.second.sequence,
                     std::string(item.second.value));
       }
       db->mutex()->Unlock();
-      elem.pc->ConsumeBuffer(mut);
+      ConsumeBuffer(mut);
     } else {
       RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
 
@@ -406,7 +406,6 @@ void PromotionCache::SwitchMutablePromotionCache(
         .db = &db,
         .sv = sv,
         .iter = iter,
-        .pc = this,
     });
     queue_len = checker_queue_.size();
   }
