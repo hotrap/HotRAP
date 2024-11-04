@@ -743,14 +743,14 @@ void PromotionCache::Mutable::MarkNotOnlyByPointQuery(
     ++it;
   }
 }
-std::vector<std::pair<std::string, std::string>>
-PromotionCache::Mutable::TakeRange(std::vector<RangeSeq> &ranges,
-                                   InternalStats *internal_stats, RALT *ralt,
+std::pair<std::vector<std::pair<std::string, std::string>>,
+          std::vector<RangeSeq>>
+PromotionCache::Mutable::TakeRange(InternalStats *internal_stats, RALT *ralt,
                                    Slice smallest, Slice largest) {
-  assert(ranges.empty());
+  std::vector<RangeSeq> ranges;
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
-  std::vector<std::pair<std::string, std::string>> ret;
+  std::vector<std::pair<std::string, std::string>> records;
   auto range_it = ranges_.lower_bound(smallest.ToString());
   std::map<std::string, PCData, UserKeyCompare>::iterator key_it;
   auto erase_keys_in_range = [this, &key_it](Slice range_last) {
@@ -764,8 +764,8 @@ PromotionCache::Mutable::TakeRange(std::vector<RangeSeq> &ranges,
       key_it = keys_.erase(key_it);
     }
   };
-  auto erase_point_query_keys = [this, &ret, &key_it, ralt](Slice end,
-                                                            bool included) {
+  auto erase_point_query_keys = [this, &records, &key_it, ralt](Slice end,
+                                                                bool included) {
     while (key_it != keys_.end()) {
       const std::string &user_key = key_it->first;
       int res = ucmp_->Compare(user_key, end);
@@ -786,7 +786,7 @@ PromotionCache::Mutable::TakeRange(std::vector<RangeSeq> &ranges,
       ralt->Access(user_key, value.size());
       if (should_promote) {
         InternalKey key(user_key, sequence, kTypeValue);
-        ret.emplace_back(std::move(*key.rep()), std::move(value));
+        records.emplace_back(std::move(*key.rep()), std::move(value));
       }
       key_it = keys_.erase(key_it);
     }
@@ -828,7 +828,7 @@ PromotionCache::Mutable::TakeRange(std::vector<RangeSeq> &ranges,
           std::string &&value = std::move(seq_value.second);
           size_ -= user_key.size() + value.size();
           InternalKey key(user_key, seq_value.first, kTypeValue);
-          ret.emplace_back(std::move(*key.rep()), std::move(value));
+          records.emplace_back(std::move(*key.rep()), std::move(value));
         }
         key_it = keys_.erase(key_it);
       }
@@ -848,8 +848,8 @@ PromotionCache::Mutable::TakeRange(std::vector<RangeSeq> &ranges,
   } else {
     erase_point_query_keys(largest, true);
   }
-  std::sort(ret.begin(), ret.end(), InternalKeyCompare(ucmp_));
-  return ret;
+  std::sort(records.begin(), records.end(), InternalKeyCompare(ucmp_));
+  return std::make_pair(std::move(records), std::move(ranges));
 }
 
 // Return the mutable promotion size, or 0 if inserted to buffer.
@@ -947,12 +947,13 @@ void PromotionCache::SwitchMutablePromotionCache(
                  queue_len);
   signal_check_.notify_one();
 }
-std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
-    std::vector<RangeSeq> &ranges, InternalStats *internal_stats, RALT *ralt,
-    Slice smallest, Slice largest) const {
+std::pair<std::vector<std::pair<std::string, std::string>>,
+          std::vector<RangeSeq>>
+PromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
+                          Slice smallest, Slice largest) const {
   auto mut = mut_.Write();
   ConsumeBuffer(mut);
-  return mut->TakeRange(ranges, internal_stats, ralt, smallest, largest);
+  return mut->TakeRange(internal_stats, ralt, smallest, largest);
 }
 
 }  // namespace ROCKSDB_NAMESPACE

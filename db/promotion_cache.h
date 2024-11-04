@@ -183,9 +183,10 @@ class PromotionCache {
       std::string &&first_user_key, std::string &&last_user_key,
       SequenceNumber sequence, uint64_t num_bytes) const;
 
-  std::vector<std::pair<std::string, std::string>> TakeRange(
-      std::vector<RangeSeq> &ranges, InternalStats *internal_stats, RALT *ralt,
-      Slice smallest, Slice largest) const;
+  std::pair<std::vector<std::pair<std::string, std::string>>,
+            std::vector<RangeSeq>>
+  TakeRange(InternalStats *internal_stats, RALT *ralt, Slice smallest,
+            Slice largest) const;
 
   const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
     return imm_list_;
@@ -224,9 +225,10 @@ class PromotionCache {
         std::map<std::string, PCData, UserKeyCompare>::iterator &it,
         Slice range_last);
 
-    std::vector<std::pair<std::string, std::string>> TakeRange(
-        std::vector<RangeSeq> &ranges, InternalStats *internal_stats,
-        RALT *ralt, Slice smallest, Slice largest);
+    std::pair<std::vector<std::pair<std::string, std::string>>,
+              std::vector<RangeSeq>>
+    TakeRange(InternalStats *internal_stats, RALT *ralt, Slice smallest,
+              Slice largest);
 
    private:
     const Comparator *ucmp_;
