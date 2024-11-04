@@ -29,52 +29,81 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+// REQUIRES: new_first <= old_last, old_first <= new_last
+template <typename RangeInfo>
+void MergeTwoRanges(const Comparator *ucmp, std::string &new_first,
+                    std::string &new_last, RangeInfo &new_info,
+                    std::string &&old_first, std::string &&old_last,
+                    RangeInfo &&old_info,
+                    void (*merge)(RangeInfo &new_info, RangeInfo &&old_info),
+                    void (*assign)(RangeInfo &new_info, RangeInfo &&old_info)) {
+  if (ucmp->Compare(old_last, new_last) < 0) {
+    // new_first <= old_last < new_last
+    if (ucmp->Compare(old_first, new_first) < 0) {
+      // old_first < new_first <= old_last < new_last
+      new_first = std::move(old_first);
+      merge(new_info, std::move(old_info));
+    } else {
+      // new_first <= old_first <= old_last < new_last
+    }
+  } else {
+    // new_first <= new_last <= old_last
+    new_last = std::move(old_last);
+    if (ucmp->Compare(old_first, new_first) <= 0) {
+      // old_first <= new_first <= new_last <= old_last
+      new_first = std::move(old_first);
+      new_info = std::move(old_info);
+      assign(new_info, std::move(old_info));
+    } else {
+      // new_first < old_first <= new_last <= old_last
+      merge(new_info, std::move(old_info));
+    }
+  }
+}
+
+static void MergeSeq(SequenceNumber &new_seq, SequenceNumber &&old_seq) {
+  new_seq = std::max(new_seq, old_seq);
+}
+static void AssignSeq(SequenceNumber &new_seq, SequenceNumber &&old_seq) {
+  new_seq = old_seq;
+}
+
+struct BytesSeq {
+  uint64_t num_bytes;
+  SequenceNumber seq;
+};
+static void MergeBytesSeq(BytesSeq &new_info, BytesSeq &&old_info) {
+  // Overestimation. Precise estimation requires maintaining length for
+  // all accessed keys, which can consume much memory.
+  new_info.num_bytes += old_info.num_bytes;
+  new_info.seq = std::max(new_info.seq, old_info.seq);
+}
+void AssignBytesSeq(BytesSeq &new_info, BytesSeq &&old_info) {
+  new_info.num_bytes = std::max(new_info.num_bytes, old_info.num_bytes);
+  new_info.seq = old_info.seq;
+}
+
 void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
                   const Comparator *ucmp,
                   const std::vector<RangeSeq> &new_ranges) {
   for (const RangeSeq &range : new_ranges) {
-    auto it = ranges.lower_bound(range.first_user_key);
-    std::string first_user_key, last_user_key;
-    SequenceNumber sequence;
-    if (it != ranges.end() &&
-        ucmp->Compare(it->second.first_user_key, range.last_user_key) <= 0) {
-      // new first <= old last, old first <= new last
-      if (ucmp->Compare(it->first, range.last_user_key) < 0) {
-        // new first <= old last < new last
-        last_user_key = range.last_user_key;
-        if (ucmp->Compare(it->second.first_user_key, range.first_user_key) <
-            0) {
-          // old first < new first <= old last < new last
-          first_user_key = std::move(it->second.first_user_key);
-          sequence = std::max(it->second.sequence, range.sequence);
-        } else {
-          // new first <= old first <= old last < new last
-          first_user_key = range.first_user_key;
-          sequence = range.sequence;
-        }
-      } else {
-        // new first <= new last <= old last
-        if (ucmp->Compare(it->second.first_user_key, range.first_user_key) <=
-            0) {
-          // old first <= new first <= new last <= old last
-          continue;
-        } else {
-          // new first < old first <= new last <= old last
-          first_user_key = range.first_user_key;
-          last_user_key = it->first;
-          sequence = std::max(it->second.sequence, range.sequence);
-        }
-      }
+    std::string new_first = range.first_user_key;
+    std::string new_last = range.last_user_key;
+    SequenceNumber new_seq = range.sequence;
+    auto it = ranges.lower_bound(new_first);
+    // new_first <= old_last
+    while (it != ranges.end() &&
+           ucmp->Compare(it->second.first_user_key, new_last) <= 0) {
+      // old_first <= new_last
+      MergeTwoRanges(ucmp, new_first, new_last, new_seq,
+                     std::move(it->second.first_user_key),
+                     std::string(it->first),
+                     SequenceNumber(it->second.sequence), MergeSeq, AssignSeq);
       it = ranges.erase(it);
-    } else {
-      first_user_key = range.first_user_key;
-      last_user_key = range.last_user_key;
-      sequence = range.sequence;
     }
-    ranges.emplace_hint(
-        it, std::piecewise_construct,
-        std::forward_as_tuple(std::move(first_user_key)),
-        std::forward_as_tuple(std::move(last_user_key), sequence));
+    ranges.emplace_hint(it, std::piecewise_construct,
+                        std::forward_as_tuple(std::move(new_first)),
+                        std::forward_as_tuple(std::move(new_last), new_seq));
   }
 }
 
@@ -604,6 +633,10 @@ void PromotionCache::Mutable::InsertRanges(
 void PromotionCache::Mutable::MergeRange(
     std::map<std::string, RangeInfo, UserKeyCompare>::iterator &it,
     std::string &&new_range_last, RangeInfo &&new_range) {
+  BytesSeq new_info{
+      .num_bytes = new_range.num_bytes,
+      .seq = new_range.sequence,
+  };
   if (it != ranges_.end()) {
     assert(ucmp_->Compare(it->first, new_range.first_user_key) >= 0);
     if (it != ranges_.begin()) {
@@ -617,36 +650,15 @@ void PromotionCache::Mutable::MergeRange(
          ucmp_->Compare(it->second.first_user_key, new_range_last) <= 0) {
     std::string &&old_first = std::move(it->second.first_user_key);
     // old first <= new last
-    const std::string &old_last = it->first;
-    uint64_t old_num_bytes = it->second.num_bytes;
-    SequenceNumber old_sequence = it->second.sequence;
+    std::string old_last = it->first;
+    BytesSeq old_info{
+        .num_bytes = it->second.num_bytes,
+        .seq = it->second.sequence,
+    };
     new_range.count += it->second.count;
-    if (ucmp_->Compare(old_last, new_range_last) < 0) {
-      // old last < new last
-      if (ucmp_->Compare(old_first, new_range.first_user_key) < 0) {
-        // old first < new first <= old last < new last
-        new_range.first_user_key = std::move(old_first);
-        // Overestimation. Precise estimation requires maintaining length for
-        // all accessed keys, which can consume much memory.
-        new_range.num_bytes += old_num_bytes;
-        new_range.sequence = std::max(new_range.sequence, old_sequence);
-      } else {
-        // new first <= old first <= old last < new last
-      }
-    } else {
-      // old first <= new last <= old last
-      if (ucmp_->Compare(old_first, new_range.first_user_key) <= 0) {
-        // old first <= new first <= new last <= old last
-        new_range.first_user_key = std::move(old_first);
-        new_range.num_bytes = std::max(new_range.num_bytes, old_num_bytes);
-        new_range.sequence = old_sequence;
-      } else {
-        // new first < old first <= new last <= old last
-        new_range.num_bytes += old_num_bytes;
-        new_range.sequence = std::max(new_range.sequence, old_sequence);
-      }
-      new_range_last.assign(old_last);
-    }
+    MergeTwoRanges(ucmp_, new_range.first_user_key, new_range_last, new_info,
+                   std::move(old_first), std::move(old_last),
+                   std::move(old_info), MergeBytesSeq, AssignBytesSeq);
     it = ranges_.erase(it);
   }
   if (it != ranges_.end()) {
@@ -657,6 +669,8 @@ void PromotionCache::Mutable::MergeRange(
     --tmp;
     assert(ucmp_->Compare(tmp->first, new_range.first_user_key) < 0);
   }
+  new_range.num_bytes = new_info.num_bytes;
+  new_range.sequence = new_info.seq;
   it =
       ranges_.emplace_hint(it, std::move(new_range_last), std::move(new_range));
 }
