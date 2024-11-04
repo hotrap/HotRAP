@@ -1281,7 +1281,7 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
              compaction_result.bytes_written);
   return CompactionServiceJobStatus::kSuccess;
 #endif
-  // Future work: Support this by adding an output level
+  // Future work(hotrap): Support this by adding an output level
   return CompactionServiceJobStatus::kFailure;
 }
 #endif  // !ROCKSDB_LITE
@@ -1346,7 +1346,7 @@ struct Elem {
       : decision(arg_decision), kv(internal_key, arg_value) {}
 };
 
-// Future work: The caller should ZeroOutSequenceIfPossible if the final
+// Future work(hotrap): The caller should ZeroOutSequenceIfPossible if the final
 // decision is kNextLevel
 class CompactionIterWrapper : public TraitIterator<IKeyValueLevel> {
  public:
@@ -1515,8 +1515,8 @@ class RouterIterator {
     int start_level = c.level();
     int latter_level = c.output_level();
     if (ralt == NULL) {
-      // Future work: Handle the case that it's not empty, which is possible
-      // when ralt was not NULL but then is set to NULL.
+      // Future work(hotrap): Handle the case that it's not empty, which is
+      // possible when ralt was not NULL but then is set to NULL.
       assert(c.cached_records_to_promote().empty());
       iter_ = std::unique_ptr<IteratorWithoutRouter>(
           new IteratorWithoutRouter(c, c_iter));
@@ -1750,7 +1750,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
           : sub_compact->compaction->CreateSstPartitioner();
   std::string last_key_for_partitioner;
 
-  // Future work: How to handle other cases?
+  // Future work(hotrap): How to handle other cases?
   assert(c->num_input_levels() <= 2);
   const CompactionInputFiles& start_level_inputs = (*c->inputs())[0];
   assert(start_level_inputs.level == c->start_level());

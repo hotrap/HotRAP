@@ -104,7 +104,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
   if (ralt == nullptr) return;
   target_level_to_promote_ = -1;
   if (start_level_ != output_level_) {
-    // Future work: Handle other cases
+    // Future work(hotrap): Handle other cases
     assert(output_level_ == start_level_ + 1);
     auto mark_fn = [this]() {
       for (size_t i = 0; i < num_input_levels(); i++) {
@@ -136,7 +136,8 @@ void Compaction::SetInputVersion(Version* _input_version) {
   auto it = caches->find(output_level_);
   if (it != caches->end()) {
     assert(it->first == (size_t)output_level_);
-    // Future work: Handle the other case which is possible if ralt changes.
+    // Future work(hotrap): Handle the other case which is possible if ralt
+    // changes.
     assert(cached_records_to_promote_.empty());
     target_level_to_promote_ = output_level_;
     cached_records_to_promote_ = it->second.TakeRange(
