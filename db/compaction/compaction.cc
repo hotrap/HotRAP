@@ -128,6 +128,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
       cache.being_or_has_been_compacted_lock().WriteLock();
       mark_fn();
       cache.being_or_has_been_compacted_lock().WriteUnlock();
+      // Future work(hotrap): Can we move TakeRange out of the DB mutex?
       cached_records_to_promote_ = it->second.TakeRange(
           cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
     }
