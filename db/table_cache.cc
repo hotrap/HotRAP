@@ -284,7 +284,7 @@ InternalIterator* TableCache::NewIterator(
   }
   if (s.ok() && promoted_ranges) {
     InsertRanges(*promoted_ranges, icomparator.user_comparator(),
-                 *table_reader->promoted_ranges());
+                 std::vector<RangeSeq>(*table_reader->promoted_ranges()));
   }
 
   if (handle != nullptr) {

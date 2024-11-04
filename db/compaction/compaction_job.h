@@ -161,6 +161,8 @@ class CompactionJob {
     // 'start' is inclusive, 'end' is exclusive, and nullptr means unbounded
     Slice *start, *end;
 
+    std::vector<RangeSeq> cached_ranges_to_promote;
+
     // The return status of this subcompaction
     Status status;
 
@@ -197,8 +199,9 @@ class CompactionJob {
     // within the same compaction job.
     const uint32_t sub_job_id;
 
-    SubcompactionState(Compaction* c, Slice* _start, Slice* _end, uint64_t size,
-                      uint32_t _sub_job_id);
+    SubcompactionState(Compaction* c, Slice* _start, Slice* _end,
+                       std::vector<RangeSeq>&& _cached_ranges_to_promote,
+                       uint64_t size, uint32_t _sub_job_id);
 
     void FillFilesToCutForTtl();
 

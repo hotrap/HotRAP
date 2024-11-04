@@ -158,8 +158,8 @@ class Compaction {
   cached_records_to_promote() const {
     return cached_records_to_promote_;
   }
-  const std::vector<RangeSeq>& cached_ranges_to_promote() const {
-    return cached_ranges_to_promoted_;
+  std::vector<RangeSeq>&& cached_ranges_to_promote() {
+    return std::move(cached_ranges_to_promoted_);
   }
   int target_level_to_promote() const { return target_level_to_promote_; }
 

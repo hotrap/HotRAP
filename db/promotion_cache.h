@@ -125,8 +125,7 @@ struct RangeFirstSeq {
 };
 
 void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
-                  const Comparator *ucmp,
-                  const std::vector<RangeSeq> &new_ranges);
+                  const Comparator *ucmp, std::vector<RangeSeq> &&new_ranges);
 
 struct RangeInfo {
   std::string first_user_key;

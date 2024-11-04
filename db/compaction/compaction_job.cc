@@ -203,14 +203,14 @@ std::string CompactionJob::SubcompactionState::LevelOutput::GetTableFileName(
   return TableFileName(ioptions->cf_paths, file_number, path_id());
 }
 
-CompactionJob::SubcompactionState::SubcompactionState(Compaction* c,
-                                                      Slice* _start,
-                                                      Slice* _end,
-                                                      uint64_t size,
-                                                      uint32_t _sub_job_id)
+CompactionJob::SubcompactionState::SubcompactionState(
+    Compaction* c, Slice* _start, Slice* _end,
+    std::vector<RangeSeq>&& _cached_ranges_to_promote, uint64_t size,
+    uint32_t _sub_job_id)
     : compaction(c),
       start(_start),
       end(_end),
+      cached_ranges_to_promote(std::move(_cached_ranges_to_promote)),
       start_level_output(c->start_level_path_id(), c->start_level(), 1),
       latter_level_output(c->latter_level_path_id(), c->output_level(),
                           c->latter_level_hot_per_byte()),
@@ -595,10 +595,31 @@ void CompactionJob::Prepare() {
     }
     assert(sizes_.size() == boundaries_.size() + 1);
 
+    const Comparator* ucmp = c->column_family_data()->user_comparator();
+    auto cached_it = c->cached_ranges_to_promote().begin();
+    auto cached_end = c->cached_ranges_to_promote().end();
     for (size_t i = 0; i <= boundaries_.size(); i++) {
       Slice* start = i == 0 ? nullptr : &boundaries_[i - 1];
       Slice* end = i == boundaries_.size() ? nullptr : &boundaries_[i];
-      compact_->sub_compact_states.emplace_back(c, start, end, sizes_[i],
+      std::vector<RangeSeq> cached;
+      if (start) {
+        while (cached_it != cached_end &&
+               ucmp->Compare(cached_it->first_user_key, *start) < 0) {
+          ++cached_it;
+        }
+      }
+      if (end) {
+        while (cached_it != cached_end &&
+               ucmp->Compare(cached_it->last_user_key, *end) <= 0) {
+          cached.push_back(std::move(*cached_it));
+        }
+      } else {
+        while (cached_it != cached_end) {
+          cached.push_back(std::move(*cached_it));
+        }
+      }
+      compact_->sub_compact_states.emplace_back(c, start, end,
+                                                std::move(cached), sizes_[i],
                                                 static_cast<uint32_t>(i));
     }
     RecordInHistogram(stats_, NUM_SUBCOMPACTIONS_SCHEDULED,
@@ -608,8 +629,9 @@ void CompactionJob::Prepare() {
     constexpr Slice* end = nullptr;
     constexpr uint64_t size = 0;
 
-    compact_->sub_compact_states.emplace_back(c, start, end, size,
-                                              /*sub_job_id*/ 0);
+    compact_->sub_compact_states.emplace_back(
+        c, start, end, std::move(c->cached_ranges_to_promote()), size,
+        /*sub_job_id*/ 0);
   }
 }
 
@@ -1655,7 +1677,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       file_options_for_read_));
   InternalIterator* input = raw_input.get();
 
-  InsertRanges(promoted_ranges, ucmp, c->cached_ranges_to_promote());
+  InsertRanges(promoted_ranges, ucmp,
+               std::move(sub_compact->cached_ranges_to_promote));
 
   IterKey start_ikey;
   IterKey end_ikey;

@@ -84,12 +84,11 @@ void AssignBytesSeq(BytesSeq &new_info, BytesSeq &&old_info) {
 }
 
 void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
-                  const Comparator *ucmp,
-                  const std::vector<RangeSeq> &new_ranges) {
-  for (const RangeSeq &range : new_ranges) {
-    std::string new_first = range.first_user_key;
-    std::string new_last = range.last_user_key;
-    SequenceNumber new_seq = range.sequence;
+                  const Comparator *ucmp, std::vector<RangeSeq> &&new_ranges) {
+  for (RangeSeq &range : new_ranges) {
+    std::string &&new_first = std::move(range.first_user_key);
+    std::string &&new_last = std::move(range.last_user_key);
+    SequenceNumber &new_seq = range.sequence;
     auto it = ranges.lower_bound(new_first);
     // new_first <= old_last
     while (it != ranges.end() &&
