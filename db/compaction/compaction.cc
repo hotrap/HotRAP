@@ -125,11 +125,12 @@ void Compaction::SetInputVersion(Version* _input_version) {
       assert(it->first == (size_t)start_level_);
       target_level_to_promote_ = start_level_;
       const auto& cache = it->second;
+      caches.drop();
       cache.being_or_has_been_compacted_lock().WriteLock();
       mark_fn();
       cache.being_or_has_been_compacted_lock().WriteUnlock();
       // Future work(hotrap): Can we move TakeRange out of the DB mutex?
-      cached_records_to_promote_ = it->second.TakeRange(
+      cached_records_to_promote_ = cache.TakeRange(
           cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
     }
   }

@@ -103,11 +103,19 @@ class ReadUnlock {
     return *this;
   }
 
-  ~ReadUnlock() {
-    if (mu_ != nullptr) mu_->ReadUnlock();
+  ~ReadUnlock() { __drop(); }
+
+  void drop() {
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() {
+    if (mu_ == nullptr) return;
+    mu_->ReadUnlock();
+  }
+
   const port::RWMutex *mu_;
 };
 
@@ -204,6 +212,8 @@ class ReadGuard {
   }
   const T &operator*() const { return *data_; }
   const T *operator->() const { return data_; }
+
+  void drop() { lock_.drop(); }
 
  private:
   const T *data_;
