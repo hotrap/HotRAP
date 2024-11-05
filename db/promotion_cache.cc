@@ -387,11 +387,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
 
   std::list<ImmPromotionCache> tmp;
   {
-    auto caches = cfd->promotion_caches().Read();
-    auto caches_it = caches->find(target_level_);
-    assert(caches_it != caches->end());
-    assert(caches_it->first == target_level_);
-    auto list = caches_it->second.imm_list().Write();
+    auto list = imm_list().Write();
     list->size -= iter->size;
     tmp.splice(tmp.begin(), list->list, iter);
   }

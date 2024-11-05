@@ -125,27 +125,26 @@ void Compaction::SetInputVersion(Version* _input_version) {
       assert(it->first == (size_t)start_level_);
       target_level_to_promote_ = start_level_;
       const auto& cache = it->second;
+      caches.drop();
       cache.being_or_has_been_compacted_lock().WriteLock();
       mark_fn();
       cache.being_or_has_been_compacted_lock().WriteUnlock();
       // Future work(hotrap): Can we move TakeRange out of the DB mutex?
-      auto ret = it->second.TakeRange(cfd_->internal_stats(), ralt,
-                                      smallest_user_key_, largest_user_key_);
+      auto ret = cache.TakeRange(cfd_->internal_stats(), ralt,
+                                 smallest_user_key_, largest_user_key_);
       cached_records_to_promote_ = std::move(ret.first);
       cached_ranges_to_promoted_ = std::move(ret.second);
     }
   }
-  auto caches = cfd_->promotion_caches().Read();
-  auto it = caches->find(output_level_);
-  if (it != caches->end()) {
-    assert(it->first == (size_t)output_level_);
+  auto cache = cfd_->get_promotion_cache(output_level_);
+  if (cache) {
     // Future work(hotrap): Handle the other case which is possible if ralt
     // changes.
     assert(cached_records_to_promote_.empty());
     assert(cached_ranges_to_promoted_.empty());
     target_level_to_promote_ = output_level_;
-    auto ret = it->second.TakeRange(cfd_->internal_stats(), ralt,
-                                    smallest_user_key_, largest_user_key_);
+    auto ret = cache->TakeRange(cfd_->internal_stats(), ralt,
+                                smallest_user_key_, largest_user_key_);
     cached_records_to_promote_ = std::move(ret.first);
     cached_ranges_to_promoted_ = std::move(ret.second);
   }
