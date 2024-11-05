@@ -62,6 +62,11 @@ struct ImmPCData {
   std::deque<std::pair<SequenceNumber, std::string>> seq_value;
   bool only_by_point_query;
   bool repeated_accessed;
+  ImmPCData(std::deque<std::pair<SequenceNumber, std::string>> &&_seq_value,
+            bool _only_by_point_query, bool _repeated_accessed)
+      : seq_value(std::move(_seq_value)),
+        only_by_point_query(_only_by_point_query),
+        repeated_accessed(_repeated_accessed) {}
 };
 
 class UserKeyCompare {

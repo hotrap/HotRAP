@@ -917,12 +917,10 @@ void PromotionCache::SwitchMutablePromotionCache(
         size += a.first.size() + seq_value.second.size();
       }
       auto ret = cache.emplace(
-          std::move(a.first),
-          ImmPCData{
-              .seq_value = std::move(a.second.seq_value()),
-              .only_by_point_query = a.second.only_by_point_query(),
-              .repeated_accessed = a.second.repeated_accessed(),
-          });
+          std::piecewise_construct, std::forward_as_tuple(std::move(a.first)),
+          std::forward_as_tuple(std::move(a.second.seq_value()),
+                                a.second.only_by_point_query(),
+                                a.second.repeated_accessed()));
       assert(ret.second);
     }
     mut->keys_.clear();
