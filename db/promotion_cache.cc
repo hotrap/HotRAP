@@ -83,6 +83,19 @@ static void AssignBytesSeq(BytesSeq &new_info, BytesSeq &&old_info) {
   new_info.seq = old_info.seq;
 }
 
+struct SeqVer {
+  SequenceNumber seq;
+  uint64_t version_number;
+};
+static void MergeSeqVer(SeqVer &new_info, SeqVer &&old_info) {
+  new_info.seq = std::max(new_info.seq, old_info.seq);
+  new_info.version_number =
+      std::max(new_info.version_number, old_info.version_number);
+}
+static void AssignSeqVer(SeqVer &new_info, SeqVer &&old_info) {
+  new_info = old_info;
+}
+
 void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
                   const Comparator *ucmp, std::vector<RangeSeq> &&new_ranges) {
   for (RangeSeq &range : new_ranges) {
@@ -110,6 +123,7 @@ PromotionCache::PromotionCache(DBImpl &db, int target_level,
                                const Comparator *ucmp)
     : db_(db),
       target_level_(target_level),
+      ucmp_(ucmp),
       mut_(ucmp),
       should_stop_(false),
       checker_([this] { this->checker(); }),
@@ -431,10 +445,10 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
 
     // No need to SetNextLogNumber, because we don't delete any log file
-    MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0,
-                                            std::move(cache.ranges));
-    // FIXME(hotrap): Promoted ranges in SSTables above the last level in FD
-    // should be retained unconditionally.
+    // The new immutable memtable is not written to WAL, so we can't mark the
+    // ranges as promoted before the records are flushed.
+    MemTable *m = cfd->ConstructNewMemtable(
+        sv->mutable_cf_options, 0, std::move(cache.ranges), target_level_);
     m->Ref();
     autovector<MemTable *> memtables_to_free;
     SuperVersionContext svc(true);
@@ -943,13 +957,108 @@ void PromotionCache::SwitchMutablePromotionCache(
                  queue_len);
   signal_check_.notify_one();
 }
+
+void PromotionCache::MarkRangesPromoted(std::vector<RangeSeq> &&ranges,
+                                        uint64_t version_number) const {
+  auto promoted_ranges = promoted_ranges_.Write();
+  for (RangeSeq &range : ranges) {
+    std::string &&new_first = std::move(range.first_user_key);
+    std::string &&new_last = std::move(range.last_user_key);
+    SeqVer new_info{
+        .seq = range.sequence,
+        .version_number = version_number,
+    };
+    auto it = promoted_ranges->lower_bound(new_first);
+    // new_first <= old_last
+    while (it != promoted_ranges->end() &&
+           ucmp_->Compare(it->second.first_user_key, new_last) <= 0) {
+      // old_first <= new_last
+      SeqVer old_info{
+          .seq = it->second.sequence,
+          .version_number = it->second.version_number,
+      };
+      MergeTwoRanges(ucmp_, new_first, new_last, new_info,
+                     std::move(it->second.first_user_key),
+                     std::string(it->first), std::move(old_info), MergeSeqVer,
+                     AssignSeqVer);
+      it = promoted_ranges->erase(it);
+    }
+    promoted_ranges->emplace_hint(
+        it, std::piecewise_construct,
+        std::forward_as_tuple(std::move(new_last)),
+        std::forward_as_tuple(std::move(new_first), new_info.seq,
+                              new_info.version_number));
+  }
+}
+void PromotionCache::LastPromoted(const ReadOptions &read_options,
+                                  uint64_t version_number, Slice seek_user_key,
+                                  std::string &last_promoted) const {
+  auto res = promoted_ranges_.TryRead();
+  if (!res.has_value()) return;
+  auto &mut = res.value();
+  auto it = mut->lower_bound(seek_user_key.ToString());
+  if (it == mut->end()) return;
+  if (read_options.snapshot &&
+      it->second.sequence > read_options.snapshot->GetSequenceNumber())
+    return;
+  if (it->second.version_number > version_number) return;
+  if (ucmp_->Compare(it->second.first_user_key, seek_user_key) > 0) return;
+  if (last_promoted.empty() || ucmp_->Compare(it->first, last_promoted) > 0) {
+    last_promoted.assign(it->first);
+  }
+}
+
 std::pair<std::vector<std::pair<std::string, std::string>>,
           std::vector<RangeSeq>>
 PromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
                           Slice smallest, Slice largest) const {
-  auto mut = mut_.Write();
-  ConsumeBuffer(mut);
-  return mut->TakeRange(internal_stats, ralt, smallest, largest);
+  std::pair<std::vector<std::pair<std::string, std::string>>,
+            std::vector<RangeSeq>>
+      ret;
+  {
+    auto mut = mut_.Write();
+    ConsumeBuffer(mut);
+    ret = mut->TakeRange(internal_stats, ralt, smallest, largest);
+  }
+  auto records = std::move(ret.first);
+  auto ranges = std::move(ret.second);
+
+  std::vector<RangeSeq> promoted;
+  {
+    auto promoted_ranges = promoted_ranges_.Write();
+    auto it = promoted_ranges->lower_bound(smallest.ToString());
+    while (it != promoted_ranges->end() &&
+           ucmp_->Compare(it->first, largest) <= 0) {
+      promoted.emplace_back(std::move(it->second.first_user_key),
+                            std::string(it->first), it->second.sequence);
+      it = promoted_ranges->erase(it);
+    }
+  }
+
+  std::vector<RangeSeq> merged_ranges;
+  auto promoted_it = promoted.begin();
+  for (RangeSeq &range : ranges) {
+    std::string &&new_first = std::move(range.first_user_key);
+    std::string &&new_last = std::move(range.last_user_key);
+    SequenceNumber new_seq = range.sequence;
+    while (promoted_it != promoted.end() &&
+           ucmp_->Compare(promoted_it->last_user_key, new_first) < 0) {
+      merged_ranges.emplace_back(std::move(*promoted_it));
+      ++promoted_it;
+    }
+    while (promoted_it != promoted.end() &&
+           ucmp_->Compare(promoted_it->first_user_key, new_last) <= 0) {
+      MergeTwoRanges(ucmp_, new_first, new_last, new_seq,
+                     std::move(promoted_it->first_user_key),
+                     std::move(promoted_it->last_user_key),
+                     std::move(promoted_it->sequence), MergeSeq, AssignSeq);
+      ++promoted_it;
+    }
+    merged_ranges.emplace_back(std::move(new_first), std::move(new_last),
+                               new_seq);
+  }
+
+  return std::make_pair(std::move(records), std::move(merged_ranges));
 }
 
 }  // namespace ROCKSDB_NAMESPACE

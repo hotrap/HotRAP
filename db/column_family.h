@@ -372,7 +372,8 @@ class ColumnFamilyData {
   // See Memtable constructor for explanation of earliest_seq param.
   MemTable* ConstructNewMemtable(
       const MutableCFOptions& mutable_cf_options, SequenceNumber earliest_seq,
-      std::map<std::string, RangeInfo, UserKeyCompare>&& promoted_ranges = {});
+      std::map<std::string, RangeInfo, UserKeyCompare>&& promoted_ranges = {},
+      ssize_t target_level = -1);
   void CreateNewMemtable(const MutableCFOptions& mutable_cf_options,
                          SequenceNumber earliest_seq);
 

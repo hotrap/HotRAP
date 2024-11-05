@@ -109,7 +109,8 @@ class MemTable {
                     const MutableCFOptions& mutable_cf_options,
                     WriteBufferManager* write_buffer_manager,
                     SequenceNumber earliest_seq, uint32_t column_family_id,
-                    std::vector<RangeSeq>&& promoted_ranges = {});
+                    std::vector<RangeSeq>&& promoted_ranges = {},
+                    ssize_t target_level = -1);
   // No copying allowed
   MemTable(const MemTable&) = delete;
   MemTable& operator=(const MemTable&) = delete;
@@ -497,8 +498,12 @@ class MemTable {
   // Returns a heuristic flush decision
   bool ShouldFlushNow();
 
-  const std::vector<RangeSeq>& promoted_ranges() const {
-    return promoted_ranges_;
+  std::vector<RangeSeq>&& promoted_ranges() {
+    return std::move(promoted_ranges_);
+  }
+  size_t target_level() const {
+    assert(target_level_ != -1);
+    return target_level_;
   }
 
  private:
@@ -584,6 +589,7 @@ class MemTable {
   std::atomic<uint64_t> approximate_memory_usage_;
 
   std::vector<RangeSeq> promoted_ranges_;
+  ssize_t target_level_;
 
 #ifndef ROCKSDB_LITE
   // Flush job info of the current memtable.

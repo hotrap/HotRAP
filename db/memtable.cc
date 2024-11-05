@@ -69,7 +69,8 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
                    const MutableCFOptions& mutable_cf_options,
                    WriteBufferManager* write_buffer_manager,
                    SequenceNumber latest_seq, uint32_t column_family_id,
-                   std::vector<RangeSeq>&& promoted_ranges)
+                   std::vector<RangeSeq>&& promoted_ranges,
+                   ssize_t target_level)
     : comparator_(cmp),
       moptions_(ioptions, mutable_cf_options),
       refs_(0),
@@ -112,7 +113,8 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
       oldest_key_time_(std::numeric_limits<uint64_t>::max()),
       atomic_flush_seqno_(kMaxSequenceNumber),
       approximate_memory_usage_(0),
-      promoted_ranges_(std::move(promoted_ranges)) {
+      promoted_ranges_(std::move(promoted_ranges)),
+      target_level_(target_level) {
   UpdateFlushState();
   // something went wrong if we need to flush before inserting anything
   assert(!ShouldScheduleFlush());

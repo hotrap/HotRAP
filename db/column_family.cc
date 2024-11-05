@@ -1148,7 +1148,8 @@ uint64_t ColumnFamilyData::GetLiveSstFilesSize() const {
 
 MemTable* ColumnFamilyData::ConstructNewMemtable(
     const MutableCFOptions& mutable_cf_options, SequenceNumber earliest_seq,
-    std::map<std::string, RangeInfo, UserKeyCompare>&& promoted_ranges) {
+    std::map<std::string, RangeInfo, UserKeyCompare>&& promoted_ranges,
+    ssize_t target_level) {
   std::vector<RangeSeq> ranges;
   for (auto&& range : std::move(promoted_ranges)) {
     std::string last_user_key = range.first;
@@ -1157,7 +1158,7 @@ MemTable* ColumnFamilyData::ConstructNewMemtable(
   }
   return new MemTable(internal_comparator_, ioptions_, mutable_cf_options,
                       write_buffer_manager_, earliest_seq, id_,
-                      std::move(ranges));
+                      std::move(ranges), target_level);
 }
 
 void ColumnFamilyData::CreateNewMemtable(

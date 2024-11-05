@@ -691,6 +691,17 @@ void MemTableList::RemoveMemTablesOrRestoreFlags(
                          m->edit_.GetBlobFileAdditions().size(), mem_id);
       }
 
+      // The MemTable is flushed, and cfd->current() has been set to the new
+      // version. So we can now safely mark the ranges promoted.
+      if (!m->promoted_ranges().empty()) {
+        const PromotionCache* cache =
+            cfd->get_promotion_cache(m->target_level());
+        // Future work: Handle the other case
+        assert(cache);
+        cache->MarkRangesPromoted(std::move(m->promoted_ranges()),
+                                  cfd->current()->GetVersionNumber());
+      }
+
       assert(m->file_number_ > 0);
       current_->Remove(m, to_delete);
       UpdateCachedValuesFromMemTableListVersion();

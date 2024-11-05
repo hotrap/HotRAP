@@ -46,6 +46,7 @@ const char* timer_names[] = {
     "CheckStablyHot",
     "CheckNewerVersion",
     "WriteBackToMutablePromotionCache",
+    "MarkRangesPromoted",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 

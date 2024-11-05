@@ -810,8 +810,6 @@ Status FlushJob::WriteLevel0Table() {
     std::vector<InternalIterator*> memtables;
     std::vector<std::unique_ptr<FragmentedRangeTombstoneIterator>>
         range_del_iters;
-    std::vector<std::reference_wrapper<const std::vector<RangeSeq>>>
-        promoted_ranges;
     ReadOptions ro;
     ro.total_order_seek = true;
     Arena arena;
@@ -829,7 +827,6 @@ Status FlushJob::WriteLevel0Table() {
       if (range_del_iter != nullptr) {
         range_del_iters.emplace_back(range_del_iter);
       }
-      promoted_ranges.push_back(std::ref(m->promoted_ranges()));
       total_num_entries += m->num_entries();
       total_num_deletes += m->num_deletes();
       total_data_size += m->get_data_size();
@@ -868,8 +865,7 @@ Status FlushJob::WriteLevel0Table() {
       }
       const uint64_t current_time = static_cast<uint64_t>(_current_time);
 
-      uint64_t oldest_key_time =
-          mems_.front()->ApproximateOldestKeyTime();
+      uint64_t oldest_key_time = mems_.front()->ApproximateOldestKeyTime();
 
       // It's not clear whether oldest_key_time is always available. In case
       // it is not available, use current_time.
@@ -903,15 +899,14 @@ Status FlushJob::WriteLevel0Table() {
           meta_.fd.GetNumber());
       s = BuildTable(
           dbname_, versions_, db_options_, tboptions, file_options_,
-          cfd_->table_cache(), iter.get(), std::move(range_del_iters),
-          std::move(promoted_ranges), &meta_, &blob_file_additions,
-          existing_snapshots_, earliest_write_conflict_snapshot_,
-          snapshot_checker_, mutable_cf_options_.paranoid_file_checks,
-          cfd_->internal_stats(), &io_s, io_tracer_,
-          BlobFileCreationReason::kFlush, event_logger_, job_context_->job_id,
-          Env::IO_HIGH, &table_properties_, write_hint, full_history_ts_low,
-          blob_callback_, &num_input_entries, &memtable_payload_bytes,
-          &memtable_garbage_bytes);
+          cfd_->table_cache(), iter.get(), std::move(range_del_iters), {},
+          &meta_, &blob_file_additions, existing_snapshots_,
+          earliest_write_conflict_snapshot_, snapshot_checker_,
+          mutable_cf_options_.paranoid_file_checks, cfd_->internal_stats(),
+          &io_s, io_tracer_, BlobFileCreationReason::kFlush, event_logger_,
+          job_context_->job_id, Env::IO_HIGH, &table_properties_, write_hint,
+          full_history_ts_low, blob_callback_, &num_input_entries,
+          &memtable_payload_bytes, &memtable_garbage_bytes);
       if (!io_s.ok()) {
         io_status_ = io_s;
       }

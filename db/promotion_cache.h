@@ -127,6 +127,17 @@ struct RangeFirstSeq {
 void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
                   const Comparator *ucmp, std::vector<RangeSeq> &&new_ranges);
 
+struct RangeFirstSeqVer {
+  std::string first_user_key;
+  SequenceNumber sequence;
+  uint64_t version_number;
+  RangeFirstSeqVer(std::string &&_first_user_key, SequenceNumber _sequence,
+                   uint64_t _version_number)
+      : first_user_key(_first_user_key),
+        sequence(_sequence),
+        version_number(_version_number) {}
+};
+
 struct RangeInfo {
   std::string first_user_key;
   SequenceNumber sequence;
@@ -182,6 +193,11 @@ class PromotionCache {
       std::vector<std::pair<std::string, std::string>> &&records,
       std::string &&first_user_key, std::string &&last_user_key,
       SequenceNumber sequence, uint64_t num_bytes) const;
+
+  void MarkRangesPromoted(std::vector<RangeSeq> &&ranges,
+                          uint64_t version_number) const;
+  void LastPromoted(const ReadOptions &read_options, uint64_t version_number,
+                    Slice seek_user_key, std::string &last_promoted) const;
 
   std::pair<std::vector<std::pair<std::string, std::string>>,
             std::vector<RangeSeq>>
@@ -253,6 +269,7 @@ class PromotionCache {
 
   DBImpl &db_;
   const size_t target_level_;
+  const Comparator *ucmp_;
 
   // When inserting to the mutable promotion cache:
   // 1. Lock being_or_has_been_compacted_lock_
@@ -289,6 +306,8 @@ class PromotionCache {
   };
   MutexProtected<std::vector<MutBufItem>> mut_buffer_;
   RWMutexProtected<Mutable> mut_;
+
+  RWMutexProtected<std::map<std::string, RangeFirstSeqVer>> promoted_ranges_;
 
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
 

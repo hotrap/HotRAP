@@ -1745,13 +1745,20 @@ class TieredIterator : public InternalIterator {
     Version* version = super_version_->current;
     VersionStorageInfo* storage_info = version->storage_info();
 
-    // We don't want to add a new interface to InternalIterators to get the last
-    // promoted key. So we pass the pointer of last_promoted_user_key_ to the
-    // iterators and they will set last_promoted_user_key_ when Seek.
-    for (size_t level = 0; level < first_level_in_slow_disk_; ++level) {
+    if (first_level_in_slow_disk_ > 0) {
+      size_t last_level_in_fast_disk = first_level_in_slow_disk_ - 1;
+      for (size_t level = 0; level < last_level_in_fast_disk; ++level) {
+        version->AddIteratorsForLevel(read_options, file_options_,
+                                      &merge_iter_builder, level, range_del_agg,
+                                      allow_unprepared_value);
+      }
+      // We don't want to add a new interface to InternalIterators to get the
+      // last promoted key. So we pass the pointer of last_promoted_user_key_ to
+      // the iterators and they will set last_promoted_user_key_ when Seek.
       version->AddIteratorsForLevel(
-          read_options, file_options_, &merge_iter_builder, level,
-          range_del_agg, allow_unprepared_value, &last_promoted_user_key_);
+          read_options, file_options_, &merge_iter_builder,
+          last_level_in_fast_disk, range_del_agg, allow_unprepared_value,
+          &last_promoted_user_key_);
     }
     fast_disk_it_ = merge_iter_builder.Finish();
     iter_ = fast_disk_it_;
@@ -1792,6 +1799,14 @@ class TieredIterator : public InternalIterator {
     seek_user_key_.assign(ikey.user_key.data(), ikey.user_key.size());
 
     last_promoted_user_key_.clear();
+    if (first_level_in_slow_disk_ > 0) {
+      size_t last_level_in_fast_disk = first_level_in_slow_disk_ - 1;
+      auto cache =
+          super_version_->cfd->get_promotion_cache(last_level_in_fast_disk);
+      if (cache) {
+        cache->LastPromoted(read_options_, super_version_->current->GetVersionNumber(), ikey.user_key, last_promoted_user_key_);
+      }
+    }
     fast_disk_it_->Seek(internal_key);
     if (!last_promoted_user_key_.empty()) {
       assert(super_version_->cfd->ioptions()->user_comparator->Compare(

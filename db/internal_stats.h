@@ -114,6 +114,7 @@ enum class TimerType : size_t {
   kCheckStablyHot,
   kCheckNewerVersion,
   kWriteBackToMutablePromotionCache,
+  kMarkRangesPromoted,
   kEnd,
 };
 constexpr size_t timer_num = static_cast<size_t>(TimerType::kEnd);
