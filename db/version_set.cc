@@ -1990,55 +1990,28 @@ void Version::TryPromote(
   while (path_id(target_level) == 1) {
     target_level -= 1;
   }
-  const PromotionCache* cache;
-  {
-    auto caches = cfd.promotion_caches().Read();
-    // The first whose level <= target_level
-    auto it = caches->find(target_level);
-    if (it == caches->end()) {
-      cache = nullptr;
-    } else {
-      cache = &it->second;
-    }
-  }
-  if (cache == nullptr) {
-    auto caches = cfd.promotion_caches().Write();
-    // It seems that even if the key already exists, emplace still construct
-    // PromotionCache then destruct it. However, PromotionCache should only be
-    // destructed when shutting down the database. Therefore we firstly make
-    // sure that the key does not exist to avoid destructing PromotionCache
-    // here.
-    auto it = caches->find(target_level);
-    if (it == caches->end()) {
-      auto ret = caches->emplace(
-          std::piecewise_construct, std::make_tuple(target_level),
-          std::make_tuple(std::ref(*db), target_level, cfd.user_comparator()));
-      assert(ret.second);
-      it = ret.first;
-    }
-    assert(it->first == target_level);
-    cache = &it->second;
-  }
-  if (!cache->being_or_has_been_compacted_lock().TryReadLock()) {
+  const PromotionCache& cache =
+      cfd.get_or_create_promotion_cache(*db, target_level);
+  if (!cache.being_or_has_been_compacted_lock().TryReadLock()) {
     RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_LOCK);
     return;
   }
   for (auto f : cd_files) {
     if (f.get().being_or_has_been_compacted) {
-      cache->being_or_has_been_compacted_lock().ReadUnlock();
+      cache.being_or_has_been_compacted_lock().ReadUnlock();
       RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_COMPACTED);
       return;
     }
   }
-  cache->being_or_has_been_compacted_lock().ReadUnlock();
-  size_t mut_size = cache->Insert(user_key.ToString(), seq, value->ToString());
+  cache.being_or_has_been_compacted_lock().ReadUnlock();
+  size_t mut_size = cache.Insert(user_key.ToString(), seq, value->ToString());
   RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
-  size_t tot = mut_size + cache->imm_list().Read()->size;
-  rusty::intrinsics::atomic_max_relaxed(cache->max_size(), tot);
+  size_t tot = mut_size + cache.imm_list().Read()->size;
+  rusty::intrinsics::atomic_max_relaxed(cache.max_size(), tot);
   if (mut_size < mutable_cf_options_.write_buffer_size) return;
 
-  cache->SwitchMutablePromotionCache(*db, cfd,
-                                     mutable_cf_options_.write_buffer_size);
+  cache.SwitchMutablePromotionCache(*db, cfd,
+                                    mutable_cf_options_.write_buffer_size);
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,

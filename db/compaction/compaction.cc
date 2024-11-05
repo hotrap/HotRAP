@@ -133,15 +133,13 @@ void Compaction::SetInputVersion(Version* _input_version) {
           cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
     }
   }
-  auto caches = cfd_->promotion_caches().Read();
-  auto it = caches->find(output_level_);
-  if (it != caches->end()) {
-    assert(it->first == (size_t)output_level_);
+  auto cache = cfd_->get_promotion_cache(output_level_);
+  if (cache) {
     // Future work(hotrap): Handle the other case which is possible if ralt
     // changes.
     assert(cached_records_to_promote_.empty());
     target_level_to_promote_ = output_level_;
-    cached_records_to_promote_ = it->second.TakeRange(
+    cached_records_to_promote_ = cache->TakeRange(
         cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
   }
 }

@@ -379,6 +379,8 @@ class ColumnFamilyData {
   RWMutexProtected<std::map<size_t, PromotionCache>>& promotion_caches() {
     return promotion_caches_;
   }
+  const PromotionCache* get_promotion_cache(size_t level);
+  const PromotionCache& get_or_create_promotion_cache(DBImpl& db, size_t level);
 
   // See documentation in compaction_picker.h
   // REQUIRES: DB mutex held
