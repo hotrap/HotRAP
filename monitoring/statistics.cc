@@ -238,8 +238,8 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {PROMOTION_CACHE_INSERT_FAIL_COMPACTED,
      "hotrap.promotion_cache.insert.fail.compacted"},
     {PROMOTION_CACHE_INSERT, "hotrap.promotion_cache.insert"},
-    {SCAN_HIT_T0, "hotrap.scan.hit.l0"},
-    {SCAN_HIT_T1, "hotrap.scan.hit.l1"},
+    {SCAN_HIT_T0, "hotrap.scan.hit.t0"},
+    {SCAN_HIT_T1, "hotrap.scan.hit.t1"},
 };
 
 const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap = {
