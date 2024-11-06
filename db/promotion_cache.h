@@ -71,7 +71,8 @@ struct ImmPromotionCacheList {
 
 class PromotionCache {
  public:
-  PromotionCache(DBImpl &db, int target_level, const Comparator *ucmp);
+  PromotionCache(DBImpl &db, ColumnFamilyData &cfd, int target_level,
+                 const Comparator *ucmp);
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
   ~PromotionCache();
@@ -83,8 +84,7 @@ class PromotionCache {
 
   bool Get(InternalStats *internal_stats, Slice user_key,
            PinnableSlice *value) const;
-  void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
-                                   size_t write_buffer_size) const;
+  void SwitchMutablePromotionCache(size_t write_buffer_size) const;
 
   const port::RWMutex &being_or_has_been_compacted_lock() const {
     return being_or_has_been_compacted_lock_;
@@ -130,13 +130,13 @@ class PromotionCache {
   void ConsumeBuffer(WriteGuard<Mutable> &mut) const;
 
   struct CheckerQueueElem {
-    DBImpl *db;
     SuperVersion *sv;
     std::list<ImmPromotionCache>::iterator iter;
   };
   void checker();
 
   DBImpl &db_;
+  ColumnFamilyData &cfd_;
   const size_t target_level_;
 
   // When inserting to the mutable promotion cache:

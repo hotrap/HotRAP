@@ -1182,9 +1182,10 @@ const PromotionCache& ColumnFamilyData::get_or_create_promotion_cache(
     // here.
     auto it = caches->find(level);
     if (it == caches->end()) {
-      auto ret = caches->emplace(
-          std::piecewise_construct, std::make_tuple(level),
-          std::make_tuple(std::ref(db), level, user_comparator()));
+      auto ret =
+          caches->emplace(std::piecewise_construct, std::make_tuple(level),
+                          std::make_tuple(std::ref(db), std::ref(*this), level,
+                                          user_comparator()));
       assert(ret.second);
       it = ret.first;
     }

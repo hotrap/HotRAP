@@ -29,9 +29,10 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-PromotionCache::PromotionCache(DBImpl &db, int target_level,
-                               const Comparator *ucmp)
+PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
+                               int target_level, const Comparator *ucmp)
     : db_(db),
+      cfd_(cfd),
       target_level_(target_level),
       mut_(ucmp),
       should_stop_(false),
@@ -147,8 +148,6 @@ void PromotionCache::checker() {
       elem = checker_queue_.front();
       checker_queue_.pop();
     }
-    DBImpl *db = elem.db;
-    assert(db == &db_);
     SuperVersion *sv = elem.sv;
     auto iter = elem.iter;
     ColumnFamilyData *cfd = sv->cfd;
@@ -202,7 +201,7 @@ void PromotionCache::checker() {
       assert(s.IsNotFound());
     }
 
-    db->mutex()->Lock();
+    db_.mutex()->Lock();
     // No need to SetNextLogNumber, because we don't delete any log file
     size_t bytes_to_flush = 0;
     {
@@ -238,7 +237,7 @@ void PromotionCache::checker() {
         mut->Insert(std::string(item.first), item.second.sequence,
                     std::string(item.second.value));
       }
-      db->mutex()->Unlock();
+      db_.mutex()->Unlock();
       ConsumeBuffer(mut);
     } else {
       RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
@@ -257,14 +256,14 @@ void PromotionCache::checker() {
         }
       }
       cfd->imm()->Add(m, &memtables_to_free);
-      db->InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
+      db_.InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
       DBImpl::FlushRequest flush_req;
-      db->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
+      db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
                                &flush_req);
-      db->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
-      db->MaybeScheduleFlushOrCompaction();
+      db_.SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
+      db_.MaybeScheduleFlushOrCompaction();
 
-      db->mutex()->Unlock();
+      db_.mutex()->Unlock();
 
       for (MemTable *table : memtables_to_free) delete table;
       svc.Clean();
@@ -279,9 +278,9 @@ void PromotionCache::checker() {
     // tmp will be freed without holding the lock of imm_list
 
     if (sv->Unref()) {
-      db->mutex()->Lock();
+      db_.mutex()->Lock();
       sv->Cleanup();
-      db->mutex()->Unlock();
+      db_.mutex()->Unlock();
       delete sv;
     }
   }
@@ -362,11 +361,11 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
 }
 
 void PromotionCache::SwitchMutablePromotionCache(
-    DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
+    size_t write_buffer_size) const {
   std::unordered_map<std::string, PCData> cache;
   size_t mut_size;
   {
-    auto start = cfd.internal_stats()
+    auto start = cfd_.internal_stats()
                      ->hotrap_timers()
                      .timer(TimerType::kSwitchMutablePromotionCache)
                      .start();
@@ -383,7 +382,7 @@ void PromotionCache::SwitchMutablePromotionCache(
     mut->size_.store(0, std::memory_order_relaxed);
     ConsumeBuffer(mut);
   }
-  db.mutex()->Lock();
+  db_.mutex()->Lock();
   std::list<rocksdb::ImmPromotionCache>::iterator iter;
   {
     auto imm_list = imm_list_.Write();
@@ -391,23 +390,22 @@ void PromotionCache::SwitchMutablePromotionCache(
     iter = imm_list->list.emplace(imm_list->list.end(), std::move(cache),
                                   mut_size);
   }
-  SuperVersion *sv = cfd.GetSuperVersion();
+  SuperVersion *sv = cfd_.GetSuperVersion();
   // check_newer_version is responsible to unref it
   sv->Ref();
-  db.mutex()->Unlock();
+  db_.mutex()->Unlock();
 
   size_t queue_len;
   {
     std::unique_lock<std::mutex> lock_(checker_lock_);
     checker_queue_.emplace(CheckerQueueElem{
-        .db = &db,
         .sv = sv,
         .iter = iter,
     });
     queue_len = checker_queue_.size();
   }
-  ROCKS_LOG_INFO(db.immutable_db_options().logger, "Checker queue length %zu\n",
-                 queue_len);
+  ROCKS_LOG_INFO(db_.immutable_db_options().logger,
+                 "Checker queue length %zu\n", queue_len);
   signal_check_.notify_one();
 }
 std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
