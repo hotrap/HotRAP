@@ -85,8 +85,6 @@ class PromotionCache {
            PinnableSlice *value) const;
   void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
                                    size_t write_buffer_size) const;
-  // REQUIRES: DB mutex held
-  void Flush();
 
   const port::RWMutex &being_or_has_been_compacted_lock() const {
     return being_or_has_been_compacted_lock_;
