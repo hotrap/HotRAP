@@ -119,28 +119,39 @@ void InsertRanges(std::map<std::string, RangeFirstSeq, UserKeyCompare> &ranges,
   }
 }
 
-PromotionCache::PromotionCache(DBImpl &db, int target_level,
-                               const Comparator *ucmp)
+PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
+                               int target_level, const Comparator *ucmp)
     : db_(db),
+      cfd_(cfd),
       target_level_(target_level),
       ucmp_(ucmp),
       mut_(ucmp),
-      should_stop_(false),
+      should_switch_(false),
+      switcher_should_stop_(false),
+      switcher_([this] { this->switcher(); }),
+      checker_should_stop_(false),
       checker_([this] { this->checker(); }),
       max_size_(0) {}
 
 PromotionCache::~PromotionCache() {
-  assert(should_stop_);
+  assert(switcher_should_stop_);
+  if (switcher_.joinable()) switcher_.join();
+  assert(checker_should_stop_);
   if (checker_.joinable()) checker_.join();
 }
 
 void PromotionCache::stop_checker_no_wait() {
   db_.mutex()->AssertHeld();
   {
-    std::unique_lock<std::mutex> lock(checker_lock_);
-    should_stop_ = true;
+    std::unique_lock<std::mutex> lock(switcher_lock_);
+    switcher_should_stop_ = true;
   }
-  signal_check_.notify_one();
+  switcher_signal_.notify_one();
+  {
+    std::unique_lock<std::mutex> lock(checker_lock_);
+    checker_should_stop_ = true;
+  }
+  checker_signal_.notify_one();
   // Checker won't read the queue any more, so no need to lock here
   while (!checker_queue_.empty()) {
     CheckerQueueElem elem = checker_queue_.front();
@@ -216,17 +227,18 @@ void PromotionCache::checker() {
     CheckerQueueElem elem;
     {
       std::unique_lock<std::mutex> lock(checker_lock_);
-      signal_check_.wait(
-          lock, [&] { return should_stop_ || !checker_queue_.empty(); });
-      if (should_stop_) break;
+      checker_signal_.wait(lock, [&] {
+        return checker_should_stop_ || !checker_queue_.empty();
+      });
+      if (checker_should_stop_) break;
       elem = checker_queue_.front();
       checker_queue_.pop();
     }
     check(elem);
     if (elem.sv->Unref()) {
-      elem.db->mutex()->Lock();
+      db_.mutex()->Lock();
       elem.sv->Cleanup();
-      elem.db->mutex()->Unlock();
+      db_.mutex()->Unlock();
       delete elem.sv;
     }
   }
@@ -238,8 +250,6 @@ void PromotionCache::check(CheckerQueueElem &elem) {
   RALT *ralt = sv->mutable_cf_options.ralt;
   if (ralt == nullptr) return;
 
-  DBImpl *db = elem.db;
-  assert(db == &db_);
   auto iter = elem.iter;
   ColumnFamilyData *cfd = sv->cfd;
   const auto &hotrap_timers = cfd->internal_stats()->hotrap_timers();
@@ -397,7 +407,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
   std::swap(candidates, to_promote);
   to_promote.clear();
 
-  db->mutex()->Lock();
+  db_.mutex()->Lock();
 
   std::list<ImmPromotionCache> tmp;
   {
@@ -439,7 +449,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
 
     auto mut = mut_.Write();
     mut->InsertRanges(std::move(cache.ranges), std::move(keys));
-    db->mutex()->Unlock();
+    db_.mutex()->Unlock();
     ConsumeBuffer(mut);
   } else {
     RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
@@ -464,13 +474,13 @@ void PromotionCache::check(CheckerQueueElem &elem) {
       }
     }
     cfd->imm()->Add(m, &memtables_to_free);
-    db->InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
+    db_.InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
     DBImpl::FlushRequest flush_req;
-    db->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}), &flush_req);
-    db->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
-    db->MaybeScheduleFlushOrCompaction();
+    db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}), &flush_req);
+    db_.SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
+    db_.MaybeScheduleFlushOrCompaction();
 
-    db->mutex()->Unlock();
+    db_.mutex()->Unlock();
 
     for (MemTable *table : memtables_to_free) delete table;
     svc.Clean();
@@ -895,22 +905,56 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
   }
 }
 
-void PromotionCache::SwitchMutablePromotionCache(
-    DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
-  std::unordered_map<std::string, ImmPCData> cache;
-  size_t mut_size;
-  std::map<std::string, RangeInfo, UserKeyCompare> ranges(
-      cfd.ioptions()->user_comparator);
+void PromotionCache::ScheduleSwitchMut() const {
+  auto start = cfd_.internal_stats()
+                   ->hotrap_timers()
+                   .timer(TimerType::kScheduleSwitchMut)
+                   .start();
   {
-    auto start = cfd.internal_stats()
+    std::unique_lock<std::mutex> switcher_lock(switcher_lock_);
+    if (should_switch_) return;
+    should_switch_ = true;
+  }
+  switcher_signal_.notify_one();
+}
+
+void PromotionCache::SwitchMutablePromotionCache() {
+  SuperVersion *sv;
+  std::list<rocksdb::ImmPromotionCache>::iterator iter;
+  size_t mut_size;
+  {
+    // We need to take snapshot before emptying mutable promotion cache to make
+    // sure that a newer version from FD would either be in the snapshot and
+    // detected by the checker, or invalidate the old version in the mutable
+    // promotion cache during promotion by compaction.
+
+    // We need to make sure that SwitchMemtable happens either before taking
+    // snapshot or after the new immutable promotion cache is created.
+    // We achieve this by protecting the operations with imm_list's lock.
+
+    auto start = cfd_.internal_stats()
                      ->hotrap_timers()
                      .timer(TimerType::kSwitchMutablePromotionCache)
                      .start();
+
+    db_.mutex()->Lock();
+    auto imm_list = imm_list_.Write();
+    sv = cfd_.GetSuperVersion();
+    // Checker is responsible to unref it
+    sv->Ref();
+    db_.mutex()->Unlock();
+
     auto mut = mut_.Write();
     mut_size = mut->size_;
-    if (mut_size < write_buffer_size) {
+    if (mut_size < sv->mutable_cf_options.write_buffer_size) {
+      sv->Unref();
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      assert(should_switch_);
+      should_switch_ = false;
       return;
     }
+
+    std::unordered_map<std::string, ImmPCData> cache;
     uint64_t size = 0;
     for (auto &&a : mut->keys_) {
       for (const auto &seq_value : a.second.seq_value()) {
@@ -926,34 +970,53 @@ void PromotionCache::SwitchMutablePromotionCache(
     mut->keys_.clear();
     assert(size == mut->size_);
     mut->size_ = 0;
+    std::map<std::string, RangeInfo, UserKeyCompare> ranges(
+        cfd_.ioptions()->user_comparator);
     std::swap(ranges, mut->ranges_);
-  }
-  db.mutex()->Lock();
-  std::list<rocksdb::ImmPromotionCache>::iterator iter;
-  {
-    auto imm_list = imm_list_.Write();
+
     imm_list->size += mut_size;
     iter = imm_list->list.emplace(imm_list->list.end(), std::move(cache),
                                   mut_size, std::move(ranges));
+    imm_list.drop();
+
+    {
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      assert(should_switch_);
+      should_switch_ = false;
+    }
+
+    ConsumeBuffer(mut);
+    mut_size = mut->size_;
   }
-  SuperVersion *sv = cfd.GetSuperVersion();
-  // check_newer_version is responsible to unref it
-  sv->Ref();
-  db.mutex()->Unlock();
+  if (mut_size >= sv->mutable_cf_options.write_buffer_size) {
+    ScheduleSwitchMut();
+  }
 
   size_t queue_len;
   {
     std::unique_lock<std::mutex> lock_(checker_lock_);
     checker_queue_.emplace(CheckerQueueElem{
-        .db = &db,
         .sv = sv,
         .iter = iter,
     });
     queue_len = checker_queue_.size();
   }
-  ROCKS_LOG_INFO(db.immutable_db_options().logger, "Checker queue length %zu\n",
-                 queue_len);
-  signal_check_.notify_one();
+  ROCKS_LOG_INFO(db_.immutable_db_options().logger,
+                 "Checker queue length %zu\n", queue_len);
+  checker_signal_.notify_one();
+}
+
+void PromotionCache::switcher() {
+  pthread_setname_np(pthread_self(), "switcher");
+  for (;;) {
+    {
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      switcher_signal_.wait(
+          lock, [&] { return switcher_should_stop_ || should_switch_; });
+      if (switcher_should_stop_) break;
+    }
+    SwitchMutablePromotionCache();
+  }
 }
 
 void PromotionCache::MarkRangesPromoted(std::vector<RangeSeq> &&ranges,

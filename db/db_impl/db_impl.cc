@@ -1997,8 +1997,7 @@ class TieredIterator : public InternalIterator {
         super_version_->mutable_cf_options;
     if (mut_size < mutable_cf_options.write_buffer_size) return;
 
-    cache.SwitchMutablePromotionCache(db_, *super_version_->cfd,
-                                      mutable_cf_options.write_buffer_size);
+    cache.ScheduleSwitchMut();
   }
 
   static constexpr size_t kSrcFastDisk = 0;

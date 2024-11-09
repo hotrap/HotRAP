@@ -2023,8 +2023,7 @@ void Version::TryPromote(
   rusty::intrinsics::atomic_max_relaxed(cache.max_size(), tot);
   if (mut_size < mutable_cf_options_.write_buffer_size) return;
 
-  cache.SwitchMutablePromotionCache(*db, cfd,
-                                    mutable_cf_options_.write_buffer_size);
+  cache.ScheduleSwitchMut();
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,

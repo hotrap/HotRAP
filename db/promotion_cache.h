@@ -172,7 +172,8 @@ struct ImmPromotionCacheList {
 
 class PromotionCache {
  public:
-  PromotionCache(DBImpl &db, int target_level, const Comparator *ucmp);
+  PromotionCache(DBImpl &db, ColumnFamilyData &cfd, int target_level,
+                 const Comparator *ucmp);
   PromotionCache(const PromotionCache &) = delete;
   PromotionCache &operator=(const PromotionCache &) = delete;
   ~PromotionCache();
@@ -184,10 +185,6 @@ class PromotionCache {
 
   bool Get(InternalStats *internal_stats, Slice user_key,
            PinnableSlice *value) const;
-  void SwitchMutablePromotionCache(DBImpl &db, ColumnFamilyData &cfd,
-                                   size_t write_buffer_size) const;
-  // REQUIRES: DB mutex held
-  void Flush();
 
   const port::RWMutex &being_or_has_been_compacted_lock() const {
     return being_or_has_been_compacted_lock_;
@@ -198,6 +195,8 @@ class PromotionCache {
       std::vector<std::pair<std::string, std::string>> &&records,
       std::string &&first_user_key, std::string &&last_user_key,
       SequenceNumber sequence, uint64_t num_bytes) const;
+
+  void ScheduleSwitchMut() const;
 
   void MarkRangesPromoted(std::vector<RangeSeq> &&ranges,
                           uint64_t version_number) const;
@@ -265,14 +264,16 @@ class PromotionCache {
   void ConsumeBuffer(WriteGuard<Mutable> &mut) const;
 
   struct CheckerQueueElem {
-    DBImpl *db;
     SuperVersion *sv;
     std::list<ImmPromotionCache>::iterator iter;
   };
+  void SwitchMutablePromotionCache();
+  void switcher();
   void checker();
   void check(CheckerQueueElem &elem);
 
   DBImpl &db_;
+  ColumnFamilyData &cfd_;
   const size_t target_level_;
   const Comparator *ucmp_;
 
@@ -316,10 +317,16 @@ class PromotionCache {
 
   RWMutexProtected<ImmPromotionCacheList> imm_list_;
 
+  mutable std::mutex switcher_lock_;
+  mutable bool should_switch_;
+  mutable std::condition_variable switcher_signal_;
+  bool switcher_should_stop_;
+  std::thread switcher_;
+
   mutable std::mutex checker_lock_;
   mutable std::queue<CheckerQueueElem> checker_queue_;
-  mutable std::condition_variable signal_check_;
-  bool should_stop_;
+  mutable std::condition_variable checker_signal_;
+  bool checker_should_stop_;
   std::thread checker_;
 
   // For statistics
