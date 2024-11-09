@@ -109,6 +109,7 @@ enum class TimerType : size_t {
   kGetKeyValueFromLevelsBelow,
   kInvalidateOld,
   kTakeRange,
+  kScheduleSwitchMut,
   kSwitchMutablePromotionCache,
   kCheckStablyHot,
   kCheckNewerVersion,

@@ -35,22 +35,32 @@ PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
       cfd_(cfd),
       target_level_(target_level),
       mut_(ucmp),
-      should_stop_(false),
+      should_switch_(false),
+      switcher_should_stop_(false),
+      switcher_([this] { this->switcher(); }),
+      checker_should_stop_(false),
       checker_([this] { this->checker(); }),
       max_size_(0) {}
 
 PromotionCache::~PromotionCache() {
-  assert(should_stop_);
+  assert(switcher_should_stop_);
+  if (switcher_.joinable()) switcher_.join();
+  assert(checker_should_stop_);
   if (checker_.joinable()) checker_.join();
 }
 
 void PromotionCache::stop_checker_no_wait() {
   db_.mutex()->AssertHeld();
   {
-    std::unique_lock<std::mutex> lock(checker_lock_);
-    should_stop_ = true;
+    std::unique_lock<std::mutex> lock(switcher_lock_);
+    switcher_should_stop_ = true;
   }
-  signal_check_.notify_one();
+  switcher_signal_.notify_one();
+  {
+    std::unique_lock<std::mutex> lock(checker_lock_);
+    checker_should_stop_ = true;
+  }
+  checker_signal_.notify_one();
   // Checker won't read the queue any more, so no need to lock here
   while (!checker_queue_.empty()) {
     CheckerQueueElem elem = checker_queue_.front();
@@ -142,9 +152,10 @@ void PromotionCache::checker() {
     CheckerQueueElem elem;
     {
       std::unique_lock<std::mutex> lock(checker_lock_);
-      signal_check_.wait(
-          lock, [&] { return should_stop_ || !checker_queue_.empty(); });
-      if (should_stop_) break;
+      checker_signal_.wait(lock, [&] {
+        return checker_should_stop_ || !checker_queue_.empty();
+      });
+      if (checker_should_stop_) break;
       elem = checker_queue_.front();
       checker_queue_.pop();
     }
@@ -360,40 +371,80 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
   }
 }
 
-void PromotionCache::SwitchMutablePromotionCache(
-    size_t write_buffer_size) const {
-  std::unordered_map<std::string, PCData> cache;
+void PromotionCache::ScheduleSwitchMut() const {
+  auto start = cfd_.internal_stats()
+                   ->hotrap_timers()
+                   .timer(TimerType::kScheduleSwitchMut)
+                   .start();
+  {
+    std::unique_lock<std::mutex> switcher_lock(switcher_lock_);
+    if (should_switch_) return;
+    should_switch_ = true;
+  }
+  switcher_signal_.notify_one();
+}
+
+void PromotionCache::SwitchMutablePromotionCache() {
+  SuperVersion *sv;
+  std::list<rocksdb::ImmPromotionCache>::iterator iter;
   size_t mut_size;
   {
+    // We need to take snapshot before emptying mutable promotion cache to make
+    // sure that a newer version from FD would either be in the snapshot and
+    // detected by the checker, or invalidate the old version in the mutable
+    // promotion cache during promotion by compaction.
+
+    // We need to make sure that SwitchMemtable happens either before taking
+    // snapshot or after the new immutable promotion cache is created.
+    // We achieve this by protecting the operations with imm_list's lock.
+
     auto start = cfd_.internal_stats()
                      ->hotrap_timers()
                      .timer(TimerType::kSwitchMutablePromotionCache)
                      .start();
+
+    db_.mutex()->Lock();
+    auto imm_list = imm_list_.Write();
+    sv = cfd_.GetSuperVersion();
+    // Checker is responsible to unref it
+    sv->Ref();
+    db_.mutex()->Unlock();
+
     auto mut = mut_.Write();
     mut_size = mut->size_.load(std::memory_order_relaxed);
-    if (mut_size < write_buffer_size) {
+    if (mut_size < sv->mutable_cf_options.write_buffer_size) {
+      sv->Unref();
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      assert(should_switch_);
+      should_switch_ = false;
       return;
     }
+
+    std::unordered_map<std::string, PCData> cache;
     for (auto &&a : mut->cache) {
       // Don't move keys in case that the hash map still needs it in clear().
       cache.emplace(a.first, std::move(a.second));
     }
     mut->cache.clear();
     mut->size_.store(0, std::memory_order_relaxed);
-    ConsumeBuffer(mut);
-  }
-  db_.mutex()->Lock();
-  std::list<rocksdb::ImmPromotionCache>::iterator iter;
-  {
-    auto imm_list = imm_list_.Write();
+
     imm_list->size += mut_size;
     iter = imm_list->list.emplace(imm_list->list.end(), std::move(cache),
                                   mut_size);
+    imm_list.drop();
+
+    {
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      assert(should_switch_);
+      should_switch_ = false;
+    }
+
+    ConsumeBuffer(mut);
+    mut_size = mut->size_.load(std::memory_order_relaxed);
   }
-  SuperVersion *sv = cfd_.GetSuperVersion();
-  // check_newer_version is responsible to unref it
-  sv->Ref();
-  db_.mutex()->Unlock();
+  if (mut_size >= sv->mutable_cf_options.write_buffer_size) {
+    ScheduleSwitchMut();
+  }
 
   size_t queue_len;
   {
@@ -406,8 +457,21 @@ void PromotionCache::SwitchMutablePromotionCache(
   }
   ROCKS_LOG_INFO(db_.immutable_db_options().logger,
                  "Checker queue length %zu\n", queue_len);
-  signal_check_.notify_one();
+  checker_signal_.notify_one();
 }
+void PromotionCache::switcher() {
+  pthread_setname_np(pthread_self(), "switcher");
+  for (;;) {
+    {
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      switcher_signal_.wait(
+          lock, [&] { return switcher_should_stop_ || should_switch_; });
+      if (switcher_should_stop_) break;
+    }
+    SwitchMutablePromotionCache();
+  }
+}
+
 std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
     InternalStats *internal_stats, RALT *ralt, Slice smallest,
     Slice largest) const {

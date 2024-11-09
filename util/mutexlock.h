@@ -163,11 +163,18 @@ class WriteUnlock {
     return *this;
   }
 
-  ~WriteUnlock() {
-    if (mu_ != nullptr) mu_->WriteUnlock();
+  ~WriteUnlock() { __drop(); }
+
+  void drop() {
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() {
+    if (mu_ == nullptr) return;
+    mu_->WriteUnlock();
+  }
   const port::RWMutex *mu_;
 };
 
@@ -235,6 +242,8 @@ class WriteGuard {
   }
   T &operator*() const { return *data_; }
   T *operator->() const { return data_; }
+
+  void drop() { lock_.drop(); }
 
  private:
   T *data_;

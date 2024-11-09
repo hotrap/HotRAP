@@ -41,6 +41,7 @@ const char* timer_names[] = {
     "GetKeyValueFromLevelsBelow",
     "InvalidateOld",
     "TakeRange",
+    "ScheduleSwitchMut",
     "SwitchMutablePromotionCache",
     "CheckStablyHot",
     "CheckNewerVersion",
