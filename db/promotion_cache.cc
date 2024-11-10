@@ -350,15 +350,25 @@ PromotionCache::Mutable::TakeRange(InternalStats *internal_stats, RALT *ralt,
 }
 
 // Return the mutable promotion size, or 0 if inserted to buffer.
-size_t PromotionCache::Insert(std::string &&user_key, SequenceNumber sequence,
-                              std::string &&value) const {
-  auto mut = mut_.TryRead();
-  if (!mut.has_value()) {
-    mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
-                                     std::move(value));
-    return 0;
+void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
+                            std::string &&user_key, SequenceNumber sequence,
+                            std::string &&value) const {
+  size_t mut_size;
+  {
+    auto mut = mut_.TryRead();
+    if (!mut.has_value()) {
+      mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
+                                       std::move(value));
+      mut_size = 0;
+    } else {
+      mut_size =
+          mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+    }
   }
-  return mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+  size_t tot = mut_size + imm_list_.Read()->size;
+  rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
+  if (mut_size < mutable_cf_options.write_buffer_size) return;
+  ScheduleSwitchMut();
 }
 
 void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
@@ -372,15 +382,15 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
 }
 
 void PromotionCache::ScheduleSwitchMut() const {
-  auto start = cfd_.internal_stats()
-                   ->hotrap_timers()
-                   .timer(TimerType::kScheduleSwitchMut)
-                   .start();
   {
     std::unique_lock<std::mutex> switcher_lock(switcher_lock_);
     if (should_switch_) return;
     should_switch_ = true;
   }
+  auto start = cfd_.internal_stats()
+                   ->hotrap_timers()
+                   .timer(TimerType::kScheduleSwitchMut)
+                   .start();
   switcher_signal_.notify_one();
 }
 

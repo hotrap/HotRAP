@@ -2004,13 +2004,9 @@ void Version::TryPromote(
     }
   }
   cache.being_or_has_been_compacted_lock().ReadUnlock();
-  size_t mut_size = cache.Insert(user_key.ToString(), seq, value->ToString());
+  cache.Insert(mutable_cf_options_, user_key.ToString(), seq,
+               value->ToString());
   RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
-  size_t tot = mut_size + cache.imm_list().Read()->size;
-  rusty::intrinsics::atomic_max_relaxed(cache.max_size(), tot);
-  if (mut_size < mutable_cf_options_.write_buffer_size) return;
-
-  cache.ScheduleSwitchMut();
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,

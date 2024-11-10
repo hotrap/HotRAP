@@ -9,6 +9,7 @@
 
 #include "db/dbformat.h"
 #include "monitoring/instrumented_mutex.h"
+#include "options/cf_options.h"
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
@@ -88,10 +89,9 @@ class PromotionCache {
   const port::RWMutex &being_or_has_been_compacted_lock() const {
     return being_or_has_been_compacted_lock_;
   }
-  size_t Insert(std::string &&user_key, SequenceNumber sequence,
-                std::string &&value) const;
-
-  void ScheduleSwitchMut() const;
+  void Insert(const MutableCFOptions &mutable_cf_options,
+              std::string &&user_key, SequenceNumber sequence,
+              std::string &&value) const;
 
   std::vector<std::pair<std::string, std::string>> TakeRange(
       InternalStats *internal_stats, RALT *ralt, Slice smallest,
@@ -102,7 +102,7 @@ class PromotionCache {
   }
 
   // For statistics
-  std::atomic<size_t> &max_size() const { return max_size_; }
+  size_t max_size() const { return max_size_.load(std::memory_order_relaxed); }
 
  private:
   class Mutable {
@@ -130,6 +130,7 @@ class PromotionCache {
 
   void ConsumeBuffer(WriteGuard<Mutable> &mut) const;
 
+  void ScheduleSwitchMut() const;
   struct CheckerQueueElem {
     SuperVersion *sv;
     std::list<ImmPromotionCache>::iterator iter;
