@@ -1961,7 +1961,9 @@ class TieredIterator : public InternalIterator {
   }
 
   void TryPromote() {
-    RALT* ralt = super_version_->mutable_cf_options.ralt;
+    const MutableCFOptions& mutable_cf_options =
+        super_version_->mutable_cf_options;
+    RALT* ralt = mutable_cf_options.ralt;
     if (ralt == nullptr) return;
     if (seek_user_key_.empty()) {
       assert(last_user_key_.empty());
@@ -1983,21 +1985,13 @@ class TieredIterator : public InternalIterator {
     const PromotionCache& cache =
         super_version_->cfd->get_or_create_promotion_cache(
             db_, first_level_in_slow_disk_ - 1);
-    size_t mut_size = cache.InsertOneRange(
-        std::move(records_to_promote_), std::move(seek_user_key_),
-        std::move(last_user_key_), sequence_, num_accessed_bytes_);
+    cache.InsertOneRange(mutable_cf_options, std::move(records_to_promote_),
+                         std::move(seek_user_key_), std::move(last_user_key_),
+                         sequence_, num_accessed_bytes_);
     records_to_promote_ = std::vector<std::pair<std::string, std::string>>();
     seek_user_key_ = std::string();
     last_user_key_ = std::string();
     num_accessed_bytes_ = 0;
-
-    size_t tot = mut_size + cache.imm_list().Read()->size;
-    rusty::intrinsics::atomic_max_relaxed(cache.max_size(), tot);
-    const MutableCFOptions& mutable_cf_options =
-        super_version_->mutable_cf_options;
-    if (mut_size < mutable_cf_options.write_buffer_size) return;
-
-    cache.ScheduleSwitchMut();
   }
 
   static constexpr size_t kSrcFastDisk = 0;

@@ -9,6 +9,7 @@
 
 #include "db/dbformat.h"
 #include "monitoring/instrumented_mutex.h"
+#include "options/cf_options.h"
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
@@ -189,14 +190,14 @@ class PromotionCache {
   const port::RWMutex &being_or_has_been_compacted_lock() const {
     return being_or_has_been_compacted_lock_;
   }
-  size_t Insert(std::string &&user_key, SequenceNumber sequence,
-                std::string &&value) const;
-  size_t InsertOneRange(
+  void Insert(const MutableCFOptions &mutable_cf_options,
+              std::string &&user_key, SequenceNumber sequence,
+              std::string &&value) const;
+  void InsertOneRange(
+      const MutableCFOptions &mutable_cf_options,
       std::vector<std::pair<std::string, std::string>> &&records,
       std::string &&first_user_key, std::string &&last_user_key,
       SequenceNumber sequence, uint64_t num_bytes) const;
-
-  void ScheduleSwitchMut() const;
 
   void MarkRangesPromoted(std::vector<RangeSeq> &&ranges,
                           uint64_t version_number) const;
@@ -213,7 +214,7 @@ class PromotionCache {
   }
 
   // For statistics
-  std::atomic<size_t> &max_size() const { return max_size_; }
+  size_t max_size() const { return max_size_.load(std::memory_order_relaxed); }
 
  private:
   class Mutable {
@@ -225,7 +226,7 @@ class PromotionCache {
     // Return the size of the mutable promotion cache
     size_t Insert(std::string &&user_key, SequenceNumber sequencd,
                   std::string &&value);
-    size_t InsertOneRange(
+    void InsertOneRange(
         std::vector<std::pair<std::string, std::string>> &&records,
         std::string &&first_user_key, std::string &&last_user_key,
         SequenceNumber sequence, uint64_t num_bytes);
@@ -263,6 +264,7 @@ class PromotionCache {
 
   void ConsumeBuffer(WriteGuard<Mutable> &mut) const;
 
+  void ScheduleSwitchMut() const;
   struct CheckerQueueElem {
     SuperVersion *sv;
     std::list<ImmPromotionCache>::iterator iter;
