@@ -305,10 +305,10 @@ size_t PromotionCache::Mutable::Insert(std::string &&user_key,
 
   PCHashTable::accessor it;
   size_t kvsize = user_key.size() + value.size();
-  if (cache.insert(it, std::move(user_key))) {
-    it->second.sequence = sequence;
-    it->second.value = std::move(value);
-    it->second.count = 1;
+  bool inserted = cache.emplace(
+      it, std::piecewise_construct, std::forward_as_tuple(std::move(user_key)),
+      std::forward_as_tuple(sequence, std::move(value), 1));
+  if (inserted) {
     size = size_.fetch_add(kvsize, std::memory_order_relaxed) + kvsize;
   } else {
     size = size_.load(std::memory_order_relaxed);

@@ -29,6 +29,8 @@ struct PCData {
   SequenceNumber sequence;
   std::string value;
   int count{0};
+  PCData(SequenceNumber _sequence, std::string &&_value, int _count)
+      : sequence(_sequence), value(std::move(_value)), count(_count) {}
 };
 using PCHashTable = tbb::concurrent_hash_map<std::string, PCData>;
 
