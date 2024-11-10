@@ -487,14 +487,13 @@ void PromotionCache::check(CheckerQueueElem &elem) {
   }
 }
 
-size_t PromotionCache::Mutable::Insert(std::string &&user_key,
-                                       SequenceNumber sequence,
-                                       std::string &&value) {
+void PromotionCache::Mutable::Insert(std::string &&user_key,
+                                     SequenceNumber sequence,
+                                     std::string &&value) {
   auto range_it = ranges_.lower_bound(user_key);
   if (range_it != ranges_.end() &&
       ucmp_->Compare(range_it->second.first_user_key, user_key) <= 0) {
     range_it->second.count += 1;
-    return size_;
   }
   auto it = keys_.lower_bound(user_key);
   if (it == keys_.end() || ucmp_->Compare(it->first, user_key) != 0) {
@@ -513,7 +512,6 @@ size_t PromotionCache::Mutable::Insert(std::string &&user_key,
     assert(seq_value[0].first == sequence);
     it->second.set_repeated_accessed(true);
   }
-  return size_;
 }
 
 void PromotionCache::Mutable::InsertOneRange(
@@ -883,8 +881,8 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
                                        std::move(value));
       mut_size = 0;
     } else {
-      mut_size =
-          mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+      mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+      mut_size = mut.value()->size_;
     }
   }
   size_t tot = mut_size + imm_list_.Read()->size;

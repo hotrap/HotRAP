@@ -224,8 +224,8 @@ class PromotionCache {
         : ucmp_(ucmp), keys_(ucmp_), size_(0), ranges_(UserKeyCompare(ucmp_)) {}
 
     // Return the size of the mutable promotion cache
-    size_t Insert(std::string &&user_key, SequenceNumber sequencd,
-                  std::string &&value);
+    void Insert(std::string &&user_key, SequenceNumber sequencd,
+                std::string &&value);
     void InsertOneRange(
         std::vector<std::pair<std::string, std::string>> &&records,
         std::string &&first_user_key, std::string &&last_user_key,
