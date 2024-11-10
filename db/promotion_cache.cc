@@ -897,11 +897,19 @@ void PromotionCache::InsertOneRange(
     SequenceNumber sequence, uint64_t num_bytes) const {
   size_t mut_size;
   {
-    auto mut = mut_.Write();
-    mut->InsertOneRange(std::move(records), std::move(first_user_key),
-                        std::move(last_user_key), sequence, num_bytes);
-    ConsumeBuffer(mut);
-    mut_size = mut->size_;
+    auto mut = mut_.TryWrite();
+    if (!mut.has_value()) {
+      range_buffer_.Lock()->emplace_back(
+          std::move(first_user_key), std::move(last_user_key),
+          std::move(records), sequence, num_bytes);
+      mut_size = 0;
+    } else {
+      mut.value()->InsertOneRange(std::move(records), std::move(first_user_key),
+                                  std::move(last_user_key), sequence,
+                                  num_bytes);
+      ConsumeBuffer(mut.value());
+      mut_size = mut.value()->size_;
+    }
   }
   size_t tot = mut_size + imm_list_.Read()->size;
   rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
@@ -910,12 +918,27 @@ void PromotionCache::InsertOneRange(
 }
 
 void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
-  auto mut_buffer = mut_buffer_.Lock();
-  if (mut_buffer->empty()) return;
-  std::vector<MutBufItem> buffer;
-  std::swap(buffer, *mut_buffer);
-  for (MutBufItem &item : buffer) {
-    mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
+  {
+    auto mut_buffer = mut_buffer_.Lock();
+    if (!mut_buffer->empty()) {
+      std::vector<MutBufItem> buffer;
+      std::swap(buffer, *mut_buffer);
+      for (MutBufItem &item : buffer) {
+        mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
+      }
+    }
+  }
+  {
+    auto range_buffer = range_buffer_.Lock();
+    if (!range_buffer->empty()) {
+      std::vector<RangeBufItem> buffer;
+      std::swap(buffer, *range_buffer);
+      for (RangeBufItem &item : buffer) {
+        mut->InsertOneRange(
+            std::move(item.records), std::move(item.first_user_key),
+            std::move(item.last_user_key), item.sequence, item.num_bytes);
+      }
+    }
   }
 }
 

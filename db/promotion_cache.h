@@ -313,6 +313,21 @@ class PromotionCache {
         : user_key(std::move(_user_key)), seq(_seq), value(std::move(_value)) {}
   };
   MutexProtected<std::vector<MutBufItem>> mut_buffer_;
+  struct RangeBufItem {
+    std::string first_user_key, last_user_key;
+    std::vector<std::pair<std::string, std::string>> records;
+    SequenceNumber sequence;
+    uint64_t num_bytes;
+    RangeBufItem(std::string &&_first_user_key, std::string &&_last_user_key,
+                 std::vector<std::pair<std::string, std::string>> &&_records,
+                 SequenceNumber _sequence, uint64_t _num_bytes)
+        : first_user_key(std::move(_first_user_key)),
+          last_user_key(std::move(_last_user_key)),
+          records(std::move(_records)),
+          sequence(_sequence),
+          num_bytes(_num_bytes) {}
+  };
+  MutexProtected<std::vector<RangeBufItem>> range_buffer_;
   RWMutexProtected<Mutable> mut_;
 
   RWMutexProtected<std::map<std::string, RangeFirstSeqVer>> promoted_ranges_;
