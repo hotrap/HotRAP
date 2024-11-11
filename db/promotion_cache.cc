@@ -166,16 +166,14 @@ void PromotionCache::stop_checker_no_wait() {
 void PromotionCache::wait_for_checker_to_stop() { checker_.join(); }
 bool PromotionCache::Get(InternalStats *internal_stats, Slice user_key,
                          PinnableSlice *value) const {
-  {
-    auto res = mut_.TryRead();
-    if (!res.has_value()) return false;
-    const auto &mut = res.value();
-    auto it = mut->keys_.find(user_key.ToString());
-    if (it != mut->keys_.end()) {
-      if (value) value->PinSelf(it->second.seq_value().front().second);
-      it->second.set_repeated_accessed(true);
-      return true;
-    }
+  auto res = mut_.TryRead();
+  if (!res.has_value()) return false;
+  const auto &mut = res.value();
+  auto it = mut->keys_.find(user_key.ToString());
+  if (it != mut->keys_.end()) {
+    if (value) value->PinSelf(it->second.seq_value().front().second);
+    it->second.set_repeated_accessed(true);
+    return true;
   }
   // We shouldn't read immutable promotion caches here, because it's possible
   // that the newer version has been compacted into the slow disk while the old
