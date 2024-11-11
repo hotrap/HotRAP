@@ -409,7 +409,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
 
   std::list<ImmPromotionCache> tmp;
   {
-    auto list = imm_list().Write();
+    auto list = imm_list_.Write();
     list->size -= iter->size;
     tmp.splice(tmp.begin(), list->list, iter);
   }
@@ -878,23 +878,21 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
     if (!mut.has_value()) {
       mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
                                        std::move(value));
-      mut_size = 0;
-    } else {
-      mut.value()->Insert(std::move(user_key), sequence, std::move(value));
-      {
-        auto start = cfd_.internal_stats()
-                         ->hotrap_timers()
-                         .timer(TimerType::kGetConsumeBuffer)
-                         .start();
-        // Since we frequently consume the buffer, there shouldn't be too many
-        // records.
-        ConsumeBuffer(mut.value());
-      }
-      mut_size = mut.value()->size_;
+      return;
     }
+    mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+    {
+      auto start = cfd_.internal_stats()
+                       ->hotrap_timers()
+                       .timer(TimerType::kGetConsumeBuffer)
+                       .start();
+      // Since we frequently consume the buffer, there shouldn't be too many
+      // records.
+      ConsumeBuffer(mut.value());
+    }
+    mut_size = mut.value()->size_;
   }
-  size_t tot = mut_size + imm_list_.Read()->size;
-  rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
+  try_update_max_size(mut_size);
   if (mut_size < mutable_cf_options.write_buffer_size) return;
   ScheduleSwitchMut();
 }
@@ -910,23 +908,20 @@ void PromotionCache::InsertOneRange(
       range_buffer_.Lock()->emplace_back(
           std::move(first_user_key), std::move(last_user_key),
           std::move(records), sequence, num_bytes);
-      mut_size = 0;
-    } else {
-      mut.value()->InsertOneRange(std::move(records), std::move(first_user_key),
-                                  std::move(last_user_key), sequence,
-                                  num_bytes);
-      {
-        auto start = cfd_.internal_stats()
-                         ->hotrap_timers()
-                         .timer(TimerType::kScanConsumeBuffer)
-                         .start();
-        ConsumeBuffer(mut.value());
-      }
-      mut_size = mut.value()->size_;
+      return;
     }
+    mut.value()->InsertOneRange(std::move(records), std::move(first_user_key),
+                                std::move(last_user_key), sequence, num_bytes);
+    {
+      auto start = cfd_.internal_stats()
+                       ->hotrap_timers()
+                       .timer(TimerType::kScanConsumeBuffer)
+                       .start();
+      ConsumeBuffer(mut.value());
+    }
+    mut_size = mut.value()->size_;
   }
-  size_t tot = mut_size + imm_list_.Read()->size;
-  rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
+  try_update_max_size(mut_size);
   if (mut_size < mutable_cf_options.write_buffer_size) return;
   ScheduleSwitchMut();
 }
@@ -956,6 +951,14 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
       }
     }
   }
+}
+
+void PromotionCache::try_update_max_size(size_t mut_size) const {
+  // Try to update stats.
+  auto imm_list = imm_list_.TryRead();
+  if (!imm_list.has_value()) return;
+  size_t tot = mut_size + imm_list.value()->size;
+  rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
 }
 
 void PromotionCache::ScheduleSwitchMut() const {
