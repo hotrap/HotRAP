@@ -132,6 +132,8 @@ class PromotionCache {
 
   void ConsumeBuffer(WriteGuard<Mutable> &mut) const;
 
+  void try_update_max_size(size_t mut_size) const;
+
   void ScheduleSwitchMut() const;
   struct CheckerQueueElem {
     SuperVersion *sv;

@@ -280,7 +280,7 @@ void PromotionCache::checker() {
 
     std::list<ImmPromotionCache> tmp;
     {
-      auto list = imm_list().Write();
+      auto list = imm_list_.Write();
       list->size -= iter->size;
       tmp.splice(tmp.begin(), list->list, iter);
     }
@@ -357,14 +357,12 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
     if (!mut.has_value()) {
       mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
                                        std::move(value));
-      mut_size = 0;
-    } else {
-      mut_size =
-          mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+      return;
     }
+    mut_size =
+        mut.value()->Insert(std::move(user_key), sequence, std::move(value));
   }
-  size_t tot = mut_size + imm_list_.Read()->size;
-  rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
+  try_update_max_size(mut_size);
   if (mut_size < mutable_cf_options.write_buffer_size) return;
   ScheduleSwitchMut();
 }
@@ -378,6 +376,14 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
   for (MutBufItem &item : buffer) {
     mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
   }
+}
+
+void PromotionCache::try_update_max_size(size_t mut_size) const {
+  // Try to update stats.
+  auto imm_list = imm_list_.TryRead();
+  if (!imm_list.has_value()) return;
+  size_t tot = mut_size + imm_list.value()->size;
+  rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
 }
 
 void PromotionCache::ScheduleSwitchMut() const {
