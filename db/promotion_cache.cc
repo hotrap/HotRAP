@@ -494,6 +494,7 @@ void PromotionCache::Mutable::Insert(std::string &&user_key,
   if (range_it != ranges_.end() &&
       ucmp_->Compare(range_it->second.first_user_key, user_key) <= 0) {
     range_it->second.count += 1;
+    return;
   }
   auto it = keys_.lower_bound(user_key);
   if (it == keys_.end() || ucmp_->Compare(it->first, user_key) != 0) {
