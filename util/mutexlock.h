@@ -44,10 +44,18 @@ class MutexLock {
   }
 
   ~MutexLock() {
-    if (mu_) this->mu_->Unlock();
+    if (mu_) __drop();
+  }
+
+  void drop() {
+    assert(mu_);
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() { this->mu_->Unlock(); }
+
   const port::Mutex *mu_;
 };
 
@@ -187,6 +195,8 @@ class MutexGuard {
       : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
   T &operator*() const { return data_; }
   T *operator->() const { return &data_; }
+
+  void drop() { lock_.drop(); }
 
  private:
   MutexGuard(T &data, const port::Mutex *mu) : data_(data), lock_(mu) {}

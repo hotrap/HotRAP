@@ -126,6 +126,11 @@ void Compaction::SetInputVersion(Version* _input_version) {
       target_level_to_promote_ = start_level_;
       const auto& cache = it->second;
       caches.drop();
+      // PromotionCache::Insert
+      // (1) happens before mark_fn, so that the inserted records can be handled
+      // by TakeRange.
+      // (2) happens after mark_fn, so that records in the compaction range
+      // won't be inserted to the promotion cache.
       cache.being_or_has_been_compacted_lock().WriteLock();
       mark_fn();
       cache.being_or_has_been_compacted_lock().WriteUnlock();
