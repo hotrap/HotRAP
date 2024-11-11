@@ -2173,7 +2173,7 @@ bool Version::GetInFile(EnvGet& env_get, GetContext& get_context,
   return false;
 }
 
-bool Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
+void Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
   Slice ikey = env_get.k.internal_key();
   Slice user_key = env_get.k.user_key();
   FilePicker fp(user_key, ikey, &storage_info_.level_files_brief_,
@@ -2194,7 +2194,7 @@ bool Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
       bool should_stop =
           GetInFile(env_get, get_context, *f, fp.GetHitFileLevel(),
                     fp.IsHitFileLastInLevel());
-      if (should_stop) return true;
+      if (should_stop) return;
       f = fp.GetNextFile();
     }
     if (env_get.db != nullptr) {
@@ -2208,23 +2208,22 @@ bool Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
         }
         HandleFound(env_get.read_options, get_context, level_pc->first,
                     env_get.value, env_get.status);
-        return true;
+        return;
       }
     }
   }
   while (f != nullptr) {
     bool should_stop = GetInFile(env_get, get_context, *f, fp.GetHitFileLevel(),
                                  fp.IsHitFileLastInLevel());
-    if (should_stop) return true;
+    if (should_stop) return;
     f = fp.GetNextFile();
   }
   HandleNotFound(get_context, env_get.value, env_get.status,
                  env_get.key_exists);
-  return false;
 }
 
-// If db == nullptr then it's called from check_newer_version
-bool Version::Get(DBImpl* db, const ReadOptions& read_options,
+// If db == nullptr then it's called from the checker
+void Version::Get(DBImpl* db, const ReadOptions& read_options,
                   const LookupKey& k, PinnableSlice* value,
                   std::string* timestamp, Status* status,
                   MergeContext* merge_context,
@@ -2273,11 +2272,10 @@ bool Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .value = value,
                  .status = *status,
                  .key_exists = key_exists};
-  bool ret = Get(env_get, get_context, last_level);
+  Get(env_get, get_context, last_level);
   if (seq) {
     *seq = get_context.seq();
   }
-  return ret;
 }
 
 void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,

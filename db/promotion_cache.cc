@@ -188,11 +188,12 @@ void PromotionCache::checker() {
         hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
     for (const std::string &user_key : stably_hot) {
       LookupKey key(user_key, kMaxSequenceNumber);
+      ReadOptions read_options;
       Status s;
       MergeContext merge_context;
       SequenceNumber max_covering_tombstone_seq = 0;
       if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
-                       &max_covering_tombstone_seq, ReadOptions())) {
+                       &max_covering_tombstone_seq, read_options)) {
         mark_updated(cache, user_key);
         continue;
       }
@@ -200,10 +201,11 @@ void PromotionCache::checker() {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                         s.ToString().c_str());
       }
-      if (sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
-                           &merge_context, &max_covering_tombstone_seq, nullptr,
-                           nullptr, nullptr, nullptr, nullptr, false,
-                           target_level_)) {
+      sv->current->Get(nullptr, read_options, key, nullptr, nullptr, &s,
+                       &merge_context, &max_covering_tombstone_seq, nullptr,
+                       nullptr, nullptr, nullptr, nullptr, false,
+                       target_level_);
+      if (s.ok()) {
         mark_updated(cache, user_key);
         continue;
       }
