@@ -924,6 +924,7 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
     if (!mut_buffer->empty()) {
       std::vector<MutBufItem> buffer;
       std::swap(buffer, *mut_buffer);
+      mut_buffer.drop();
       for (MutBufItem &item : buffer) {
         mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
       }
@@ -934,6 +935,7 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
     if (!range_buffer->empty()) {
       std::vector<RangeBufItem> buffer;
       std::swap(buffer, *range_buffer);
+      range_buffer.drop();
       for (RangeBufItem &item : buffer) {
         mut->InsertOneRange(
             std::move(item.records), std::move(item.first_user_key),
@@ -1116,6 +1118,8 @@ PromotionCache::TakeRange(InternalStats *internal_stats, RALT *ralt,
       ret;
   {
     auto mut = mut_.Write();
+    // We need to consume the buffer so that all records inserted before marking
+    // being_or_has_been_compacted can be seen by TakeRange.
     ConsumeBuffer(mut);
     ret = mut->TakeRange(internal_stats, ralt, smallest, largest);
   }
