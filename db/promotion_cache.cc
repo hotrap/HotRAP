@@ -883,6 +883,9 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
       mut_size = 0;
     } else {
       mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+      // Since we frequently consume the buffer, there shouldn't be too many
+      // records.
+      ConsumeBuffer(mut.value());
       mut_size = mut.value()->size_;
     }
   }
