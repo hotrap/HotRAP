@@ -1972,10 +1972,9 @@ void Version::MultiGetBlob(
 }
 
 void Version::TryPromote(
-    DBImpl* db, ColumnFamilyData& cfd,
+    DBImpl& db, ColumnFamilyData& cfd,
     std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
     Slice user_key, SequenceNumber seq, PinnableSlice* value) {
-  if (db == nullptr) return;
   RALT* ralt = mutable_cf_options_.ralt;
   if (!ralt || !value) return;
   // I don't think we can get the block size in this context. So I hard code
@@ -1991,7 +1990,7 @@ void Version::TryPromote(
     target_level -= 1;
   }
   const PromotionCache& cache =
-      cfd.get_or_create_promotion_cache(*db, target_level);
+      cfd.get_or_create_promotion_cache(db, target_level);
   if (!cache.being_or_has_been_compacted_lock().TryReadLock()) {
     RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_LOCK);
     return;
@@ -2011,11 +2010,9 @@ void Version::TryPromote(
 }
 void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
-                          PinnableSlice* value, Status& status,
-                          bool is_checker) {
+                          PinnableSlice* value, Status& status) {
   RALT* ralt = mutable_cf_options_.ralt;
-  if (!ralt) return;
-  if (!is_checker) {
+  if (ralt) {
     switch (level_path_id_[hit_level]) {
       case 0:
         RecordTick(db_statistics_, GET_HIT_T0);
@@ -2150,12 +2147,14 @@ bool Version::GetInFile(EnvGet& env_get, GetContext& get_context,
       // TODO: How to update RALT?
       break;
     case GetContext::kFound:
-      if (num_cache_data_miss > prev_num_cache_data_miss) {
-        TryPromote(env_get.db, *cfd_, env_get.cd_files, hit_level,
-                   env_get.k.user_key(), get_context.seq(), env_get.value);
+      if (env_get.db) {
+        if (num_cache_data_miss > prev_num_cache_data_miss) {
+          TryPromote(*env_get.db, *cfd_, env_get.cd_files, hit_level,
+                     env_get.k.user_key(), get_context.seq(), env_get.value);
+        }
+        HandleFound(env_get.read_options, get_context, hit_level, env_get.value,
+                    env_get.status);
       }
-      HandleFound(env_get.read_options, get_context, hit_level, env_get.value,
-                  env_get.status, env_get.db == nullptr);
       return true;
     case GetContext::kDeleted:
       // Use empty error message for speed
@@ -2208,7 +2207,7 @@ bool Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
           ralt->Access(env_get.k.user_key(), env_get.value->size());
         }
         HandleFound(env_get.read_options, get_context, level_pc->first,
-                    env_get.value, env_get.status, false);
+                    env_get.value, env_get.status);
         return true;
       }
     }

@@ -841,13 +841,12 @@ class Version {
     return storage_info_.user_comparator_;
   }
 
-  void TryPromote(DBImpl* db, ColumnFamilyData& cfd,
+  void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
                   std::vector<std::reference_wrapper<FileMetaData>> cd_files,
                   int hit_level, Slice user_key, SequenceNumber seq,
                   PinnableSlice* value);
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
-                   int hit_level, PinnableSlice* value, Status& status,
-                   bool is_checker);
+                   int hit_level, PinnableSlice* value, Status& status);
   void HandleNotFound(GetContext& get_context, PinnableSlice* value,
                       Status& status, bool* key_exists);
   struct EnvGet {
