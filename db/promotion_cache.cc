@@ -189,6 +189,7 @@ void PromotionCache::checker() {
     for (const std::string &user_key : stably_hot) {
       LookupKey key(user_key, kMaxSequenceNumber);
       ReadOptions read_options;
+      read_options.read_tier = kBlockCacheTier;
       Status s;
       MergeContext merge_context;
       SequenceNumber max_covering_tombstone_seq = 0;
@@ -205,7 +206,7 @@ void PromotionCache::checker() {
                        &merge_context, &max_covering_tombstone_seq, nullptr,
                        nullptr, nullptr, nullptr, nullptr, false,
                        target_level_);
-      if (s.ok()) {
+      if (s.ok() || s.IsIncomplete()) {
         mark_updated(cache, user_key);
         continue;
       }
