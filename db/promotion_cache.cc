@@ -131,7 +131,9 @@ PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
       switcher_([this] { this->switcher(); }),
       checker_should_stop_(false),
       checker_([this] { this->checker(); }),
-      max_size_(0) {}
+      max_size_(0) {
+  read_options_.read_tier = kBlockCacheTier;
+}
 
 PromotionCache::~PromotionCache() {
   assert(switcher_should_stop_);
@@ -339,17 +341,17 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     MergeContext merge_context;
     SequenceNumber max_covering_tombstone_seq = 0;
     if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
-                     &max_covering_tombstone_seq, ReadOptions())) {
+                     &max_covering_tombstone_seq, read_options_)) {
       return true;
     }
     if (!s.ok()) {
       ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                       s.ToString().c_str());
     }
-    if (sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
-                         &merge_context, &max_covering_tombstone_seq, nullptr,
-                         nullptr, nullptr, nullptr, nullptr, false,
-                         target_level_)) {
+    sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, &s,
+                     &merge_context, &max_covering_tombstone_seq, nullptr,
+                     nullptr, nullptr, nullptr, nullptr, false, target_level_);
+    if (s.ok() || s.IsIncomplete()) {
       return true;
     }
     assert(s.IsNotFound());

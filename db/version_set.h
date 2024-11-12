@@ -703,7 +703,7 @@ class Version {
   //    If the key has any merge operands then store them in
   //    merge_context.operands_list and don't merge the operands
   // REQUIRES: lock is not held
-  bool Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
+  void Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
            PinnableSlice* value, std::string* timestamp, Status* status,
            MergeContext* merge_context,
            SequenceNumber* max_covering_tombstone_seq,
@@ -836,13 +836,12 @@ class Version {
     return storage_info_.user_comparator_;
   }
 
-  void TryPromote(DBImpl* db, ColumnFamilyData& cfd,
+  void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
                   std::vector<std::reference_wrapper<FileMetaData>> cd_files,
                   int hit_level, Slice user_key, SequenceNumber seq,
                   PinnableSlice* value);
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
-                   int hit_level, PinnableSlice* value, Status& status,
-                   bool is_checker);
+                   int hit_level, PinnableSlice* value, Status& status);
   void HandleNotFound(GetContext& get_context, PinnableSlice* value,
                       Status& status, bool* key_exists);
   struct EnvGet {
@@ -856,7 +855,7 @@ class Version {
   };
   bool GetInFile(EnvGet& env_get, GetContext& get_context, FdWithKeyRange& f,
                  int hit_level, bool is_hit_file_last_in_level);
-  bool Get(EnvGet& env_get, GetContext& get_context, int last_level);
+  void Get(EnvGet& env_get, GetContext& get_context, int last_level);
   // Returns true if the filter blocks in the specified level will not be
   // checked during read operations. In certain cases (trivial move or preload),
   // the filter block may already be cached, but we still do not access it such

@@ -348,6 +348,8 @@ class PromotionCache {
   bool checker_should_stop_;
   std::thread checker_;
 
+  ReadOptions read_options_;
+
   // For statistics
   mutable std::atomic<size_t> max_size_;
 };
