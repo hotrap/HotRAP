@@ -40,7 +40,9 @@ PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
       switcher_([this] { this->switcher(); }),
       checker_should_stop_(false),
       checker_([this] { this->checker(); }),
-      max_size_(0) {}
+      max_size_(0) {
+  read_options_.read_tier = kBlockCacheTier;
+}
 
 PromotionCache::~PromotionCache() {
   assert(switcher_should_stop_);
@@ -188,13 +190,11 @@ void PromotionCache::checker() {
         hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
     for (const std::string &user_key : stably_hot) {
       LookupKey key(user_key, kMaxSequenceNumber);
-      ReadOptions read_options;
-      read_options.read_tier = kBlockCacheTier;
       Status s;
       MergeContext merge_context;
       SequenceNumber max_covering_tombstone_seq = 0;
       if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
-                       &max_covering_tombstone_seq, read_options)) {
+                       &max_covering_tombstone_seq, read_options_)) {
         mark_updated(cache, user_key);
         continue;
       }
@@ -202,7 +202,7 @@ void PromotionCache::checker() {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                         s.ToString().c_str());
       }
-      sv->current->Get(nullptr, read_options, key, nullptr, nullptr, &s,
+      sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, &s,
                        &merge_context, &max_covering_tombstone_seq, nullptr,
                        nullptr, nullptr, nullptr, nullptr, false,
                        target_level_);
