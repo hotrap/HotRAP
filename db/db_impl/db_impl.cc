@@ -1963,10 +1963,10 @@ class TieredIterator : public InternalIterator {
   void TryPromote() {
     const MutableCFOptions& mutable_cf_options =
         super_version_->mutable_cf_options;
-    RALT* ralt = mutable_cf_options.ralt;
-    if (ralt == nullptr) return;
     if (seek_user_key_.empty()) {
+      assert(records_to_promote_.empty());
       assert(last_user_key_.empty());
+      assert(num_accessed_bytes_ == 0);
       return;
     }
     assert(!last_user_key_.empty());
@@ -1974,7 +1974,8 @@ class TieredIterator : public InternalIterator {
     if (iter_ == fast_disk_it_) {
       RecordTick(stats, SCAN_HIT_T0, 1);
       assert(records_to_promote_.empty());
-      ralt->AccessRange(seek_user_key_, last_user_key_, num_accessed_bytes_, 0);
+      mutable_cf_options.ralt->AccessRange(seek_user_key_, last_user_key_,
+                                           num_accessed_bytes_, 0);
       seek_user_key_.clear();
       last_user_key_.clear();
       num_accessed_bytes_ = 0;
@@ -2063,19 +2064,22 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
       Version* version = super_version->current;
       VersionStorageInfo* storage_info = version->storage_info();
       RALT* ralt = super_version->mutable_cf_options.ralt;
-
-      int first_level_in_sd = 0;
-      for (; first_level_in_sd < storage_info->num_non_empty_levels() &&
-             version->path_id(first_level_in_sd) == 0;
-           ++first_level_in_sd)
-        ;
-      if (first_level_in_sd < storage_info->num_non_empty_levels()) {
-        auto* mem = arena->AllocateAligned(sizeof(TieredIterator));
-        internal_iter = new (mem) TieredIterator(
-            arena, merge_iter_builder, sequence, first_level_in_sd, *this,
-            read_options, super_version, file_options_, range_del_agg,
-            allow_unprepared_value);
-      } else {
+      internal_iter = nullptr;
+      if (ralt) {
+        int first_level_in_sd = 0;
+        for (; first_level_in_sd < storage_info->num_non_empty_levels() &&
+               version->path_id(first_level_in_sd) == 0;
+             ++first_level_in_sd)
+          ;
+        if (first_level_in_sd < storage_info->num_non_empty_levels()) {
+          auto* mem = arena->AllocateAligned(sizeof(TieredIterator));
+          internal_iter = new (mem) TieredIterator(
+              arena, merge_iter_builder, sequence, first_level_in_sd, *this,
+              read_options, super_version, file_options_, range_del_agg,
+              allow_unprepared_value);
+        }
+      }
+      if (internal_iter == nullptr) {
         for (int level = 0; level < storage_info->num_non_empty_levels();
              level++) {
           version->AddIteratorsForLevel(read_options, file_options_,
