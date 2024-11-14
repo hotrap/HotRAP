@@ -619,6 +619,7 @@ void PromotionCache::Mutable::InsertRanges(
       while (new_key_it != keys.end() &&
              ucmp_->Compare(new_key_it->first, range_it->first) <= 0) {
         assert(new_key_it->second.only_by_point_query);
+        range_it->second.count += 1;
         ++new_key_it;
       }
       ++range_it;
