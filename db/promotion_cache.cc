@@ -608,11 +608,12 @@ void PromotionCache::Mutable::InsertRanges(
       ++new_key_it;
     }
   };
-  while (new_range_it != ranges.end()) {
-    std::string new_range_last = new_range_it->first;
-    RangeInfo &&new_range = std::move(new_range_it->second);
-    while (range_it != ranges_.end() &&
-           ucmp_->Compare(range_it->first, new_range.first_user_key) < 0) {
+  auto skip_ranges_until = [this, &range_it, &new_key_it, &keys,
+                            &insert_keys_until](Slice new_range_first) {
+    while (range_it != ranges_.end()) {
+      if (new_range_first.data()) {
+        if (ucmp_->Compare(range_it->first, new_range_first) >= 0) break;
+      }
       insert_keys_until(range_it->second.first_user_key);
       // Don't insert point query records if it's in a range
       while (new_key_it != keys.end() &&
@@ -622,6 +623,11 @@ void PromotionCache::Mutable::InsertRanges(
       }
       ++range_it;
     }
+  };
+  while (new_range_it != ranges.end()) {
+    std::string new_range_last = new_range_it->first;
+    RangeInfo &&new_range = std::move(new_range_it->second);
+    skip_ranges_until(new_range.first_user_key);
     MergeRange(range_it, std::move(new_range_last), std::move(new_range));
     new_range_it = ranges.erase(new_range_it);
     const std::string &merged_range_first = range_it->second.first_user_key;
@@ -644,6 +650,7 @@ void PromotionCache::Mutable::InsertRanges(
     }
     MarkNotOnlyByPointQuery(key_it, merged_range_last);
   }
+  skip_ranges_until(Slice(nullptr, 0));
   insert_keys_until(Slice(nullptr, 0));
 }
 
