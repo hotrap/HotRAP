@@ -1551,8 +1551,7 @@ class RouterIterator {
   RouterIterator(
       RALT* ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
       Bound end,
-      std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges)
-      : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
+      std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges) {
     int start_level = c.level();
     int latter_level = c.output_level();
     if (ralt == NULL) {
@@ -1594,8 +1593,6 @@ class RouterIterator {
  private:
   std::unique_ptr<TraitIterator<Elem>> iter_;
   optional<Elem> cur_;
-
-  const TypedTimers<TimerType>& timers_;
 };
 
 void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
