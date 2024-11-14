@@ -1498,6 +1498,10 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
       return make_optional<Elem>(Decision::kNextLevel, kv);
     }
     Decision decision = route(kv);
+    while (ranges_it_ != promoted_ranges_.end() &&
+           ucmp_->Compare(ranges_it_->first, kv.ikey.user_key) < 0) {
+      ++ranges_it_;
+    }
     if (decision == Decision::kStartLevel) {
       size_t kvsize = kv.key.size() + kv.value.size();
       if (kv.level == -1 || kv.level == c_.output_level()) {
@@ -1508,10 +1512,6 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
       }
     } else {
       assert(decision == Decision::kNextLevel);
-      while (ranges_it_ != promoted_ranges_.end() &&
-             ucmp_->Compare(ranges_it_->first, kv.ikey.user_key) < 0) {
-        ++ranges_it_;
-      }
       if (ranges_it_ != promoted_ranges_.end() &&
           ucmp_->Compare(ranges_it_->second.first_user_key, kv.ikey.user_key) <=
               0) {
@@ -2282,20 +2282,34 @@ Status CompactionJob::FinishCompactionOutputFile(
                  PackSequenceAndType(0, kTypeRangeDeletion));
     }
     if (level_output->path_id() == 0) {
-      if (lower_bound) {
-        // For simplicity, we just drop promoted ranges that cross the boundary
-        // of SSTables.
-        while (!promoted_ranges.empty() &&
-               ucmp->Compare(promoted_ranges.begin()->second.first_user_key,
-                             *lower_bound) < 0) {
-          promoted_ranges.erase(promoted_ranges.begin());
-        }
+      // This is ugly. Maybe it's better to let RouterIterator return promoted
+      // ranges.
+      while (!promoted_ranges.empty() &&
+             ucmp->Compare(promoted_ranges.begin()->first,
+                           meta->smallest.user_key()) < 0) {
+        promoted_ranges.erase(promoted_ranges.begin());
+      }
+      if (!promoted_ranges.empty() &&
+          ucmp->Compare(promoted_ranges.begin()->second.first_user_key,
+                        meta->smallest.user_key()) < 0 &&
+          // To make sure that we don't erase a range that may still be
+          // referenced by the RouterIterator
+          ucmp->Compare(promoted_ranges.begin()->first,
+                        meta->largest.user_key()) <= 0) {
+        // For simplicity, we just drop the promoted range that crosses the
+        // boundary of SSTables.
+        promoted_ranges.erase(promoted_ranges.begin());
+      }
+      if (!promoted_ranges.empty() &&
+          ucmp->Compare(promoted_ranges.begin()->first,
+                        meta->largest.user_key()) <= 0) {
+        assert(ucmp->Compare(promoted_ranges.begin()->second.first_user_key,
+                             meta->smallest.user_key()) >= 0);
       }
       std::vector<RangeSeq> promoted_ranges_vec;
-      while (
-          !promoted_ranges.empty() &&
-          (upper_bound == nullptr ||
-           ucmp->Compare(promoted_ranges.begin()->first, *upper_bound) < 0)) {
+      while (!promoted_ranges.empty() &&
+             ucmp->Compare(promoted_ranges.begin()->first,
+                           meta->largest.user_key()) <= 0) {
         auto range = promoted_ranges.begin();
         promoted_ranges_vec.emplace_back(range->second.first_user_key,
                                          range->first, range->second.sequence);
