@@ -25,13 +25,13 @@ class TraitIterator {
 };
 
 template <typename T>
-class TraitPeekable : public TraitIterator<T> {
+class TraitPeek : public TraitIterator<T> {
  public:
   virtual const T *peek() = 0;
 };
 
 template <typename Iter>
-class Peekable : public TraitPeekable<typename Iter::Item> {
+class Peekable : public TraitPeek<typename Iter::Item> {
  public:
   using Item = typename Iter::Item;
   Peekable(Iter &&iter) : iter_(std::move(iter)) {}
@@ -64,8 +64,7 @@ class Peekable : public TraitPeekable<typename Iter::Item> {
 };
 
 template <typename Item>
-class Peekable<std::unique_ptr<TraitIterator<Item>>>
-    : public TraitPeekable<Item> {
+class Peekable<std::unique_ptr<TraitIterator<Item>>> : public TraitPeek<Item> {
  public:
   Peekable(std::unique_ptr<TraitIterator<Item>> &&iter)
       : iter_(std::move(iter)) {}
