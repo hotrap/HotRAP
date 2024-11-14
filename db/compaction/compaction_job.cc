@@ -1510,8 +1510,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
 class RouterIterator {
  public:
   RouterIterator(RALT* ralt, const Compaction& c, CompactionIterator& c_iter,
-                 Slice start, Bound end)
-      : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
+                 Slice start, Bound end) {
     int start_level = c.level();
     int latter_level = c.output_level();
     if (ralt == NULL) {
@@ -1553,8 +1552,6 @@ class RouterIterator {
  private:
   std::unique_ptr<TraitIterator<Elem>> iter_;
   optional<Elem> cur_;
-
-  const TypedTimers<TimerType>& timers_;
 };
 
 void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
