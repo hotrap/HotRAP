@@ -550,22 +550,19 @@ void PromotionCache::Mutable::InsertOneRange(
     ParsedInternalKey ikey;
     Status s = ParseInternalKey(record_it->first, &ikey, false);
     assert(s.ok());
-    std::string user_key = ikey.user_key.ToString();
-    std::deque<std::pair<SequenceNumber, std::string>> seq_values;
-    for (;;) {
-      seq_values.emplace_back(ikey.sequence, std::move(record_it->second));
-      ++record_it;
-      if (record_it != records.end()) {
+    do {
+      std::string user_key = ikey.user_key.ToString();
+      std::deque<std::pair<SequenceNumber, std::string>> seq_values;
+      do {
+        seq_values.emplace_back(ikey.sequence, std::move(record_it->second));
+        ++record_it;
+        if (record_it == records.end()) break;
         s = ParseInternalKey(record_it->first, &ikey, false);
         assert(s.ok());
-        if (ucmp_->Compare(ikey.user_key, user_key) == 0) continue;
-      }
+      } while (ucmp_->Compare(ikey.user_key, user_key) == 0);
       MergeOneKeyInRange(key_it, std::move(user_key), std::move(seq_values),
                          sequence);
-      if (record_it == records.end()) break;
-      user_key = ikey.user_key.ToString();
-      seq_values = std::deque<std::pair<SequenceNumber, std::string>>();
-    }
+    } while (record_it != records.end());
   }
   MarkNotOnlyByPointQuery(key_it, new_range_last);
 }
