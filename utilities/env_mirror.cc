@@ -7,7 +7,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#ifndef ROCKSDB_LITE
 
 #include "rocksdb/utilities/env_mirror.h"
 
@@ -27,13 +26,17 @@ class SequentialFileMirror : public SequentialFile {
     if (as == Status::OK()) {
       char* bscratch = new char[n];
       Slice bslice;
+#ifndef NDEBUG
       size_t off = 0;
+#endif
       size_t left = aslice.size();
       while (left) {
         Status bs = b_->Read(left, &bslice, bscratch);
+#ifndef NDEBUG
         assert(as == bs);
         assert(memcmp(bscratch, scratch + off, bslice.size()) == 0);
         off += bslice.size();
+#endif
         left -= bslice.size();
       }
       delete[] bscratch;
@@ -268,4 +271,3 @@ Status EnvMirror::ReuseWritableFile(const std::string& fname,
 }
 
 }  // namespace ROCKSDB_NAMESPACE
-#endif

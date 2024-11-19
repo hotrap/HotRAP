@@ -25,7 +25,9 @@ struct ImmutableDBOptions {
   bool error_if_exists;
   bool paranoid_checks;
   bool flush_verify_memtable_count;
+  bool compaction_verify_record_count;
   bool track_and_verify_wals_in_manifest;
+  bool verify_sst_unique_id_in_manifest;
   Env* env;
   std::shared_ptr<RateLimiter> rate_limiter;
   std::shared_ptr<SstFileManager> sst_file_manager;
@@ -57,11 +59,9 @@ struct ImmutableDBOptions {
   bool allow_fallocate;
   bool is_fd_close_on_exec;
   bool advise_random_on_open;
-  double experimental_mempurge_threshold;
   size_t db_write_buffer_size;
   std::shared_ptr<WriteBufferManager> write_buffer_manager;
   DBOptions::AccessHint access_hint_on_compaction_start;
-  bool new_table_reader_for_compaction_inputs;
   size_t random_access_max_buffer_size;
   bool use_adaptive_mutex;
   std::vector<std::shared_ptr<EventListener>> listeners;
@@ -77,16 +77,14 @@ struct ImmutableDBOptions {
   WALRecoveryMode wal_recovery_mode;
   bool allow_2pc;
   std::shared_ptr<Cache> row_cache;
-#ifndef ROCKSDB_LITE
   WalFilter* wal_filter;
-#endif  // ROCKSDB_LITE
   bool fail_if_options_file_error;
   bool dump_malloc_stats;
   bool avoid_flush_during_recovery;
   bool allow_ingest_behind;
-  bool preserve_deletes;
   bool two_write_queues;
   bool manual_wal_flush;
+  CompressionType wal_compression;
   bool atomic_flush;
   bool avoid_unnecessary_blocking_io;
   bool persist_stats_to_disk;
@@ -106,6 +104,7 @@ struct ImmutableDBOptions {
   Statistics* stats;
   Logger* logger;
   std::shared_ptr<CompactionService> compaction_service;
+  bool enforce_single_del_contracts;
 
   bool IsWalDirSameAsDBPath() const;
   bool IsWalDirSameAsDBPath(const std::string& path) const;
@@ -116,13 +115,11 @@ struct ImmutableDBOptions {
 struct MutableDBOptions {
   static const char* kName() { return "MutableDBOptions"; }
   MutableDBOptions();
-  explicit MutableDBOptions(const MutableDBOptions& options) = default;
   explicit MutableDBOptions(const DBOptions& options);
 
   void Dump(Logger* log) const;
 
   int max_background_jobs;
-  int base_background_compactions;
   int max_background_compactions;
   uint32_t max_subcompactions;
   bool avoid_flush_during_shutdown;
@@ -141,7 +138,6 @@ struct MutableDBOptions {
   int max_background_flushes;
 };
 
-#ifndef ROCKSDB_LITE
 Status GetStringFromMutableDBOptions(const ConfigOptions& config_options,
                                      const MutableDBOptions& mutable_opts,
                                      std::string* opt_string);
@@ -153,6 +149,5 @@ Status GetMutableDBOptionsFromStrings(
 
 bool MutableDBOptionsAreEqual(const MutableDBOptions& this_options,
                               const MutableDBOptions& that_options);
-#endif  // ROCKSDB_LITE
 
 }  // namespace ROCKSDB_NAMESPACE
