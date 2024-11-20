@@ -53,9 +53,9 @@
 #include "options/configurable_helper.h"
 #include "options/options_helper.h"
 #include "port/port.h"
-#include "rocksdb/compaction_router.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
+#include "rocksdb/ralt.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/sst_partitioner.h"
 #include "rocksdb/statistics.h"
@@ -1283,10 +1283,22 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
              compaction_result.bytes_written);
   return CompactionServiceJobStatus::kSuccess;
 #endif
-  // Future work: Support this by adding an output level
+  // Future work(hotrap): Support this by adding an output level
   return CompactionServiceJobStatus::kFailure;
 }
 #endif  // !ROCKSDB_LITE
+
+std::pair<int, Slice> parse_level_value(Slice input_value) {
+  assert(input_value.size() ==
+         sizeof(int) + sizeof(const char*) + sizeof(size_t));
+  const char* buf = input_value.data();
+  int level = *(int*)buf;
+  buf += sizeof(int);
+  const char* data = *(const char**)buf;
+  buf += sizeof(const char*);
+  size_t len = *(size_t*)buf;
+  return std::make_pair(level, Slice(data, len));
+}
 
 struct IKeyValueLevel {
   Slice key;
@@ -1294,23 +1306,15 @@ struct IKeyValueLevel {
   Slice value;
   int level;
 
-  IKeyValueLevel() = default;
-  IKeyValueLevel(const InternalKey& internal_key, Slice arg_value,
-                 int arg_level)
-      : key(internal_key.Encode()), value(arg_value), level(arg_level) {
-    ParseInternalKey(key, &ikey, true);
-  }
   IKeyValueLevel(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value,
                  int arg_level)
       : key(arg_key), ikey(arg_ikey), value(arg_value), level(arg_level) {}
+
   IKeyValueLevel(CompactionIterator& c_iter)
       : key(c_iter.key()), ikey(c_iter.ikey()) {
-    assert(c_iter.value().size() ==
-           sizeof(int) + sizeof(const char*) + sizeof(size_t));
-    const char* buf = c_iter.value().data();
-    level = *(int*)buf;
-    value = Slice(*(const char**)(buf + sizeof(int)),
-                  *(size_t*)(buf + sizeof(int) + sizeof(const char*)));
+    auto ret = parse_level_value(c_iter.value());
+    value = ret.second;
+    level = ret.first;
   }
 };
 
@@ -1319,12 +1323,8 @@ struct IKeyValue {
   ParsedInternalKey ikey;
   Slice value;
 
-  IKeyValue() = default;
-  IKeyValue(IKeyValueLevel rhs) : IKeyValue(rhs.key, rhs.ikey, rhs.value) {}
-  IKeyValue(const InternalKey& internal_key, Slice arg_value)
-      : key(internal_key.Encode()), value(arg_value) {
-    ParseInternalKey(key, &ikey, true);
-  }
+  IKeyValue(const IKeyValueLevel& rhs)
+      : IKeyValue(rhs.key, rhs.ikey, rhs.value) {}
   IKeyValue(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value)
       : key(arg_key), ikey(arg_ikey), value(arg_value) {}
 };
@@ -1338,17 +1338,11 @@ enum class Decision {
 struct Elem {
   Decision decision;
   IKeyValue kv;
-  Elem(const Elem&) = default;
-
-  Elem(Decision arg_decision, IKeyValue arg_kv)
+  Elem(Decision arg_decision, const IKeyValueLevel& arg_kv)
       : decision(arg_decision), kv(arg_kv) {}
-  Elem(Decision arg_decision, Slice key, ParsedInternalKey ikey, Slice value)
-      : decision(arg_decision), kv(key, ikey, value) {}
-  Elem(Decision arg_decision, const InternalKey& internal_key, Slice arg_value)
-      : decision(arg_decision), kv(internal_key, arg_value) {}
 };
 
-// Future work: The caller should ZeroOutSequenceIfPossible if the final
+// Future work(hotrap): The caller should ZeroOutSequenceIfPossible if the final
 // decision is kNextLevel
 class CompactionIterWrapper : public TraitIterator<IKeyValueLevel> {
  public:
@@ -1397,14 +1391,13 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
 
 class RouterIteratorFD2SD : public TraitIterator<Elem> {
  public:
-  RouterIteratorFD2SD(CompactionRouter& router, const Compaction& c,
+  RouterIteratorFD2SD(RALT& ralt, const Compaction& c,
                       CompactionIterator& c_iter,
                       Slice start_level_smallest_user_key)
-      : router_(router),
-        c_(c),
+      : c_(c),
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(c_iter),
-        hot_iter_(router.LowerBound(start_level_smallest_user_key)),
+        hot_iter_(ralt.LowerBound(start_level_smallest_user_key)),
         kvsize_retained_(0) {}
   ~RouterIteratorFD2SD() {
     auto stats = c_.immutable_options()->stats;
@@ -1445,36 +1438,35 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   }
 
  private:
-  CompactionRouter& router_;
   const Compaction& c_;
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
-  Peekable<CompactionRouter::Iter> hot_iter_;
+  Peekable<RALT::Iter> hot_iter_;
 
   size_t kvsize_retained_;
 };
 
 class RouterIterator {
  public:
-  RouterIterator(CompactionRouter* router, const Compaction& c,
-                 CompactionIterator& c_iter,
-                 Slice start_level_smallest_user_key)
-      : timers_(c.column_family_data()->internal_stats()->hotrap_timers()) {
+  RouterIterator(RALT* ralt, const Compaction& c, CompactionIterator& c_iter,
+                
+                 Slice start_level_smallest_user_key) {
     int start_level = c.level();
     int latter_level = c.output_level();
-    if (router == NULL) {
-      // Future work: Handle the case that it's not empty, which is possible
-      // when router was not NULL but then is set to NULL.
+    if (ralt == NULL) {
+      // Future work(hotrap): Handle the case that it's not empty, which is
+      // possible when ralt was not NULL but then is set to NULL.
       assert(c.cached_records_to_promote().empty());
       iter_ = std::unique_ptr<IteratorWithoutRouter>(
           new IteratorWithoutRouter(c, c_iter));
     } else {
-      size_t start_tier = router->Tier(start_level);
-      size_t latter_tier = router->Tier(latter_level);
+      const Version& version = *c.input_version();
+      uint32_t start_tier = version.path_id(start_level);
+      uint32_t latter_tier = version.path_id(latter_level);
       if (start_tier != latter_tier) {
         iter_ = std::unique_ptr<RouterIteratorFD2SD>(new RouterIteratorFD2SD(
-            *router, c, c_iter, start_level_smallest_user_key));
+            *ralt, c, c_iter, start_level_smallest_user_key));
       } else {
         iter_ = std::unique_ptr<IteratorWithoutRouter>(
             new IteratorWithoutRouter(c, c_iter));
@@ -1496,8 +1488,6 @@ class RouterIterator {
  private:
   std::unique_ptr<TraitIterator<Elem>> iter_;
   optional<Elem> cur_;
-
-  const TypedTimers<TimerType>& timers_;
 };
 
 void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
@@ -1538,7 +1528,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "anymore.");
     return;
   }
-  CompactionRouter* router = c->mutable_cf_options()->compaction_router;
+  RALT* ralt = c->mutable_cf_options()->ralt;
   TimerGuard timer_guard =
       cfd->internal_stats()
           ->hotrap_timers_per_level()
@@ -1693,7 +1683,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
           : sub_compact->compaction->CreateSstPartitioner();
   std::string last_key_for_partitioner;
 
-  // Future work: How to handle other cases?
+  // Future work(hotrap): How to handle other cases?
   assert(c->num_input_levels() <= 2);
   const CompactionInputFiles& start_level_inputs = (*c->inputs())[0];
   assert(start_level_inputs.level == c->start_level());
@@ -1701,7 +1691,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
                                      &start_level_largest_user_key);
 
-  RouterIterator router_iter(router, *c, *c_iter,
+  RouterIterator router_iter(ralt, *c, *c_iter,
                              start_level_smallest_user_key);
 
   std::string previous_user_key;

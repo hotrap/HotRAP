@@ -41,8 +41,11 @@ const char* timer_names[] = {
     "GetKeyValueFromLevelsBelow",
     "InvalidateOld",
     "TakeRange",
+    "ScheduleSwitchMut",
+    "SwitchMutablePromotionCache",
     "CheckStablyHot",
     "CheckNewerVersion",
+    "WriteBackToMutablePromotionCache",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 
@@ -1922,9 +1925,7 @@ void InternalStats::DumpCFStatsNoFileHistogram(std::string* value) {
   auto caches = cfd_->promotion_caches().Read();
   for (const auto& cache : *caches) {
     value->append("compaction_cache at level " + std::to_string(cache.first) +
-                  ": max_size " +
-                  std::to_string(
-                      cache.second.max_size().load(std::memory_order_relaxed)));
+                  ": max_size " + std::to_string(cache.second.max_size()));
   }
 }
 

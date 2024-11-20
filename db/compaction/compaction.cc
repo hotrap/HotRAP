@@ -105,7 +105,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
   edit_.SetColumnFamily(cfd_->GetID());
 
   if (start_level_ != output_level_) {
-    // Future work: Handle other cases
+    // Future work(hotrap): Handle other cases
     assert(output_level_ == start_level_ + 1);
     auto mark_fn = [this]() {
       for (size_t i = 0; i < num_input_levels(); i++) {
@@ -124,7 +124,16 @@ void Compaction::SetInputVersion(Version* _input_version) {
       mark_fn();
     } else {
       assert(it->first == (size_t)start_level_);
-
+      const auto& cache = it->second;
+      caches.drop();
+      // PromotionCache::Insert
+      // (1) happens before mark_fn, so that the inserted records can be handled
+      // by TakeRange.
+      // (2) happens after mark_fn, so that records in the compaction range
+      // won't be inserted to the promotion cache.
+      cache.being_or_has_been_compacted_lock().WriteLock();
+      mark_fn();
+      cache.being_or_has_been_compacted_lock().WriteUnlock();
       const LevelFilesBrief* start_level_input = input_levels(0);
       std::vector<FileMetaData*> file_meta_data;
       for (size_t i = 0; i < start_level_input->num_files; ++i) {
@@ -147,19 +156,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
       start_level_it.SetFileIndex(0);
       start_level_it.Seek(start_level_smallest_user_key);
 
-      auto mut = it->second.mut().Write();
-      while (start_level_it.Valid() &&
-             ucmp->Compare(start_level_it.user_key(),
-                           start_level_largest_user_key) <= 0) {
-        decltype(mut->cache)::const_accessor mut_it;
-        bool found =
-            mut->cache.find(mut_it, start_level_it.user_key().ToString());
-        if (found) {
-          mut->size_ -= mut_it->first.size() + mut_it->second.value.size();
-          mut->cache.erase(mut_it);
-        }
-        start_level_it.Next();
-      }
+      cache.Remove(start_level_it, start_level_largest_user_key);
     }
   }
 }

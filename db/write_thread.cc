@@ -379,6 +379,7 @@ void WriteThread::EndWriteStall() {
 
 static WriteThread::AdaptationContext jbg_ctx("JoinBatchGroup");
 void WriteThread::JoinBatchGroup(Writer* w) {
+  PERF_TIMER_GUARD(join_batch_group_time);
   TEST_SYNC_POINT_CALLBACK("WriteThread::JoinBatchGroup:Start", w);
   assert(w->batch != nullptr);
 

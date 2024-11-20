@@ -21,35 +21,48 @@
 #include "db/version_set.h"
 #include "logging/logging.h"
 #include "monitoring/statistics.h"
-#include "rocksdb/compaction_router.h"
 #include "rocksdb/options.h"
+#include "rocksdb/ralt.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/types.h"
 #include "util/autovector.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-PromotionCache::PromotionCache(DBImpl &db, int target_level,
-                               const Comparator *ucmp)
+PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
+                               int target_level, const Comparator *ucmp)
     : db_(db),
+      cfd_(cfd),
       target_level_(target_level),
       mut_(ucmp),
-      max_size_(0),
-      should_stop_(false),
-      checker_([this] { this->checker(); }) {}
+      should_switch_(false),
+      switcher_should_stop_(false),
+      switcher_([this] { this->switcher(); }),
+      checker_should_stop_(false),
+      checker_([this] { this->checker(); }),
+      max_size_(0) {
+  read_options_.read_tier = kBlockCacheTier;
+}
 
 PromotionCache::~PromotionCache() {
-  assert(should_stop_);
+  assert(switcher_should_stop_);
+  if (switcher_.joinable()) switcher_.join();
+  assert(checker_should_stop_);
   if (checker_.joinable()) checker_.join();
 }
 
 void PromotionCache::stop_checker_no_wait() {
   db_.mutex()->AssertHeld();
   {
-    std::unique_lock<std::mutex> lock(checker_lock_);
-    should_stop_ = true;
+    std::unique_lock<std::mutex> lock(switcher_lock_);
+    switcher_should_stop_ = true;
   }
-  signal_check_.notify_one();
+  switcher_signal_.notify_one();
+  {
+    std::unique_lock<std::mutex> lock(checker_lock_);
+    checker_should_stop_ = true;
+  }
+  checker_signal_.notify_one();
   // Checker won't read the queue any more, so no need to lock here
   while (!checker_queue_.empty()) {
     CheckerQueueElem elem = checker_queue_.front();
@@ -64,16 +77,14 @@ void PromotionCache::stop_checker_no_wait() {
 void PromotionCache::wait_for_checker_to_stop() { checker_.join(); }
 bool PromotionCache::Get(InternalStats *internal_stats, Slice user_key,
                          PinnableSlice *value) const {
-  {
-    auto res = mut_.TryRead();
-    if (!res.has_value()) return false;
-    const auto &mut = res.value();
-    PCHashTable::accessor it;
-    if (mut->cache.find(it, user_key.ToString())) {
-      if (value) value->PinSelf(it->second.value);
-      it->second.count += 1;
-      return true;
-    }
+  auto res = mut_.TryRead();
+  if (!res.has_value()) return false;
+  const auto &mut = res.value();
+  PCHashTable::accessor it;
+  if (mut->cache.find(it, user_key.ToString())) {
+    if (value) value->PinSelf(it->second.value);
+    it->second.count += 1;
+    return true;
   }
   // We shouldn't read immutable promotion caches here, because it's possible
   // that the newer version has been compacted into the slow disk while the old
@@ -141,14 +152,13 @@ void PromotionCache::checker() {
     CheckerQueueElem elem;
     {
       std::unique_lock<std::mutex> lock(checker_lock_);
-      signal_check_.wait(
-          lock, [&] { return should_stop_ || !checker_queue_.empty(); });
-      if (should_stop_) break;
+      checker_signal_.wait(lock, [&] {
+        return checker_should_stop_ || !checker_queue_.empty();
+      });
+      if (checker_should_stop_) break;
       elem = checker_queue_.front();
       checker_queue_.pop();
     }
-    DBImpl *db = elem.db;
-    assert(db == &db_);
     SuperVersion *sv = elem.sv;
     auto iter = elem.iter;
     ColumnFamilyData *cfd = sv->cfd;
@@ -158,16 +168,16 @@ void PromotionCache::checker() {
     std::unordered_set<std::reference_wrapper<const std::string>, RefHash,
                        RefEq>
         stably_hot;
-    CompactionRouter *router = sv->mutable_cf_options.compaction_router;
+    RALT *ralt = sv->mutable_cf_options.ralt;
     const Comparator *ucmp = cfd->ioptions()->user_comparator;
     auto stats = cfd->ioptions()->stats;
-    if (router) {
+    if (ralt) {
       TimerGuard check_stably_hot_start =
           hotrap_timers.timer(TimerType::kCheckStablyHot).start();
       for (const auto &item : cache.cache) {
         const std::string &user_key = item.first;
-        bool is_stably_hot = item.second.count > 1 || router->IsHot(user_key);
-        router->Access(item.first, item.second.value.size());
+        bool is_stably_hot = item.second.count > 1 || ralt->IsHot(user_key);
+        ralt->Access(item.first, item.second.value.size());
         if (is_stably_hot) {
           stably_hot.insert(user_key);
         } else {
@@ -184,7 +194,7 @@ void PromotionCache::checker() {
       MergeContext merge_context;
       SequenceNumber max_covering_tombstone_seq = 0;
       if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
-                       &max_covering_tombstone_seq, ReadOptions())) {
+                       &max_covering_tombstone_seq, read_options_)) {
         mark_updated(cache, user_key);
         continue;
       }
@@ -192,17 +202,18 @@ void PromotionCache::checker() {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                         s.ToString().c_str());
       }
-      if (sv->current->Get(nullptr, ReadOptions(), key, nullptr, nullptr, &s,
-                           &merge_context, &max_covering_tombstone_seq, nullptr,
-                           nullptr, nullptr, nullptr, nullptr, false,
-                           target_level_)) {
+      sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, &s,
+                       &merge_context, &max_covering_tombstone_seq, nullptr,
+                       nullptr, nullptr, nullptr, nullptr, false,
+                       target_level_);
+      if (s.ok() || s.IsIncomplete()) {
         mark_updated(cache, user_key);
         continue;
       }
       assert(s.IsNotFound());
     }
 
-    db->mutex()->Lock();
+    db_.mutex()->Lock();
     // No need to SetNextLogNumber, because we don't delete any log file
     size_t bytes_to_flush = 0;
     {
@@ -230,11 +241,16 @@ void PromotionCache::checker() {
       // There are too few data to flush. There will be too much compaction I/O
       // in L1 if we force to flush them to L0. Therefore, we just insert them
       // back to the mutable promotion cache.
-      auto mut = elem.mut->Write();
+      TimerGuard start =
+          hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
+              .start();
+      auto mut = mut_.Write();
       for (const auto &item : cache.cache) {
-        mut->Insert(item.first, item.second.sequence, item.second.value);
+        mut->Insert(std::string(item.first), item.second.sequence,
+                    std::string(item.second.value));
       }
-      db->mutex()->Unlock();
+      db_.mutex()->Unlock();
+      ConsumeBuffer(mut);
     } else {
       RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
 
@@ -252,14 +268,14 @@ void PromotionCache::checker() {
         }
       }
       cfd->imm()->Add(m, &memtables_to_free);
-      db->InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
+      db_.InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
       DBImpl::FlushRequest flush_req;
-      db->GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
+      db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
                                &flush_req);
-      db->SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
-      db->MaybeScheduleFlushOrCompaction();
+      db_.SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
+      db_.MaybeScheduleFlushOrCompaction();
 
-      db->mutex()->Unlock();
+      db_.mutex()->Unlock();
 
       for (MemTable *table : memtables_to_free) delete table;
       svc.Clean();
@@ -267,91 +283,53 @@ void PromotionCache::checker() {
 
     std::list<ImmPromotionCache> tmp;
     {
-      auto caches = cfd->promotion_caches().Read();
-      auto it = caches->find(target_level_);
-      assert(it->first == target_level_);
-      auto list = it->second.imm_list().Write();
+      auto list = imm_list_.Write();
       list->size -= iter->size;
       tmp.splice(tmp.begin(), list->list, iter);
     }
     // tmp will be freed without holding the lock of imm_list
 
     if (sv->Unref()) {
-      db->mutex()->Lock();
+      db_.mutex()->Lock();
       sv->Cleanup();
-      db->mutex()->Unlock();
+      db_.mutex()->Unlock();
       delete sv;
     }
   }
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
-size_t MutablePromotionCache::Insert(Slice user_key, SequenceNumber sequence,
-                                     Slice value) const {
+size_t PromotionCache::Mutable::Insert(std::string &&user_key,
+                                       SequenceNumber sequence,
+                                       std::string &&value) const {
   size_t size;
 
   PCHashTable::accessor it;
-  if (cache.insert(it, user_key.ToString())) {
-    it->second.sequence = sequence;
-    it->second.value = value.ToString();
-    it->second.count = 1;
-    size_t add = user_key.size() + value.size();
-    size = size_.fetch_add(add, std::memory_order_relaxed) + add;
+  size_t kvsize = user_key.size() + value.size();
+  bool inserted = cache.emplace(
+      it, std::piecewise_construct, std::forward_as_tuple(std::move(user_key)),
+      std::forward_as_tuple(sequence, std::move(value), 1));
+  if (inserted) {
+    size = size_.fetch_add(kvsize, std::memory_order_relaxed) + kvsize;
   } else {
     size = size_.load(std::memory_order_relaxed);
   }
   return size;
 }
-
-void PromotionCache::SwitchMutablePromotionCache(
-    DBImpl &db, ColumnFamilyData &cfd, size_t write_buffer_size) const {
-  std::unordered_map<std::string, PCData> cache;
-  size_t mut_size;
-  {
-    auto mut = mut_.Write();
-    mut_size = mut->size_.load(std::memory_order_relaxed);
-    if (mut_size < write_buffer_size) {
-      return;
+void PromotionCache::Mutable::Remove(InternalIterator &it, Slice last_key) {
+  while (it.Valid() && ucmp_->Compare(it.user_key(), last_key) <= 0) {
+    decltype(cache)::const_accessor mut_it;
+    bool found = cache.find(mut_it, it.user_key().ToString());
+    if (found) {
+      size_ -= mut_it->first.size() + mut_it->second.value.size();
+      cache.erase(mut_it);
     }
-    for (auto &&a : mut->cache) {
-      // Don't move keys in case that the hash map still needs it in clear().
-      cache.emplace(a.first, std::move(a.second));
-    }
-    mut->cache.clear();
-    mut->size_.store(0, std::memory_order_relaxed);
+    it.Next();
   }
-  db.mutex()->Lock();
-  std::list<rocksdb::ImmPromotionCache>::iterator iter;
-  {
-    auto imm_list = imm_list_.Write();
-    imm_list->size += mut_size;
-    iter = imm_list->list.emplace(imm_list->list.end(), std::move(cache),
-                                  mut_size);
-  }
-  SuperVersion *sv = cfd.GetSuperVersion();
-  // check_newer_version is responsible to unref it
-  sv->Ref();
-  db.mutex()->Unlock();
-
-  size_t queue_len;
-  {
-    std::unique_lock<std::mutex> lock_(checker_lock_);
-    checker_queue_.emplace(CheckerQueueElem{
-        .db = &db,
-        .sv = sv,
-        .iter = iter,
-        .mut = &mut_,
-    });
-    queue_len = checker_queue_.size();
-  }
-  ROCKS_LOG_INFO(db.immutable_db_options().logger, "Checker queue length %zu\n",
-                 queue_len);
-  signal_check_.notify_one();
 }
 std::vector<std::pair<std::string, std::string>>
-MutablePromotionCache::TakeRange(InternalStats *internal_stats,
-                                 CompactionRouter *router, Slice smallest,
-                                 Slice largest) {
+PromotionCache::Mutable::TakeRange(InternalStats *internal_stats, RALT *ralt,
+                                   Slice smallest, Slice largest) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
@@ -373,8 +351,8 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
     uint64_t count = record.second.second;
     assert(cache.erase(user_key.ToString()));
     size_.fetch_sub(key.size() + value.size(), std::memory_order_relaxed);
-    bool is_hot = router->IsHot(user_key);
-    router->Access(user_key, value.size());
+    bool is_hot = ralt->IsHot(user_key);
+    ralt->Access(user_key, value.size());
     if (count > 1 || is_hot) {
       ret.emplace_back(std::move(*key.rep()), std::move(value));
     }
@@ -382,4 +360,163 @@ MutablePromotionCache::TakeRange(InternalStats *internal_stats,
   std::sort(ret.begin(), ret.end(), InternalKeyCompare(ucmp_));
   return ret;
 }
+
+// Return the mutable promotion size, or 0 if inserted to buffer.
+void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
+                            std::string &&user_key, SequenceNumber sequence,
+                            std::string &&value) const {
+  size_t mut_size;
+  {
+    auto mut = mut_.TryRead();
+    if (!mut.has_value()) {
+      mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
+                                       std::move(value));
+      return;
+    }
+    mut_size =
+        mut.value()->Insert(std::move(user_key), sequence, std::move(value));
+  }
+  try_update_max_size(mut_size);
+  if (mut_size < mutable_cf_options.write_buffer_size) return;
+  ScheduleSwitchMut();
+}
+
+void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
+  auto mut_buffer = mut_buffer_.Lock();
+  if (mut_buffer->empty()) return;
+  std::vector<MutBufItem> buffer;
+  std::swap(buffer, *mut_buffer);
+  mut_buffer.drop();
+  for (MutBufItem &item : buffer) {
+    mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
+  }
+}
+
+void PromotionCache::try_update_max_size(size_t mut_size) const {
+  // Try to update stats.
+  auto imm_list = imm_list_.TryRead();
+  if (!imm_list.has_value()) return;
+  size_t tot = mut_size + imm_list.value()->size;
+  rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
+}
+
+void PromotionCache::ScheduleSwitchMut() const {
+  {
+    std::unique_lock<std::mutex> switcher_lock(switcher_lock_);
+    if (should_switch_) return;
+    should_switch_ = true;
+  }
+  auto start = cfd_.internal_stats()
+                   ->hotrap_timers()
+                   .timer(TimerType::kScheduleSwitchMut)
+                   .start();
+  switcher_signal_.notify_one();
+}
+
+void PromotionCache::SwitchMutablePromotionCache() {
+  SuperVersion *sv;
+  std::list<rocksdb::ImmPromotionCache>::iterator iter;
+  size_t mut_size;
+  {
+    // We need to take snapshot before emptying mutable promotion cache to make
+    // sure that a newer version from FD would either be in the snapshot and
+    // detected by the checker, or invalidate the old version in the mutable
+    // promotion cache during promotion by compaction.
+
+    // We need to make sure that SwitchMemtable happens either before taking
+    // snapshot or after the new immutable promotion cache is created.
+    // We achieve this by protecting the operations with imm_list's lock.
+
+    auto start = cfd_.internal_stats()
+                     ->hotrap_timers()
+                     .timer(TimerType::kSwitchMutablePromotionCache)
+                     .start();
+
+    db_.mutex()->Lock();
+    auto imm_list = imm_list_.Write();
+    sv = cfd_.GetSuperVersion();
+    // Checker is responsible to unref it
+    sv->Ref();
+    db_.mutex()->Unlock();
+
+    auto mut = mut_.Write();
+    mut_size = mut->size_.load(std::memory_order_relaxed);
+    if (mut_size < sv->mutable_cf_options.write_buffer_size) {
+      sv->Unref();
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      assert(should_switch_);
+      should_switch_ = false;
+      return;
+    }
+
+    std::unordered_map<std::string, PCData> cache;
+    for (auto &&a : mut->cache) {
+      // Don't move keys in case that the hash map still needs it in clear().
+      cache.emplace(a.first, std::move(a.second));
+    }
+    mut->cache.clear();
+    mut->size_.store(0, std::memory_order_relaxed);
+
+    imm_list->size += mut_size;
+    iter = imm_list->list.emplace(imm_list->list.end(), std::move(cache),
+                                  mut_size);
+    imm_list.drop();
+
+    {
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      assert(should_switch_);
+      should_switch_ = false;
+    }
+
+    ConsumeBuffer(mut);
+    mut_size = mut->size_.load(std::memory_order_relaxed);
+  }
+  if (mut_size >= sv->mutable_cf_options.write_buffer_size) {
+    ScheduleSwitchMut();
+  }
+
+  size_t queue_len;
+  {
+    std::unique_lock<std::mutex> lock_(checker_lock_);
+    checker_queue_.emplace(CheckerQueueElem{
+        .sv = sv,
+        .iter = iter,
+    });
+    queue_len = checker_queue_.size();
+  }
+  ROCKS_LOG_INFO(db_.immutable_db_options().logger,
+                 "Checker queue length %zu\n", queue_len);
+  checker_signal_.notify_one();
+}
+void PromotionCache::switcher() {
+  pthread_setname_np(pthread_self(), "switcher");
+  for (;;) {
+    {
+      std::unique_lock<std::mutex> lock(switcher_lock_);
+      switcher_signal_.wait(
+          lock, [&] { return switcher_should_stop_ || should_switch_; });
+      if (switcher_should_stop_) break;
+    }
+    SwitchMutablePromotionCache();
+  }
+}
+
+void PromotionCache::Remove(InternalIterator &it, Slice last_key) const {
+  auto mut = mut_.Write();
+  // We need to consume the buffer so that all records inserted before marking
+  // being_or_has_been_compacted can be seen.
+  ConsumeBuffer(mut);
+  mut->Remove(it, last_key);
+}
+
+std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
+    InternalStats *internal_stats, RALT *ralt, Slice smallest,
+    Slice largest) const {
+  auto mut = mut_.Write();
+  // We need to consume the buffer so that all records inserted before marking
+  // being_or_has_been_compacted can be seen by TakeRange.
+  ConsumeBuffer(mut);
+  return mut->TakeRange(internal_stats, ralt, smallest, largest);
+}
+
 }  // namespace ROCKSDB_NAMESPACE

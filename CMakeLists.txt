@@ -874,7 +874,7 @@ set(SOURCES
         utilities/checkpoint/checkpoint_impl.cc
         utilities/compaction_filters.cc
         utilities/compaction_filters/remove_emptyvalue_compactionfilter.cc
-        utilities/compaction_routers.cc
+        utilities/ralt.cc
         utilities/debug.cc
         utilities/env_mirror.cc
         utilities/env_timed.cc
@@ -1397,12 +1397,17 @@ if(WITH_TESTS)
 endif()
 
 if(WITH_BENCHMARK_TOOLS)
+  add_subdirectory(third-party/AutoTuner)
+
   add_executable(db_bench${ARTIFACT_SUFFIX}
     tools/simulated_hybrid_file_system.cc
     tools/db_bench.cc
     tools/db_bench_tool.cc)
   target_link_libraries(db_bench${ARTIFACT_SUFFIX}
-    ${ROCKSDB_LIB} ${THIRDPARTY_LIBS})
+    ${ROCKSDB_LIB} ${THIRDPARTY_LIBS} ralt autotuner)
+  target_link_directories(db_bench${ARTIFACT_SUFFIX} PUBLIC ${RALT_LIB_DIR})
+  target_include_directories(db_bench${ARTIFACT_SUFFIX} PUBLIC
+    ${RALT_INCLUDE_DIR})
 
   add_executable(cache_bench${ARTIFACT_SUFFIX}
     cache/cache_bench.cc

@@ -26,6 +26,9 @@
 #ifdef __FreeBSD__
 #include <sys/sysctl.h>
 #endif
+
+#include <autotuner.h>
+
 #include <atomic>
 #include <cinttypes>
 #include <condition_variable>
@@ -709,6 +712,36 @@ DEFINE_bool(show_table_properties, false,
 
 DEFINE_string(db, "", "Use the db with the following name.");
 
+DEFINE_string(db_paths, "[]",
+              "Example: [{/mnt/ssd,100000000},{/mnt/hdd,1000000000}]");
+
+static std::vector<rocksdb::DbPath> parse_db_paths(std::string db_paths) {
+  std::istringstream in(db_paths);
+  std::vector<rocksdb::DbPath> ret;
+  assert(in.get() == '[');
+  char c = static_cast<char>(in.get());
+  if (c == ']') return ret;
+  assert(c == '{');
+  while (1) {
+    std::string path;
+    uint64_t size;
+    if (in.peek() == '"') {
+      in >> path;
+      assert(in.get() == ',');
+    } else {
+      while ((c = static_cast<char>(in.get())) != ',') path.push_back(c);
+    }
+    in >> size;
+    ret.emplace_back(std::move(path), size);
+    assert(in.get() == '}');
+    c = static_cast<char>(in.get());
+    if (c != ',') break;
+    assert(in.get() == '{');
+  }
+  assert(c == ']');
+  return ret;
+}
+
 // Read cache flags
 
 DEFINE_string(read_cache_path, "",
@@ -1176,6 +1209,10 @@ DEFINE_string(report_file, "report.csv",
               "Filename where some simple stats are reported to (if "
               "--report_interval_seconds is bigger than 0)");
 
+DEFINE_bool(report_operation_count_time, false,
+            "If true, report the count and time of each operation type every "
+            "<report_interval_seconds> seconds in file <op-type>-count-time.");
+
 DEFINE_int32(thread_status_per_interval, 0,
              "Takes and report a snapshot of the current status of each thread"
              " when this is greater than 0.");
@@ -1513,6 +1550,11 @@ DEFINE_string(secondary_cache_uri, "",
               "Full URI for creating a custom secondary cache object");
 static class std::shared_ptr<ROCKSDB_NAMESPACE::SecondaryCache> secondary_cache;
 #endif  // ROCKSDB_LITE
+
+DEFINE_double(max_hot_set_size, 0, "");
+DEFINE_double(max_ralt_size, 0, "");
+DEFINE_string(ralt_path, "", "Path to RALT");
+DEFINE_int32(ralt_bloom_bits, 14, "");
 
 static const bool FLAGS_soft_rate_limit_dummy __attribute__((__unused__)) =
     RegisterFlagValidator(&FLAGS_soft_rate_limit, &ValidateRateLimit);
@@ -2015,12 +2057,36 @@ struct DBWithColumnFamilies {
   }
 };
 
+enum OperationType : unsigned char {
+  kRead = 0,
+  kWrite,
+  kDelete,
+  kSeek,
+  kMerge,
+  kUpdate,
+  kCompress,
+  kUncompress,
+  kCrc,
+  kHash,
+  kOthers,
+  kOperationTypeEnumMax,
+};
+
+static std::unordered_map<OperationType, std::string, std::hash<unsigned char>>
+    OperationTypeString = {{kRead, "read"},         {kWrite, "write"},
+                           {kDelete, "delete"},     {kSeek, "seek"},
+                           {kMerge, "merge"},       {kUpdate, "update"},
+                           {kCompress, "compress"}, {kCompress, "uncompress"},
+                           {kCrc, "crc"},           {kHash, "hash"},
+                           {kOthers, "op"}};
+
 // a class that reports stats to CSV file
 class ReporterAgent {
  public:
-  ReporterAgent(Env* env, const std::string& fname,
+  ReporterAgent(Options& options, Env* env, const std::string& fname,
                 uint64_t report_interval_secs)
-      : env_(env),
+      : options_(options),
+        env_(env),
         total_ops_done_(0),
         last_report_(0),
         report_interval_secs_(report_interval_secs),
@@ -2054,9 +2120,30 @@ class ReporterAgent {
   void ReportFinishedOps(int64_t num_ops) {
     total_ops_done_.fetch_add(num_ops);
   }
+  // thread safe
+  void FinishedOps(int64_t num_ops, enum OperationType op_type,
+                   uint64_t micros) {
+    ReportFinishedOps(num_ops);
+    CountTime& count_time = count_time_[op_type];
+    count_time.count.fetch_add(num_ops, std::memory_order_relaxed);
+    count_time.micros.fetch_add(micros, std::memory_order_relaxed);
+  }
 
  private:
-  std::string Header() const { return "secs_elapsed,interval_qps"; }
+  std::string Header() const {
+    std::string header = "secs_elapsed,interval_qps";
+    if (dbstats) {
+      for (Tickers ticker : tickers_to_report_) {
+        header += ',';
+        assert(ticker == TickersNameMap[ticker].first);
+        header += TickersNameMap[ticker].second;
+      }
+    }
+    if (options_.ralt) {
+      header += ",real_hot_set_size,real_phy_size";
+    }
+    return header;
+  }
   void SleepAndReport() {
     auto* clock = env_->GetSystemClock().get();
     auto time_started = clock->NowMicros();
@@ -2077,8 +2164,21 @@ class ReporterAgent {
           (clock->NowMicros() - time_started + kMicrosInSecond / 2) /
           kMicrosInSecond;
       std::string report = ToString(secs_elapsed) + "," +
-                           ToString(total_ops_done_snapshot - last_report_) +
-                           "\n";
+                           ToString(total_ops_done_snapshot - last_report_);
+      if (dbstats) {
+        for (Tickers ticker : tickers_to_report_) {
+          uint64_t cur = dbstats->getTickerCount(ticker);
+          uint64_t& last = last_ticker_[ticker];
+          report += ',' + std::to_string(cur - last);
+          last = cur;
+        }
+      }
+      if (options_.ralt) {
+        ::RALT& ralt = *static_cast<::RALT*>(options_.ralt);
+        report += ',' + std::to_string(ralt.GetRealHotSetSize()) + ',' +
+                  std::to_string(ralt.GetRealPhySize());
+      }
+      report += '\n';
       auto s = report_file_->Append(report);
       if (s.ok()) {
         s = report_file_->Flush();
@@ -2090,48 +2190,76 @@ class ReporterAgent {
         break;
       }
       last_report_ = total_ops_done_snapshot;
+      for (size_t i = 0; i < kOperationTypeEnumMax; ++i) {
+        OperationType op = static_cast<OperationType>(i);
+        const CountTime& count_time = count_time_[op];
+        uint64_t count = count_time.count.load(std::memory_order_relaxed);
+        if (count == 0) continue;
+        uint64_t micros = count_time.micros.load(std::memory_order_relaxed);
+        auto it = op_report_file_.find(op);
+        if (it == op_report_file_.end()) {
+          std::string fname = OperationTypeString[op] + "-count-time";
+          std::unique_ptr<WritableFile> file;
+          s = env_->NewWritableFile(fname, &file, EnvOptions());
+          if (s.ok()) {
+            s = file->Append("secs_elapsed count micros\n");
+          }
+          if (s.ok()) {
+            s = file->Flush();
+          }
+          if (!s.ok()) {
+            fprintf(stderr, "Can't open %s: %s\n", fname.c_str(),
+                    s.ToString().c_str());
+            abort();
+          }
+          auto res = op_report_file_.emplace(op, std::move(file));
+          assert(res.second);
+          it = res.first;
+        }
+        report = std::to_string(secs_elapsed) + ' ' + std::to_string(count) +
+                 ' ' + std::to_string(micros) + '\n';
+        s = it->second->Append(report);
+        if (!s.ok()) {
+          fprintf(stderr,
+                  "Can't write to report file (%s), stopping the reporting\n",
+                  s.ToString().c_str());
+          return;
+        }
+      }
     }
   }
 
+  Options& options_;
   Env* env_;
   std::unique_ptr<WritableFile> report_file_;
   std::atomic<int64_t> total_ops_done_;
   int64_t last_report_;
   const uint64_t report_interval_secs_;
+
+  const std::vector<Tickers> tickers_to_report_{GET_HIT_T0,
+                                                GET_HIT_T1,
+                                                PROMOTED_FLUSH_BYTES,
+                                                PROMOTED_2FDLAST_BYTES,
+                                                PROMOTED_2SDFRONT_BYTES,
+                                                RETAINED_BYTES,
+                                                ACCESSED_COLD_BYTES,
+                                                HAS_NEWER_VERSION_BYTES};
+  std::unordered_map<Tickers, uint64_t> last_ticker_;
+
+  std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
+      op_report_file_;
+  struct CountTime {
+    std::atomic<uint64_t> count;
+    std::atomic<uint64_t> micros;
+    CountTime() : count(0), micros(0) {}
+  };
+  CountTime count_time_[kOperationTypeEnumMax];
+
   ROCKSDB_NAMESPACE::port::Thread reporting_thread_;
   std::mutex mutex_;
   // will notify on stop
   std::condition_variable stop_cv_;
   bool stop_;
-};
-
-enum OperationType : unsigned char {
-  kRead = 0,
-  kWrite,
-  kDelete,
-  kSeek,
-  kMerge,
-  kUpdate,
-  kCompress,
-  kUncompress,
-  kCrc,
-  kHash,
-  kOthers
-};
-
-static std::unordered_map<OperationType, std::string, std::hash<unsigned char>>
-                          OperationTypeString = {
-  {kRead, "read"},
-  {kWrite, "write"},
-  {kDelete, "delete"},
-  {kSeek, "seek"},
-  {kMerge, "merge"},
-  {kUpdate, "update"},
-  {kCompress, "compress"},
-  {kCompress, "uncompress"},
-  {kCrc, "crc"},
-  {kHash, "hash"},
-  {kOthers, "op"}
 };
 
 class CombinedStats;
@@ -2263,25 +2391,31 @@ class Stats {
 
   void FinishedOps(DBWithColumnFamilies* db_with_cfh, DB* db, int64_t num_ops,
                    enum OperationType op_type = kOthers) {
-    if (reporter_agent_) {
-      reporter_agent_->ReportFinishedOps(num_ops);
-    }
-    if (FLAGS_histogram) {
+    if (FLAGS_histogram || FLAGS_report_operation_count_time) {
       uint64_t now = clock_->NowMicros();
       uint64_t micros = now - last_op_finish_;
 
-      if (hist_.find(op_type) == hist_.end())
-      {
-        auto hist_temp = std::make_shared<HistogramImpl>();
-        hist_.insert({op_type, std::move(hist_temp)});
-      }
-      hist_[op_type]->Add(micros);
+      if (FLAGS_histogram) {
+        if (hist_.find(op_type) == hist_.end()) {
+          auto hist_temp = std::make_shared<HistogramImpl>();
+          hist_.insert({op_type, std::move(hist_temp)});
+        }
+        hist_[op_type]->Add(micros);
 
-      if (micros > 20000 && !FLAGS_stats_interval) {
-        fprintf(stderr, "long op: %" PRIu64 " micros%30s\r", micros, "");
-        fflush(stderr);
+        if (micros > 20000 && !FLAGS_stats_interval) {
+          fprintf(stderr, "long op: %" PRIu64 " micros%30s\r", micros, "");
+          fflush(stderr);
+        }
+      }
+      if (FLAGS_report_operation_count_time) {
+        assert(reporter_agent_);
+        reporter_agent_->FinishedOps(num_ops, op_type, micros);
+      } else if (reporter_agent_) {
+        reporter_agent_->ReportFinishedOps(num_ops);
       }
       last_op_finish_ = now;
+    } else if (reporter_agent_) {
+      reporter_agent_->ReportFinishedOps(num_ops);
     }
 
     done_ += num_ops;
@@ -3231,6 +3365,15 @@ class Benchmark {
     if (!SanityCheck()) {
       ErrorExit();
     }
+
+    open_options_.max_bytes_for_level_multiplier_additional.clear();
+    if (!FLAGS_ralt_path.empty()) {
+      open_options_.ralt = new ::RALT(
+          open_options_.comparator, FLAGS_ralt_path.c_str(),
+          FLAGS_max_hot_set_size, FLAGS_max_hot_set_size,
+          FLAGS_max_hot_set_size, FLAGS_max_ralt_size, FLAGS_ralt_bloom_bits);
+    }
+
     Open(&open_options_);
     PrintHeader(open_options_);
     std::stringstream benchmark_stream(FLAGS_benchmarks);
@@ -3546,6 +3689,15 @@ class Benchmark {
         Open(&open_options_);  // use open_options for the last accessed
       }
 
+      std::unique_ptr<AutoTuner> autotuner;
+      if (open_options_.ralt) {
+        size_t first_level_in_sd = calc_first_level_in_sd(open_options_);
+        autotuner = std::make_unique<AutoTuner>(
+            *db_.db, first_level_in_sd,
+            open_options_.db_paths[0].target_size * 0.05,
+            open_options_.db_paths[0].target_size * 0.7);
+      }
+
       if (method != nullptr) {
         fprintf(stdout, "DB path: [%s]\n", FLAGS_db.c_str());
 
@@ -3680,6 +3832,7 @@ class Benchmark {
               secondary_db_updates_);
     }
 #endif  // ROCKSDB_LITE
+    delete open_options_.ralt;
   }
 
  private:
@@ -3745,7 +3898,8 @@ class Benchmark {
 
     std::unique_ptr<ReporterAgent> reporter_agent;
     if (FLAGS_report_interval_seconds > 0) {
-      reporter_agent.reset(new ReporterAgent(FLAGS_env, FLAGS_report_file,
+      reporter_agent.reset(new ReporterAgent(open_options_, FLAGS_env,
+                                             FLAGS_report_file,
                                              FLAGS_report_interval_seconds));
     }
 
@@ -4470,8 +4624,11 @@ class Benchmark {
     options.listeners.emplace_back(listener_);
 
     if (FLAGS_num_multi_db <= 1) {
+      options.db_paths = parse_db_paths(FLAGS_db_paths);
       OpenDb(options, FLAGS_db, &db_);
     } else {
+      // Not supported yet.
+      assert(false);
       multi_dbs_.clear();
       multi_dbs_.resize(FLAGS_num_multi_db);
       auto wal_dir = options.wal_dir;
@@ -6261,6 +6418,11 @@ class Benchmark {
         // the Get query
         gets++;
         read++;
+        if (thread->shared->read_rate_limiter && read % 100 == 0) {
+          thread->shared->read_rate_limiter->Request(100, Env::IO_HIGH,
+                                                     nullptr /*stats*/);
+          thread->stats.ResetLastOpTime();
+        }
         if (FLAGS_num_column_families > 1) {
           s = db_with_cfh->db->Get(options, db_with_cfh->GetCfh(key_rand), key,
                                    &pinnable_val);
@@ -6279,14 +6441,15 @@ class Benchmark {
           abort();
         }
 
-        if (thread->shared->read_rate_limiter && read % 100 == 0) {
-          thread->shared->read_rate_limiter->Request(100, Env::IO_HIGH,
-                                                     nullptr /*stats*/);
-        }
         thread->stats.FinishedOps(db_with_cfh, db_with_cfh->db, 1, kRead);
       } else if (query_type == 1) {
         // the Put query
         puts++;
+        if (thread->shared->write_rate_limiter && puts % 32 == 0) {
+          thread->shared->write_rate_limiter->Request(32, Env::IO_HIGH,
+                                                      nullptr /*stats*/);
+          thread->stats.ResetLastOpTime();
+        }
         int64_t val_size = ParetoCdfInversion(
             u, FLAGS_value_theta, FLAGS_value_k, FLAGS_value_sigma);
         if (val_size < 0) {
@@ -6302,10 +6465,6 @@ class Benchmark {
           ErrorExit();
         }
 
-        if (thread->shared->write_rate_limiter && puts % 100 == 0) {
-          thread->shared->write_rate_limiter->Request(100, Env::IO_HIGH,
-                                                      nullptr /*stats*/);
-        }
         thread->stats.FinishedOps(db_with_cfh, db_with_cfh->db, 1, kWrite);
       } else if (query_type == 2) {
         // Seek query

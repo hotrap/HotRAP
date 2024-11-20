@@ -492,11 +492,10 @@ static std::unordered_map<std::string, OptionTypeInfo>
                      name, value, addr);
                }
              })},
-        {"compaction_router",
-         OptionTypeInfo::AsCustomRawPtr<const CompactionRouter>(
-             offsetof(struct MutableCFOptions, compaction_router),
-             OptionVerificationType::kByName,
-             OptionTypeFlags::kMutable | OptionTypeFlags::kAllowNull)},
+        {"ralt", OptionTypeInfo::AsCustomRawPtr<const RALT>(
+                     offsetof(struct MutableCFOptions, ralt),
+                     OptionVerificationType::kByName,
+                     OptionTypeFlags::kMutable | OptionTypeFlags::kAllowNull)},
         // End special case properties
 };
 
@@ -1071,7 +1070,7 @@ void MutableCFOptions::Dump(Logger* log) const {
                  blob_garbage_collection_force_threshold);
   ROCKS_LOG_INFO(log, "           blob_compaction_readahead_size: %" PRIu64,
                  blob_compaction_readahead_size);
-  ROCKS_LOG_INFO(log, "compaction_router: %p", compaction_router);
+  ROCKS_LOG_INFO(log, "ralt: %p", ralt);
 }
 
 MutableCFOptions::MutableCFOptions(const Options& options)

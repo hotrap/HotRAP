@@ -840,14 +840,8 @@ int GetL0ThresholdSpeedupCompaction(int level0_file_num_compaction_trigger,
 }
 }  // namespace
 
-/*
- * Find the optimal path to place a file
- * Given a level, finds the path where levels up to it will fit in levels
- * up to and including this path
- */
-static uint32_t GetPathId(const ImmutableCFOptions& ioptions,
-                          const MutableCFOptions& mutable_cf_options,
-                          int level) {
+uint32_t GetPathId(const ImmutableCFOptions& ioptions,
+                   const MutableCFOptions& mutable_cf_options, int level) {
   uint32_t p = 0;
   assert(!ioptions.cf_paths.empty());
 
@@ -1164,6 +1158,41 @@ void ColumnFamilyData::CreateNewMemtable(
   }
   SetMemtable(ConstructNewMemtable(mutable_cf_options, earliest_seq));
   mem_->Ref();
+}
+
+const PromotionCache* ColumnFamilyData::get_promotion_cache(size_t level) {
+  auto caches = promotion_caches().Read();
+  // The first whose level <= target_level
+  auto it = caches->find(level);
+  if (it == caches->end()) {
+    return nullptr;
+  } else {
+    return &it->second;
+  }
+}
+const PromotionCache& ColumnFamilyData::get_or_create_promotion_cache(
+    DBImpl& db, size_t level) {
+  const PromotionCache* cache = get_promotion_cache(level);
+  if (cache == nullptr) {
+    auto caches = promotion_caches().Write();
+    // It seems that even if the key already exists, emplace still construct
+    // PromotionCache then destruct it. However, PromotionCache should only be
+    // destructed when shutting down the database. Therefore we firstly make
+    // sure that the key does not exist to avoid destructing PromotionCache
+    // here.
+    auto it = caches->find(level);
+    if (it == caches->end()) {
+      auto ret =
+          caches->emplace(std::piecewise_construct, std::make_tuple(level),
+                          std::make_tuple(std::ref(db), std::ref(*this), level,
+                                          user_comparator()));
+      assert(ret.second);
+      it = ret.first;
+    }
+    assert(it->first == level);
+    cache = &it->second;
+  }
+  return *cache;
 }
 
 bool ColumnFamilyData::NeedsCompaction() const {
