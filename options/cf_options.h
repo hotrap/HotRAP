@@ -159,7 +159,7 @@ struct MutableCFOptions {
         bottommost_temperature(options.bottommost_temperature),
         // TODO: is 0 fine here?
         sample_for_compression(options.sample_for_compression),
-        compaction_router(options.compaction_router) {
+        ralt(options.ralt) {
     RefreshDerivedOptions(options.num_levels, options.compaction_style);
   }
 
@@ -282,7 +282,7 @@ struct MutableCFOptions {
   // Per-level target file size.
   std::vector<uint64_t> max_file_size;
 
-  CompactionRouter* compaction_router;
+  RALT* ralt;
 };
 
 uint64_t MultiplyCheckOverflow(uint64_t op1, double op2);

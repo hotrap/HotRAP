@@ -55,6 +55,8 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {GET_HIT_L0, "rocksdb.l0.hit"},
     {GET_HIT_L1, "rocksdb.l1.hit"},
     {GET_HIT_L2_AND_UP, "rocksdb.l2andup.hit"},
+    {GET_HIT_T0, "rocksdb.t0.hit"},
+    {GET_HIT_T1, "rocksdb.t1.hit"},
     {COMPACTION_KEY_DROP_NEWER_ENTRY, "rocksdb.compaction.key.drop.new"},
     {COMPACTION_KEY_DROP_OBSOLETE, "rocksdb.compaction.key.drop.obsolete"},
     {COMPACTION_KEY_DROP_RANGE_DEL, "rocksdb.compaction.key.drop.range_del"},
@@ -222,8 +224,21 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {HOT_FILE_READ_COUNT, "rocksdb.hot.file.read.count"},
     {WARM_FILE_READ_COUNT, "rocksdb.warm.file.read.count"},
     {COLD_FILE_READ_COUNT, "rocksdb.cold.file.read.count"},
+    {LEADER_WRITE_COUNT, "rocksdb.leader.write.count"},
+    {NON_LEADER_WRITE_COUNT, "rocksdb.nonleader.write.count"},
+    {ACCESSED_COLD_BYTES, "hotrap.accessed.cold.bytes"},
+    {HAS_NEWER_VERSION_BYTES, "hotrap.has_newer_version.bytes"},
     {PROMOTED_2FDLAST_BYTES, "hotrap.promoted.2fdlast.bytes"},
-    {PROMOTED_FLUSH_BYTES, "hotrap.promoted.flush.bytes"}};
+    {PROMOTED_2SDFRONT_BYTES, "hotrap.promoted.2sdfront.bytes"},
+    {PROMOTED_FLUSH_BYTES, "hotrap.promoted.flush.bytes"},
+    {RETAINED_BYTES, "hotrap.retained.bytes"},
+    {PROMOTION_CACHE_GET_HIT, "hotrap.promotion_cache.get.hit"},
+    {PROMOTION_CACHE_INSERT_FAIL_LOCK,
+     "hotrap.promotion_cache.insert.fail.lock"},
+    {PROMOTION_CACHE_INSERT_FAIL_COMPACTED,
+     "hotrap.promotion_cache.insert.fail.compacted"},
+    {PROMOTION_CACHE_INSERT, "hotrap.promotion_cache.insert"},
+};
 
 const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap = {
     {DB_GET, "rocksdb.db.get.micros"},
@@ -453,7 +468,7 @@ namespace {
 // a buffer size used for temp string buffers
 const int kTmpStrBufferSize = 200;
 
-} // namespace
+}  // namespace
 
 std::string StatisticsImpl::ToString() const {
   MutexLock lock(&aggregate_lock_);

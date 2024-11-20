@@ -107,6 +107,9 @@ enum Tickers : uint32_t {
   // # of Get() queries served by L2 and up
   GET_HIT_L2_AND_UP,
 
+  GET_HIT_T0,
+  GET_HIT_T1,
+
   /**
    * COMPACTION_KEY_DROP_* count the reasons for key drop during compaction
    * There are 4 reasons currently.
@@ -435,7 +438,11 @@ enum Tickers : uint32_t {
   PROMOTED_2SDFRONT_BYTES,
   PROMOTED_FLUSH_BYTES,
   RETAINED_BYTES,
-  GET_HIT_PROMOTION_CACHE,
+  PROMOTION_CACHE_GET_HIT,
+  PROMOTION_CACHE_INSERT_FAIL_LOCK,
+  PROMOTION_CACHE_INSERT_FAIL_COMPACTED,
+  // Successful insert
+  PROMOTION_CACHE_INSERT,
 
   TICKER_ENUM_MAX
 };
