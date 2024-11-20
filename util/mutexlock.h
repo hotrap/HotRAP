@@ -44,10 +44,18 @@ class MutexLock {
   }
 
   ~MutexLock() {
-    if (mu_) this->mu_->Unlock();
+    if (mu_) __drop();
+  }
+
+  void drop() {
+    assert(mu_);
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() { this->mu_->Unlock(); }
+
   const port::Mutex *mu_;
 };
 
@@ -104,10 +112,18 @@ class ReadUnlock {
   }
 
   ~ReadUnlock() {
-    if (mu_ != nullptr) mu_->ReadUnlock();
+    if (mu_) __drop();
+  }
+
+  void drop() {
+    assert(mu_);
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() { mu_->ReadUnlock(); }
+
   const port::RWMutex *mu_;
 };
 
@@ -156,10 +172,17 @@ class WriteUnlock {
   }
 
   ~WriteUnlock() {
-    if (mu_ != nullptr) mu_->WriteUnlock();
+    if (mu_) __drop();
+  }
+
+  void drop() {
+    assert(mu_);
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() { mu_->WriteUnlock(); }
   const port::RWMutex *mu_;
 };
 
@@ -172,6 +195,8 @@ class MutexGuard {
       : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
   T &operator*() const { return data_; }
   T *operator->() const { return &data_; }
+
+  void drop() { lock_.drop(); }
 
  private:
   MutexGuard(T &data, const port::Mutex *mu) : data_(data), lock_(mu) {}
@@ -205,6 +230,8 @@ class ReadGuard {
   const T &operator*() const { return *data_; }
   const T *operator->() const { return data_; }
 
+  void drop() { lock_.drop(); }
+
  private:
   const T *data_;
   ReadUnlock lock_;
@@ -225,6 +252,8 @@ class WriteGuard {
   }
   T &operator*() const { return *data_; }
   T *operator->() const { return data_; }
+
+  void drop() { lock_.drop(); }
 
  private:
   T *data_;

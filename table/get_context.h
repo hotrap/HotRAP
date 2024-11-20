@@ -172,6 +172,11 @@ class GetContext {
 
   void push_operand(const Slice& value, Cleanable* value_pinner);
 
+  Slice user_key() const { return user_key_; }
+  MergeContext& merge_context() const { return *merge_context_; }
+  bool do_merge() const { return do_merge_; }
+  bool is_blob_index() const { return *is_blob_index_; }
+
  private:
   void Merge(const Slice* value);
   bool GetBlobValue(const Slice& blob_index, PinnableSlice* blob_value);

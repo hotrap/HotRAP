@@ -198,7 +198,7 @@ class VersionStorageInfo {
   // record results in files_by_compaction_pri_. The largest files are listed
   // first.
   void UpdateFilesByCompactionPri(ColumnFamilyData* cfd,
-                                  const MutableCFOptions& mutable_cf_options);
+                                  const Version& version);
 
   void GenerateLevel0NonOverlapping();
   bool level0_non_overlapping() const {
@@ -708,7 +708,7 @@ class Version {
   //    If the key has any merge operands then store them in
   //    merge_context.operands_list and don't merge the operands
   // REQUIRES: lock is not held
-  bool Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
+  void Get(DBImpl* db, const ReadOptions&, const LookupKey& key,
            PinnableSlice* value, std::string* timestamp, Status* status,
            MergeContext* merge_context,
            SequenceNumber* max_covering_tombstone_seq,
@@ -820,7 +820,10 @@ class Version {
   // Prerequisite for this API is max_open_files = -1
   void GetCreationTimeOfOldestFile(uint64_t* creation_time);
 
-  const MutableCFOptions& GetMutableCFOptions() { return mutable_cf_options_; }
+  const MutableCFOptions& GetMutableCFOptions() const {
+    return mutable_cf_options_;
+  }
+  uint32_t path_id(int level) const { return level_path_id_[level]; }
 
  private:
   Env* env_;
@@ -838,31 +841,26 @@ class Version {
     return storage_info_.user_comparator_;
   }
 
+  void TryPromote(DBImpl& db, ColumnFamilyData& cfd,
+                  std::vector<std::reference_wrapper<FileMetaData>> cd_files,
+                  int hit_level, Slice user_key, SequenceNumber seq,
+                  PinnableSlice* value);
   void HandleFound(const ReadOptions& read_options, GetContext& get_context,
-                   int hit_level, Slice user_key, PinnableSlice* value,
-                   Status& status, bool is_blob_index, bool do_merge,
-                   bool is_checker);
-  void HandleNotFound(GetContext& get_context, Slice user_key,
-                      PinnableSlice* value, Status& status,
-                      MergeContext& merge_context, bool* key_exists,
-                      bool do_merge);
+                   int hit_level, PinnableSlice* value, Status& status);
+  void HandleNotFound(GetContext& get_context, PinnableSlice* value,
+                      Status& status, bool* key_exists);
   struct EnvGet {
     DBImpl* db;
     const ReadOptions& read_options;
     const LookupKey& k;
     PinnableSlice* value;
-    GetContext& get_context;
     Status& status;
-    MergeContext& merge_context;
-    SequenceNumber& max_covering_tombstone_seq;
     bool* key_exists;
-    bool is_blob_index;
-    bool do_merge;
     std::vector<std::reference_wrapper<FileMetaData>> cd_files;
   };
-  bool GetInFile(EnvGet& env_get, FdWithKeyRange& f, int hit_level,
-                 bool is_hit_file_last_in_level);
-  bool Get(EnvGet& env_get, int last_level);
+  bool GetInFile(EnvGet& env_get, GetContext& get_context, FdWithKeyRange& f,
+                 int hit_level, bool is_hit_file_last_in_level);
+  void Get(EnvGet& env_get, GetContext& get_context, int last_level);
   // Returns true if the filter blocks in the specified level will not be
   // checked during read operations. In certain cases (trivial move or preload),
   // the filter block may already be cached, but we still do not access it such
@@ -897,6 +895,7 @@ class Version {
   int refs_;                    // Number of live refs to this version
   const FileOptions file_options_;
   const MutableCFOptions mutable_cf_options_;
+  std::vector<uint32_t> level_path_id_;
   // Cached value to avoid recomputing it on every read.
   const size_t max_file_size_for_l0_meta_pin_;
 

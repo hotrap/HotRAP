@@ -25,13 +25,13 @@ class TraitIterator {
 };
 
 template <typename T>
-class TraitPeekable : public TraitIterator<T> {
+class TraitPeek : public TraitIterator<T> {
  public:
   virtual const T *peek() = 0;
 };
 
 template <typename Iter>
-class Peekable : public TraitPeekable<typename Iter::Item> {
+class Peekable : public TraitPeek<typename Iter::Item> {
  public:
   using Item = typename Iter::Item;
   Peekable(Iter &&iter) : iter_(std::move(iter)) {}
@@ -64,8 +64,7 @@ class Peekable : public TraitPeekable<typename Iter::Item> {
 };
 
 template <typename Item>
-class Peekable<std::unique_ptr<TraitIterator<Item>>>
-    : public TraitPeekable<Item> {
+class Peekable<std::unique_ptr<TraitIterator<Item>>> : public TraitPeek<Item> {
  public:
   Peekable(std::unique_ptr<TraitIterator<Item>> &&iter)
       : iter_(std::move(iter)) {}
@@ -116,23 +115,20 @@ struct RangeBounds {
 
 using HotRecInfo = Slice;
 
-class CompactionRouter : public Customizable {
+class RALT : public Customizable {
  public:
   using Iter = std::unique_ptr<TraitIterator<HotRecInfo>>;
-  virtual ~CompactionRouter() {}
-  static const char *Type() { return "CompactionRouter"; }
+  virtual ~RALT() {}
   static Status CreateFromString(const ConfigOptions &config_options,
-                                 const std::string &name,
-                                 const CompactionRouter **result);
+                                 const std::string &name, const RALT **result);
   const char *Name() const override = 0;
-  virtual size_t Tier(int level) = 0;
   virtual void Access(Slice key, size_t vlen) = 0;
   virtual Iter LowerBound(Slice key) = 0;
-  virtual size_t RangeHotSize(Slice smallest, Slice largest) = 0;
+  virtual uint64_t RangeHotSize(Slice smallest, Slice largest) = 0;
   virtual bool IsHot(Slice key) = 0;
 
   // For statistics
-  virtual void HitLevel(int level, rocksdb::Slice key) = 0;
+  virtual void HitLevel(int, rocksdb::Slice){};
 };
 
 }  // namespace ROCKSDB_NAMESPACE

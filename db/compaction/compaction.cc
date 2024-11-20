@@ -100,12 +100,11 @@ void Compaction::SetInputVersion(Version* _input_version) {
   input_version_->Ref();
   edit_.SetColumnFamily(cfd_->GetID());
 
-  CompactionRouter* router =
-      cfd_->GetCurrentMutableCFOptions()->compaction_router;
-  if (router == nullptr) return;
+  RALT* ralt = cfd_->GetCurrentMutableCFOptions()->ralt;
+  if (ralt == nullptr) return;
   target_level_to_promote_ = -1;
   if (start_level_ != output_level_) {
-    // Future work: Handle other cases
+    // Future work(hotrap): Handle other cases
     assert(output_level_ == start_level_ + 1);
     auto mark_fn = [this]() {
       for (size_t i = 0; i < num_input_levels(); i++) {
@@ -124,26 +123,30 @@ void Compaction::SetInputVersion(Version* _input_version) {
       mark_fn();
     } else {
       assert(it->first == (size_t)start_level_);
-      {
-        auto mut = it->second.mut().Write();
-        mark_fn();
-        cached_records_to_promote_ =
-            mut->TakeRange(cfd_->internal_stats(), router, smallest_user_key_,
-                           largest_user_key_);
-      }
       target_level_to_promote_ = start_level_;
+      const auto& cache = it->second;
+      caches.drop();
+      // PromotionCache::Insert
+      // (1) happens before mark_fn, so that the inserted records can be handled
+      // by TakeRange.
+      // (2) happens after mark_fn, so that records in the compaction range
+      // won't be inserted to the promotion cache.
+      cache.being_or_has_been_compacted_lock().WriteLock();
+      mark_fn();
+      cache.being_or_has_been_compacted_lock().WriteUnlock();
+      // Future work(hotrap): Can we move TakeRange out of the DB mutex?
+      cached_records_to_promote_ = cache.TakeRange(
+          cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
     }
   }
-  auto caches = cfd_->promotion_caches().Read();
-  auto it = caches->find(output_level_);
-  if (it != caches->end()) {
-    assert(it->first == (size_t)output_level_);
-    // Future work: Handle the other case which is possible if the router
+  auto cache = cfd_->get_promotion_cache(output_level_);
+  if (cache) {
+    // Future work(hotrap): Handle the other case which is possible if ralt
     // changes.
     assert(cached_records_to_promote_.empty());
-    cached_records_to_promote_ = it->second.mut().Write()->TakeRange(
-        cfd_->internal_stats(), router, smallest_user_key_, largest_user_key_);
     target_level_to_promote_ = output_level_;
+    cached_records_to_promote_ = cache->TakeRange(
+        cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
   }
 }
 

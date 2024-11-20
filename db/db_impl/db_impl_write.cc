@@ -157,12 +157,12 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
                               log_ref, disable_memtable, seq_used);
   }
 
-  PERF_TIMER_GUARD(write_pre_and_post_process_time);
   WriteThread::Writer w(write_options, my_batch, callback, log_ref,
                         disable_memtable, batch_cnt, pre_release_callback);
   StopWatch write_sw(immutable_db_options_.clock, stats_, DB_WRITE);
 
   write_thread_.JoinBatchGroup(&w);
+  PERF_TIMER_GUARD(write_pre_and_post_process_time);
   if (w.state == WriteThread::STATE_PARALLEL_MEMTABLE_WRITER) {
     // we are a non-leader in a parallel group
 
@@ -1948,28 +1948,32 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
                      .start();
     Arena arena;
     ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
+    // We need to hold the read lock of promotion_caches so that there won't be
+    // any new PromotionCache and we are holding the lock of all imm_lists.
     auto caches = cfd->promotion_caches().Read();
+    std::vector<ReadGuard<ImmPromotionCacheList>> imm_lists;
+    for (const auto& level_cache : *caches) {
+      const PromotionCache& cache = level_cache.second;
+      imm_lists.push_back(cache.imm_list().Read());
+    }
     for (mem_it->SeekToFirst(); mem_it->Valid(); mem_it->Next()) {
       std::string user_key = mem_it->user_key().ToString();
-      for (const auto& level_cache : *caches) {
-        const PromotionCache& cache = level_cache.second;
-        auto imm_list_guard = cache.imm_list().Read();
-        const std::list<ImmPromotionCache>& imm_list = imm_list_guard->list;
-        for (const ImmPromotionCache& imm : imm_list) {
+      for (auto& imm_list : imm_lists) {
+        for (const ImmPromotionCache& imm : imm_list->list) {
           // TODO: Avoid requiring ownership after upgrading to C++14
           auto it = imm.cache.find(user_key);
           if (it != imm.cache.end()) imm.updated.Lock()->insert(user_key);
         }
       }
     }
-  }
 
-  assert(new_mem != nullptr);
-  cfd->imm()->Add(cfd->mem(), &context->memtables_to_free_);
-  new_mem->Ref();
-  cfd->SetMemtable(new_mem);
-  InstallSuperVersionAndScheduleWork(cfd, &context->superversion_context,
-                                     mutable_cf_options);
+    assert(new_mem != nullptr);
+    cfd->imm()->Add(cfd->mem(), &context->memtables_to_free_);
+    new_mem->Ref();
+    cfd->SetMemtable(new_mem);
+    InstallSuperVersionAndScheduleWork(cfd, &context->superversion_context,
+                                       mutable_cf_options);
+  }
 
 #ifndef ROCKSDB_LITE
   mutex_.Unlock();
