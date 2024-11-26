@@ -275,11 +275,6 @@ bool LevelCompactionBuilder::SetupOtherInputsIfNeeded() {
   if (output_level_ != 0) {
     output_level_inputs_.level = output_level_;
     if (!compaction_picker_->SetupOtherInputs(
-            cf_name_, vstorage_, &start_level_inputs_, &output_level_inputs_,
-            &parent_index_)) {
-      return false;
-    }
-    if (!compaction_picker_->ExpandStartLevelInputs(
             cf_name_, mutable_cf_options_, vstorage_, &start_level_inputs_,
             &output_level_inputs_, &parent_index_, base_index_)) {
       return false;

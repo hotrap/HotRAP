@@ -442,14 +442,18 @@ bool CompactionPicker::IsRangeInCompaction(VersionStorageInfo* vstorage,
 // Populates the set of inputs of all other levels that overlap with the
 // start level.
 // Now we assume all levels except start level and output level are empty.
+// Will also attempt to expand "start level" if that doesn't expand
+// "output level" or cause "level" to include a file for compaction that has an
+// overlapping user-key with another file.
 // REQUIRES: input_level and output_level are different
 // REQUIRES: inputs->empty() == false
 // Returns false if files on parent level are currently in compaction, which
 // means that we can't compact them
 bool CompactionPicker::SetupOtherInputs(
-    const std::string& cf_name, VersionStorageInfo* vstorage,
-    CompactionInputFiles* inputs, CompactionInputFiles* output_level_inputs,
-    int* parent_index) {
+    const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
+    VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
+    CompactionInputFiles* output_level_inputs, int* parent_index,
+    int base_index) {
   assert(!inputs->empty());
   assert(output_level_inputs->empty());
   const int input_level = inputs->level;
@@ -467,6 +471,7 @@ bool CompactionPicker::SetupOtherInputs(
 
   InternalKey smallest, largest;
 
+  // Get the range one last time.
   GetRange(*inputs, &smallest, &largest);
 
   // Populate the set of next-level files (inputs_GetOutputLevelInputs()) to
@@ -482,21 +487,12 @@ bool CompactionPicker::SetupOtherInputs(
       return false;
     }
   }
-  return true;
-}
 
-// See if we can further grow the number of inputs in "level" without
-// changing the number of "level+1" files we pick up. We also choose NOT
-// to expand if this would cause "level" to include some entries for some
-// user key, while excluding other entries for the same user key. This
-// can happen when one user key spans multiple files.
-bool CompactionPicker::ExpandStartLevelInputs(
-    const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
-    VersionStorageInfo* vstorage, CompactionInputFiles* inputs,
-    CompactionInputFiles* output_level_inputs, int* parent_index,
-    int base_index) {
-  const int input_level = inputs->level;
-  const int output_level = output_level_inputs->level;
+  // See if we can further grow the number of inputs in "level" without
+  // changing the number of "level+1" files we pick up. We also choose NOT
+  // to expand if this would cause "level" to include some entries for some
+  // user key, while excluding other entries for the same user key. This
+  // can happen when one user key spans multiple files.
   if (!output_level_inputs->empty()) {
     const uint64_t limit = mutable_cf_options.max_compaction_bytes;
     const uint64_t output_level_inputs_size =
