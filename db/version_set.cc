@@ -7405,12 +7405,21 @@ class InternalIterAppendLevel : public InternalIterator {
   }
   Slice key() const override { return iter_->key(); }
   Slice user_key() const override { return iter_->user_key(); }
-  Slice value() const override { return Slice(buf_, size_); }
+  Slice value() const override {
+    assert(Valid());
+    assert(!IsDeleteRangeSentinelKey());
+    return Slice(buf_, size_);
+  }
   Status status() const override { return iter_->status(); }
+
+  bool IsDeleteRangeSentinelKey() const override {
+    return iter_->IsDeleteRangeSentinelKey();
+  }
 
  private:
   void update_buf() {
     if (!Valid()) return;
+    if (IsDeleteRangeSentinelKey()) return;
     Slice value = iter_->value();
     *(const char**)(buf_ + sizeof(int)) = value.data();
     *(size_t*)(buf_ + sizeof(int) + sizeof(const char*)) = value.size();
