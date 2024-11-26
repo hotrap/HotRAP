@@ -1345,12 +1345,12 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
                                      &start_level_largest_user_key);
   Slice promotable_start =
-      start.has_value() ? start_level_smallest_user_key
+      !start.has_value() ? start_level_smallest_user_key
                     : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
                            ? start_level_smallest_user_key
                            : *start);
   Bound promotable_end =
-      end.has_value()
+      !end.has_value()
           ? Bound{.user_key = start_level_largest_user_key, .excluded = false}
           : (ucmp->Compare(*end, start_level_largest_user_key) <= 0
                  ? Bound{.user_key = *end, .excluded = true}
