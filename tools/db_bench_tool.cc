@@ -2150,8 +2150,9 @@ class ReporterAgent {
       auto secs_elapsed =
           (clock->NowMicros() - time_started + kMicrosInSecond / 2) /
           kMicrosInSecond;
-      std::string report = ToString(secs_elapsed) + "," +
-                           ToString(total_ops_done_snapshot - last_report_);
+      std::string report =
+          std::to_string(secs_elapsed) + "," +
+          std::to_string(total_ops_done_snapshot - last_report_);
       if (dbstats) {
         for (Tickers ticker : tickers_to_report_) {
           uint64_t cur = dbstats->getTickerCount(ticker);
@@ -2248,28 +2249,6 @@ class ReporterAgent {
   std::condition_variable stop_cv_;
   bool stop_;
 };
-
-enum OperationType : unsigned char {
-  kRead = 0,
-  kWrite,
-  kDelete,
-  kSeek,
-  kMerge,
-  kUpdate,
-  kCompress,
-  kUncompress,
-  kCrc,
-  kHash,
-  kOthers
-};
-
-static std::unordered_map<OperationType, std::string, std::hash<unsigned char>>
-    OperationTypeString = {{kRead, "read"},         {kWrite, "write"},
-                           {kDelete, "delete"},     {kSeek, "seek"},
-                           {kMerge, "merge"},       {kUpdate, "update"},
-                           {kCompress, "compress"}, {kCompress, "uncompress"},
-                           {kCrc, "crc"},           {kHash, "hash"},
-                           {kOthers, "op"}};
 
 class CombinedStats;
 class Stats {
@@ -6723,7 +6702,6 @@ class Benchmark {
       if (query_type == 0) {
         // the Get query
         gets++;
-        read++;
         if (thread->shared->read_rate_limiter && (gets + seek) % 100 == 0) {
           thread->shared->read_rate_limiter->Request(100, Env::IO_HIGH,
                                                      nullptr /*stats*/);
