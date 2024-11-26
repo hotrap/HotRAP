@@ -366,9 +366,6 @@ class CompactionJob {
   // the last level (output to penultimate level).
   SequenceNumber preclude_last_level_min_seqno_ = kMaxSequenceNumber;
 
-  // Get table file name in where it's outputting to, which should also be in
-  // `output_directory_`.
-  virtual std::string GetTableFileName(uint64_t file_number);
   // The rate limiter priority (io_priority) is determined dynamically here.
   // The Compaction Read and Write priorities are the same for different
   // scenarios, such as write stalled.
@@ -509,8 +506,6 @@ class CompactionServiceCompactionJob : private CompactionJob {
   void RecordCompactionIOStats() override;
 
  private:
-  // Get table file name in output_path
-  std::string GetTableFileName(uint64_t file_number) override;
   // Specific the compaction output path, otherwise it uses default DB path
   const std::string output_path_;
 

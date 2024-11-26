@@ -213,11 +213,6 @@ CompactionJob::ProcessKeyValueCompactionWithCompactionService(
 #endif
 }
 
-std::string CompactionServiceCompactionJob::GetTableFileName(
-    uint64_t file_number) {
-  return MakeTableFileName(output_path_, file_number);
-}
-
 void CompactionServiceCompactionJob::RecordCompactionIOStats() {
   compaction_result_->bytes_read += IOSTATS(bytes_read);
   compaction_result_->bytes_written += IOSTATS(bytes_written);

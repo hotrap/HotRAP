@@ -1735,7 +1735,6 @@ DEFINE_bool(read_with_latest_user_timestamp, true,
 DEFINE_string(secondary_cache_uri, "",
               "Full URI for creating a custom secondary cache object");
 static class std::shared_ptr<ROCKSDB_NAMESPACE::SecondaryCache> secondary_cache;
-#endif  // ROCKSDB_LITE
 
 DEFINE_double(max_hot_set_size, 0, "");
 DEFINE_double(max_ralt_size, 0, "");
