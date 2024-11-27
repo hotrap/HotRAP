@@ -7008,7 +7008,7 @@ Status VersionSet::WriteCurrentStateToManifest(
       const Comparator* ucmp = cfd->user_comparator();
       assert(ucmp);
       std::string record;
-      if (!edit.EncodeTo(&record)) {
+      if (!edit.EncodeTo(&record, ucmp->timestamp_size())) {
         return Status::Corruption("Unable to Encode VersionEdit:" +
                                   edit.DebugString(true));
       }
