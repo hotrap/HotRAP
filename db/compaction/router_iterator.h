@@ -229,6 +229,7 @@ class RouterIterator {
       uint32_t start_tier = version.path_id(start_level);
       uint32_t latter_tier = version.path_id(latter_level);
       if (start_tier != latter_tier) {
+        assert(c.SupportsPerKeyPlacement());
         iter_ = std::unique_ptr<RouterIteratorFD2SD>(
             new RouterIteratorFD2SD(*ralt, c, c_iter, start, end));
       } else if (version.path_id(latter_level + 1) != latter_tier) {

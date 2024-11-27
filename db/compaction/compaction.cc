@@ -974,6 +974,11 @@ int Compaction::EvaluatePenultimateLevel(
     const VersionStorageInfo* vstorage,
     const ImmutableOptions& immutable_options, const int start_level,
     const int output_level) {
+  if (start_level + 1 != output_level) {
+    return kInvalidLevel;
+  }
+  return start_level;
+#if 0
   // TODO: currently per_key_placement feature only support level and universal
   //  compaction
   if (immutable_options.compaction_style != kCompactionStyleLevel &&
@@ -1013,6 +1018,7 @@ int Compaction::EvaluatePenultimateLevel(
   }
 
   return penultimate_level;
+#endif
 }
 
 }  // namespace ROCKSDB_NAMESPACE
