@@ -645,6 +645,9 @@ Status CompactionJob::Run() {
   // others) in the current thread to be efficient with resources
   ProcessKeyValueCompaction(&compact_->sub_compact_states[0]);
 
+  compaction_stats_.stats.num_input_records +=
+      compact_->compaction->cached_records_to_promote().size();
+
   // Wait for all other threads (if there are any) to finish execution
   for (auto& thread : thread_pool) {
     thread.join();
