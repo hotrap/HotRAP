@@ -661,6 +661,7 @@ set(SOURCES
         db/compaction/compaction_service_job.cc
         db/compaction/compaction_state.cc
         db/compaction/compaction_outputs.cc
+        db/compaction/router_iterator.cc
         db/compaction/sst_partitioner.cc
         db/compaction/subcompaction_state.cc
         db/convenience.cc
