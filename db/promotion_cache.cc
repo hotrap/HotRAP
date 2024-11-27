@@ -201,8 +201,9 @@ void PromotionCache::checker() {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                         s.ToString().c_str());
       }
+      PinnedIteratorsManager pinned_iters_mgr;
       sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, nullptr, &s,
-                       &merge_context, &max_covering_tombstone_seq, nullptr,
+                       &merge_context, &max_covering_tombstone_seq, &pinned_iters_mgr,
                        nullptr, nullptr, nullptr, nullptr, nullptr, false,
                        target_level_);
       if (s.ok() || s.IsIncomplete()) {
