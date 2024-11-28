@@ -7520,13 +7520,12 @@ InternalIterator* VersionSet::MakeInputIterator(
                 &tombstone_iter_ptr));
         range_tombstones.emplace_back(nullptr, tombstone_iter_ptr);
       }
-      if (promotion_cache_iter != nullptr &&
-          c->level(which) == c->target_level_to_promote()) {
-        list[num++] = promotion_cache_iter;
-        promotion_cache_iter = nullptr;
-        range_tombstones.emplace_back(nullptr, nullptr);
-      }
     }
+  }
+  if (promotion_cache_iter) {
+    list[num++] = promotion_cache_iter;
+    promotion_cache_iter = nullptr;
+    range_tombstones.emplace_back(nullptr, nullptr);
   }
   assert(num <= space);
   InternalIterator* result = NewCompactionMergingIterator(
