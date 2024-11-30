@@ -20,7 +20,6 @@
 #include "db/lookup_key.h"
 #include "db/version_set.h"
 #include "logging/logging.h"
-#include "monitoring/statistics.h"
 #include "rocksdb/options.h"
 #include "rocksdb/ralt.h"
 #include "rocksdb/statistics.h"
@@ -136,7 +135,7 @@ void PromotionCache::checker() {
   clockid_t clock_id;
   pthread_getcpuclockid(pthread_self(), &clock_id);
   std::thread printer(print_stats_in_bg, &printer_should_stop,
-                      db_.db_absolute_path_, target_level_, clock_id);
+                      db_.dbname_, target_level_, clock_id);
   for (;;) {
     CheckerQueueElem elem;
     {
@@ -168,7 +167,7 @@ void PromotionCache::checker() {
       Status s;
       MergeContext merge_context;
       SequenceNumber max_covering_tombstone_seq = 0;
-      if (sv->imm->Get(key, nullptr, nullptr, &s, &merge_context,
+      if (sv->imm->Get(key, nullptr, nullptr, nullptr, &s, &merge_context,
                        &max_covering_tombstone_seq, read_options_)) {
         mark_updated(cache, user_key);
         continue;
@@ -177,9 +176,10 @@ void PromotionCache::checker() {
         ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                         s.ToString().c_str());
       }
-      sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, &s,
-                       &merge_context, &max_covering_tombstone_seq, nullptr,
-                       nullptr, nullptr, nullptr, nullptr, false,
+      PinnedIteratorsManager pinned_iters_mgr;
+      sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, nullptr, &s,
+                       &merge_context, &max_covering_tombstone_seq, &pinned_iters_mgr,
+                       nullptr, nullptr, nullptr, nullptr, nullptr, false,
                        target_level_);
       if (s.ok() || s.IsIncomplete()) {
         mark_updated(cache, user_key);
@@ -242,8 +242,8 @@ void PromotionCache::checker() {
       db_.InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
       DBImpl::FlushRequest flush_req;
       db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
-                               &flush_req);
-      db_.SchedulePendingFlush(flush_req, FlushReason::kPromotionCacheFull);
+                               FlushReason::kPromotionCacheFull, &flush_req);
+      db_.SchedulePendingFlush(flush_req);
       db_.MaybeScheduleFlushOrCompaction();
 
       db_.mutex()->Unlock();
