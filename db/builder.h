@@ -12,7 +12,9 @@
 
 #include "db/promotion_cache.h"
 #include "db/range_tombstone_fragmenter.h"
+#include "db/seqno_to_time_mapping.h"
 #include "db/table_properties_collector.h"
+#include "db/version_set.h"
 #include "logging/event_logger.h"
 #include "options/cf_options.h"
 #include "rocksdb/comparator.h"
@@ -52,8 +54,8 @@ TableBuilder* NewTableBuilder(const TableBuilderOptions& tboptions,
 extern Status BuildTable(
     const std::string& dbname, VersionSet* versions,
     const ImmutableDBOptions& db_options, const TableBuilderOptions& tboptions,
-    const FileOptions& file_options, TableCache* table_cache,
-    InternalIterator* iter,
+    const FileOptions& file_options, const ReadOptions& read_options,
+    TableCache* table_cache, InternalIterator* iter,
     std::vector<std::unique_ptr<FragmentedRangeTombstoneIterator>>
         range_del_iters,
     std::vector<std::reference_wrapper<const std::vector<RangeSeq>>>
@@ -61,17 +63,18 @@ extern Status BuildTable(
     FileMetaData* meta, std::vector<BlobFileAddition>* blob_file_additions,
     std::vector<SequenceNumber> snapshots,
     SequenceNumber earliest_write_conflict_snapshot,
-    SnapshotChecker* snapshot_checker, bool paranoid_file_checks,
-    InternalStats* internal_stats, IOStatus* io_status,
-    const std::shared_ptr<IOTracer>& io_tracer,
+    SequenceNumber job_snapshot, SnapshotChecker* snapshot_checker,
+    bool paranoid_file_checks, InternalStats* internal_stats,
+    IOStatus* io_status, const std::shared_ptr<IOTracer>& io_tracer,
     BlobFileCreationReason blob_creation_reason,
+    const SeqnoToTimeMapping& seqno_to_time_mapping,
     EventLogger* event_logger = nullptr, int job_id = 0,
     const Env::IOPriority io_priority = Env::IO_HIGH,
     TableProperties* table_properties = nullptr,
     Env::WriteLifeTimeHint write_hint = Env::WLTH_NOT_SET,
     const std::string* full_history_ts_low = nullptr,
     BlobFileCompletionCallback* blob_callback = nullptr,
-    uint64_t* num_input_entries = nullptr,
+    Version* version = nullptr, uint64_t* num_input_entries = nullptr,
     uint64_t* memtable_payload_bytes = nullptr,
     uint64_t* memtable_garbage_bytes = nullptr);
 

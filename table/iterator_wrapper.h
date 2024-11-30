@@ -30,6 +30,11 @@ class IteratorWrapperBase {
   }
   ~IteratorWrapperBase() {}
   InternalIteratorBase<TValue>* iter() const { return iter_; }
+  void SetRangeDelReadSeqno(SequenceNumber read_seqno) {
+    if (iter_) {
+      iter_->SetRangeDelReadSeqno(read_seqno);
+    }
+  }
 
   // Set the underlying Iterator to _iter and return
   // previous underlying Iterator.
@@ -145,9 +150,7 @@ class IteratorWrapperBase {
     return iter_->IsValuePinned();
   }
 
-  bool IsValuePrepared() const {
-    return result_.value_prepared;
-  }
+  bool IsValuePrepared() const { return result_.value_prepared; }
 
   Slice user_key() const {
     assert(Valid());
@@ -160,6 +163,10 @@ class IteratorWrapperBase {
       old_iter->GetReadaheadState(&readahead_file_info);
       iter_->SetReadaheadState(&readahead_file_info);
     }
+  }
+
+  bool IsDeleteRangeSentinelKey() const {
+    return iter_->IsDeleteRangeSentinelKey();
   }
 
  private:

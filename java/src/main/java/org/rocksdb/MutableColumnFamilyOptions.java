@@ -7,15 +7,13 @@ package org.rocksdb;
 
 import java.util.*;
 
-public class MutableColumnFamilyOptions
-    extends AbstractMutableOptions {
-
+public class MutableColumnFamilyOptions extends AbstractMutableOptions {
   /**
    * User must use builder pattern, or parser.
    *
    * @param keys the keys
    * @param values the values
-   *
+   * <p>
    * See {@link #builder()} and {@link #parse(String)}.
    */
   private MutableColumnFamilyOptions(final String[] keys,
@@ -36,14 +34,15 @@ public class MutableColumnFamilyOptions
 
   /**
    * Parses a String representation of MutableColumnFamilyOptions
-   *
+   * <p>
    * The format is: key1=value1;key2=value2;key3=value3 etc
-   *
+   * <p>
    * For int[] values, each int should be separated by a colon, e.g.
-   *
+   * <p>
    * key1=value1;intArrayKey1=1:2:3
    *
    * @param str The string representation of the mutable column family options
+   * @param ignoreUnknown what to do if the key is not one of the keys we expect
    *
    * @return A builder for the mutable column family options
    */
@@ -65,13 +64,15 @@ public class MutableColumnFamilyOptions
     write_buffer_size(ValueType.LONG),
     arena_block_size(ValueType.LONG),
     memtable_prefix_bloom_size_ratio(ValueType.DOUBLE),
+    memtable_whole_key_filtering(ValueType.BOOLEAN),
     @Deprecated memtable_prefix_bloom_bits(ValueType.INT),
     @Deprecated memtable_prefix_bloom_probes(ValueType.INT),
     memtable_huge_page_size(ValueType.LONG),
     max_successive_merges(ValueType.LONG),
     @Deprecated filter_deletes(ValueType.BOOLEAN),
     max_write_buffer_number(ValueType.INT),
-    inplace_update_num_locks(ValueType.LONG);
+    inplace_update_num_locks(ValueType.LONG),
+    experimental_mempurge_threshold(ValueType.DOUBLE);
 
     private final ValueType valueType;
     MemtableOption(final ValueType valueType) {
@@ -86,9 +87,7 @@ public class MutableColumnFamilyOptions
 
   public enum CompactionOption implements MutableColumnFamilyOptionKey {
     disable_auto_compactions(ValueType.BOOLEAN),
-    @Deprecated soft_rate_limit(ValueType.DOUBLE),
     soft_pending_compaction_bytes_limit(ValueType.LONG),
-    @Deprecated hard_rate_limit(ValueType.DOUBLE),
     hard_pending_compaction_bytes_limit(ValueType.LONG),
     level0_file_num_compaction_trigger(ValueType.INT),
     level0_slowdown_writes_trigger(ValueType.INT),
@@ -120,7 +119,10 @@ public class MutableColumnFamilyOptions
     blob_compression_type(ValueType.ENUM),
     enable_blob_garbage_collection(ValueType.BOOLEAN),
     blob_garbage_collection_age_cutoff(ValueType.DOUBLE),
-    blob_garbage_collection_force_threshold(ValueType.DOUBLE);
+    blob_garbage_collection_force_threshold(ValueType.DOUBLE),
+    blob_compaction_readahead_size(ValueType.LONG),
+    blob_file_starting_level(ValueType.INT),
+    prepopulate_blob_cache(ValueType.ENUM);
 
     private final ValueType valueType;
     BlobOption(final ValueType valueType) {
@@ -153,8 +155,8 @@ public class MutableColumnFamilyOptions
   public static class MutableColumnFamilyOptionsBuilder
       extends AbstractMutableOptionsBuilder<MutableColumnFamilyOptions, MutableColumnFamilyOptionsBuilder, MutableColumnFamilyOptionKey>
       implements MutableColumnFamilyOptionsInterface<MutableColumnFamilyOptionsBuilder> {
-
-    private final static Map<String, MutableColumnFamilyOptionKey> ALL_KEYS_LOOKUP = new HashMap<>();
+    private static final Map<String, MutableColumnFamilyOptionKey> ALL_KEYS_LOOKUP =
+        new HashMap<>();
     static {
       for(final MutableColumnFamilyOptionKey key : MemtableOption.values()) {
         ALL_KEYS_LOOKUP.put(key.name(), key);
@@ -228,6 +230,17 @@ public class MutableColumnFamilyOptions
     }
 
     @Override
+    public MutableColumnFamilyOptionsBuilder setMemtableWholeKeyFiltering(
+        final boolean memtableWholeKeyFiltering) {
+      return setBoolean(MemtableOption.memtable_whole_key_filtering, memtableWholeKeyFiltering);
+    }
+
+    @Override
+    public boolean memtableWholeKeyFiltering() {
+      return getBoolean(MemtableOption.memtable_whole_key_filtering);
+    }
+
+    @Override
     public MutableColumnFamilyOptionsBuilder setMemtableHugePageSize(
         final long memtableHugePageSize) {
       return setLong(MemtableOption.memtable_huge_page_size,
@@ -272,6 +285,18 @@ public class MutableColumnFamilyOptions
     @Override
     public long inplaceUpdateNumLocks() {
       return getLong(MemtableOption.inplace_update_num_locks);
+    }
+
+    @Override
+    public MutableColumnFamilyOptionsBuilder setExperimentalMempurgeThreshold(
+        final double experimentalMempurgeThreshold) {
+      return setDouble(
+          MemtableOption.experimental_mempurge_threshold, experimentalMempurgeThreshold);
+    }
+
+    @Override
+    public double experimentalMempurgeThreshold() {
+      return getDouble(MemtableOption.experimental_mempurge_threshold);
     }
 
     @Override
@@ -449,7 +474,7 @@ public class MutableColumnFamilyOptions
 
     @Override
     public CompressionType compressionType() {
-      return (CompressionType) getEnum(MiscOption.compression);
+      return getEnum(MiscOption.compression);
     }
 
     @Override
@@ -522,7 +547,7 @@ public class MutableColumnFamilyOptions
 
     @Override
     public CompressionType blobCompressionType() {
-      return (CompressionType) getEnum(BlobOption.blob_compression_type);
+      return getEnum(BlobOption.blob_compression_type);
     }
 
     @Override
@@ -558,6 +583,39 @@ public class MutableColumnFamilyOptions
     @Override
     public double blobGarbageCollectionForceThreshold() {
       return getDouble(BlobOption.blob_garbage_collection_force_threshold);
+    }
+
+    @Override
+    public MutableColumnFamilyOptionsBuilder setBlobCompactionReadaheadSize(
+        final long blobCompactionReadaheadSize) {
+      return setLong(BlobOption.blob_compaction_readahead_size, blobCompactionReadaheadSize);
+    }
+
+    @Override
+    public long blobCompactionReadaheadSize() {
+      return getLong(BlobOption.blob_compaction_readahead_size);
+    }
+
+    @Override
+    public MutableColumnFamilyOptionsBuilder setBlobFileStartingLevel(
+        final int blobFileStartingLevel) {
+      return setInt(BlobOption.blob_file_starting_level, blobFileStartingLevel);
+    }
+
+    @Override
+    public int blobFileStartingLevel() {
+      return getInt(BlobOption.blob_file_starting_level);
+    }
+
+    @Override
+    public MutableColumnFamilyOptionsBuilder setPrepopulateBlobCache(
+        final PrepopulateBlobCache prepopulateBlobCache) {
+      return setEnum(BlobOption.prepopulate_blob_cache, prepopulateBlobCache);
+    }
+
+    @Override
+    public PrepopulateBlobCache prepopulateBlobCache() {
+      return getEnum(BlobOption.prepopulate_blob_cache);
     }
   }
 }

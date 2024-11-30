@@ -3,7 +3,6 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#ifndef ROCKSDB_LITE
 
 #include "rocksdb/sst_file_reader.h"
 
@@ -215,7 +214,7 @@ class SstFileReaderTimestampTest : public testing::Test {
 
     options_.env = env;
 
-    options_.comparator = test::ComparatorWithU64Ts();
+    options_.comparator = test::BytewiseComparatorWithU64TsWrapper();
 
     sst_name_ = test::PerThreadDBPath("sst_file_ts");
   }
@@ -422,13 +421,3 @@ int main(int argc, char** argv) {
   return RUN_ALL_TESTS();
 }
 
-#else
-#include <stdio.h>
-
-int main(int /*argc*/, char** /*argv*/) {
-  fprintf(stderr,
-          "SKIPPED as SstFileReader is not supported in ROCKSDB_LITE\n");
-  return 0;
-}
-
-#endif  // ROCKSDB_LITE

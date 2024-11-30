@@ -7,7 +7,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
-#ifndef ROCKSDB_LITE
 
 #include "rocksdb/utilities/write_batch_with_index.h"
 
@@ -17,6 +16,7 @@
 #include "db/column_family.h"
 #include "port/stack_trace.h"
 #include "test_util/testharness.h"
+#include "test_util/testutil.h"
 #include "util/random.h"
 #include "util/string_util.h"
 #include "utilities/merge_operators.h"
@@ -116,7 +116,8 @@ class KVIter : public Iterator {
 };
 
 static std::string PrintContents(WriteBatchWithIndex* batch,
-                                 ColumnFamilyHandle* column_family) {
+                                 ColumnFamilyHandle* column_family,
+                                 bool hex = false) {
   std::string result;
 
   WBWIIterator* iter;
@@ -132,22 +133,22 @@ static std::string PrintContents(WriteBatchWithIndex* batch,
 
     if (e.type == kPutRecord) {
       result.append("PUT(");
-      result.append(e.key.ToString());
+      result.append(e.key.ToString(hex));
       result.append("):");
-      result.append(e.value.ToString());
+      result.append(e.value.ToString(hex));
     } else if (e.type == kMergeRecord) {
       result.append("MERGE(");
-      result.append(e.key.ToString());
+      result.append(e.key.ToString(hex));
       result.append("):");
-      result.append(e.value.ToString());
+      result.append(e.value.ToString(hex));
     } else if (e.type == kSingleDeleteRecord) {
       result.append("SINGLE-DEL(");
-      result.append(e.key.ToString());
+      result.append(e.key.ToString(hex));
       result.append(")");
     } else {
       assert(e.type == kDeleteRecord);
       result.append("DEL(");
-      result.append(e.key.ToString());
+      result.append(e.key.ToString(hex));
       result.append(")");
     }
 
@@ -235,7 +236,7 @@ void AssertIterEqual(WBWIIteratorImpl* wbwii,
   }
   ASSERT_FALSE(wbwii->Valid());
 }
-}  // namespace anonymous
+}  // namespace
 
 class WBWIBaseTest : public testing::Test {
  public:
@@ -244,7 +245,7 @@ class WBWIBaseTest : public testing::Test {
         MergeOperators::CreateFromStringId("stringappend");
     options_.create_if_missing = true;
     dbname_ = test::PerThreadDBPath("write_batch_with_index_test");
-    DestroyDB(dbname_, options_);
+    EXPECT_OK(DestroyDB(dbname_, options_));
     batch_.reset(new WriteBatchWithIndex(BytewiseComparator(), 20, overwrite));
   }
 
@@ -252,7 +253,7 @@ class WBWIBaseTest : public testing::Test {
     if (db_ != nullptr) {
       ReleaseSnapshot();
       delete db_;
-      DestroyDB(dbname_, options_);
+      EXPECT_OK(DestroyDB(dbname_, options_));
     }
   }
 
@@ -260,14 +261,14 @@ class WBWIBaseTest : public testing::Test {
     std::string result;
     for (size_t i = 0; i < key.size(); i++) {
       if (key[i] == 'd') {
-        batch_->Delete(cf, key);
+        EXPECT_OK(batch_->Delete(cf, key));
         result = "";
       } else if (key[i] == 'p') {
-        result = key + ToString(i);
-        batch_->Put(cf, key, result);
+        result = key + std::to_string(i);
+        EXPECT_OK(batch_->Put(cf, key, result));
       } else if (key[i] == 'm') {
-        std::string value = key + ToString(i);
-        batch_->Merge(cf, key, value);
+        std::string value = key + std::to_string(i);
+        EXPECT_OK(batch_->Merge(cf, key, value));
         if (result.empty()) {
           result = value;
         } else {
@@ -510,14 +511,10 @@ void TestValueAsSecondaryIndexHelper(std::vector<Entry> entries,
 
 TEST_F(WBWIKeepTest, TestValueAsSecondaryIndex) {
   Entry entries[] = {
-      {"aaa", "0005", kPutRecord},
-      {"b", "0002", kPutRecord},
-      {"cdd", "0002", kMergeRecord},
-      {"aab", "00001", kPutRecord},
-      {"cc", "00005", kPutRecord},
-      {"cdd", "0002", kPutRecord},
-      {"aab", "0003", kPutRecord},
-      {"cc", "00005", kDeleteRecord},
+      {"aaa", "0005", kPutRecord},   {"b", "0002", kPutRecord},
+      {"cdd", "0002", kMergeRecord}, {"aab", "00001", kPutRecord},
+      {"cc", "00005", kPutRecord},   {"cdd", "0002", kPutRecord},
+      {"aab", "0003", kPutRecord},   {"cc", "00005", kDeleteRecord},
   };
   std::vector<Entry> entries_list(entries, entries + 8);
 
@@ -529,14 +526,10 @@ TEST_F(WBWIKeepTest, TestValueAsSecondaryIndex) {
   batch_->Clear();
 
   Entry new_entries[] = {
-      {"aaa", "0005", kPutRecord},
-      {"e", "0002", kPutRecord},
-      {"add", "0002", kMergeRecord},
-      {"aab", "00001", kPutRecord},
-      {"zz", "00005", kPutRecord},
-      {"add", "0002", kPutRecord},
-      {"aab", "0003", kPutRecord},
-      {"zz", "00005", kDeleteRecord},
+      {"aaa", "0005", kPutRecord},   {"e", "0002", kPutRecord},
+      {"add", "0002", kMergeRecord}, {"aab", "00001", kPutRecord},
+      {"zz", "00005", kPutRecord},   {"add", "0002", kPutRecord},
+      {"aab", "0003", kPutRecord},   {"zz", "00005", kDeleteRecord},
   };
 
   entries_list = std::vector<Entry>(new_entries, new_entries + 8);
@@ -1190,11 +1183,11 @@ TEST_P(WriteBatchWithIndexTest, TestGetFromBatchMerge) {
   std::string expected = "X";
 
   for (int i = 0; i < 5; i++) {
-    ASSERT_OK(batch_->Merge("x", ToString(i)));
-    expected = expected + "," + ToString(i);
+    ASSERT_OK(batch_->Merge("x", std::to_string(i)));
+    expected = expected + "," + std::to_string(i);
 
     if (i % 2 == 0) {
-      ASSERT_OK(batch_->Put("y", ToString(i / 2)));
+      ASSERT_OK(batch_->Put("y", std::to_string(i / 2)));
     }
 
     ASSERT_OK(batch_->Merge("z", "z"));
@@ -1205,7 +1198,7 @@ TEST_P(WriteBatchWithIndexTest, TestGetFromBatchMerge) {
 
     s = batch_->GetFromBatch(column_family, options_, "y", &value);
     ASSERT_OK(s);
-    ASSERT_EQ(ToString(i / 2), value);
+    ASSERT_EQ(std::to_string(i / 2), value);
 
     s = batch_->GetFromBatch(column_family, options_, "z", &value);
     ASSERT_TRUE(s.IsMergeInProgress());
@@ -1250,7 +1243,7 @@ TEST_F(WBWIOverwriteTest, TestGetFromBatchMerge2) {
   s = batch_->GetFromBatch(column_family, options_, "X", &value);
   ASSERT_TRUE(s.IsNotFound());
 
-  batch_->Merge(column_family, "X", "ddd");
+  ASSERT_OK(batch_->Merge(column_family, "X", "ddd"));
   ASSERT_OK(batch_->GetFromBatch(column_family, options_, "X", &value));
   ASSERT_EQ("ddd", value);
 }
@@ -1646,6 +1639,104 @@ TEST_P(WriteBatchWithIndexTest, TestNewIteratorWithBaseFromWbwi) {
   iter->SeekToFirst();
   ASSERT_TRUE(iter->Valid());
   ASSERT_OK(iter->status());
+}
+
+TEST_P(WriteBatchWithIndexTest, TestBoundsCheckingInDeltaIterator) {
+  Status s = OpenDB();
+  ASSERT_OK(s);
+
+  KVMap empty_map;
+
+  // writes that should be observed by BaseDeltaIterator::delta_iterator_
+  ASSERT_OK(batch_->Put("a", "aa"));
+  ASSERT_OK(batch_->Put("b", "bb"));
+  ASSERT_OK(batch_->Put("c", "cc"));
+
+  ReadOptions ro;
+
+  auto check_only_b_is_visible = [&]() {
+    std::unique_ptr<Iterator> iter(batch_->NewIteratorWithBase(
+        db_->DefaultColumnFamily(), new KVIter(&empty_map), &ro));
+
+    // move to the lower bound
+    iter->SeekToFirst();
+    ASSERT_EQ("b", iter->key());
+    iter->Prev();
+    ASSERT_FALSE(iter->Valid());
+
+    // move to the upper bound
+    iter->SeekToLast();
+    ASSERT_EQ("b", iter->key());
+    iter->Next();
+    ASSERT_FALSE(iter->Valid());
+
+    // test bounds checking in Seek and SeekForPrev
+    iter->Seek(Slice("a"));
+    ASSERT_EQ("b", iter->key());
+    iter->Seek(Slice("b"));
+    ASSERT_EQ("b", iter->key());
+    iter->Seek(Slice("c"));
+    ASSERT_FALSE(iter->Valid());
+
+    iter->SeekForPrev(Slice("c"));
+    ASSERT_EQ("b", iter->key());
+    iter->SeekForPrev(Slice("b"));
+    ASSERT_EQ("b", iter->key());
+    iter->SeekForPrev(Slice("a"));
+    ASSERT_FALSE(iter->Valid());
+
+    iter->SeekForPrev(
+        Slice("a.1"));  // a non-existent key that is smaller than "b"
+    ASSERT_FALSE(iter->Valid());
+
+    iter->Seek(Slice("b.1"));  // a non-existent key that is greater than "b"
+    ASSERT_FALSE(iter->Valid());
+
+    delete ro.iterate_lower_bound;
+    delete ro.iterate_upper_bound;
+  };
+
+  ro.iterate_lower_bound = new Slice("b");
+  ro.iterate_upper_bound = new Slice("c");
+  check_only_b_is_visible();
+
+  ro.iterate_lower_bound = new Slice("a.1");
+  ro.iterate_upper_bound = new Slice("c");
+  check_only_b_is_visible();
+
+  ro.iterate_lower_bound = new Slice("b");
+  ro.iterate_upper_bound = new Slice("b.2");
+  check_only_b_is_visible();
+}
+
+TEST_P(WriteBatchWithIndexTest,
+       TestBoundsCheckingInSeekToFirstAndLastOfDeltaIterator) {
+  Status s = OpenDB();
+  ASSERT_OK(s);
+  KVMap empty_map;
+  // writes that should be observed by BaseDeltaIterator::delta_iterator_
+  ASSERT_OK(batch_->Put("c", "cc"));
+
+  ReadOptions ro;
+  auto check_nothing_visible = [&]() {
+    std::unique_ptr<Iterator> iter(batch_->NewIteratorWithBase(
+        db_->DefaultColumnFamily(), new KVIter(&empty_map), &ro));
+    iter->SeekToFirst();
+    ASSERT_FALSE(iter->Valid());
+    iter->SeekToLast();
+    ASSERT_FALSE(iter->Valid());
+
+    delete ro.iterate_lower_bound;
+    delete ro.iterate_upper_bound;
+  };
+
+  ro.iterate_lower_bound = new Slice("b");
+  ro.iterate_upper_bound = new Slice("c");
+  check_nothing_visible();
+
+  ro.iterate_lower_bound = new Slice("d");
+  ro.iterate_upper_bound = new Slice("e");
+  check_nothing_visible();
 }
 
 TEST_P(WriteBatchWithIndexTest, SavePointTest) {
@@ -2107,8 +2198,8 @@ TEST_P(WriteBatchWithIndexTest, GetFromBatchAfterMerge) {
 
   ASSERT_OK(OpenDB());
   ASSERT_OK(db_->Put(write_opts_, "o", "aa"));
-  batch_->Merge("o", "bb");  // Merging bb under key "o"
-  batch_->Merge("m", "cc");  // Merging bc under key "m"
+  ASSERT_OK(batch_->Merge("o", "bb"));  // Merging bb under key "o"
+  ASSERT_OK(batch_->Merge("m", "cc"));  // Merging bc under key "m"
   s = batch_->GetFromBatch(options_, "m", &value);
   ASSERT_EQ(s.code(), Status::Code::kMergeInProgress);
   s = batch_->GetFromBatch(options_, "o", &value);
@@ -2254,6 +2345,157 @@ TEST_F(WBWIOverwriteTest, TestBadMergeOperator) {
   ASSERT_OK(batch_->GetFromBatch(column_family, options_, "b", &value));
 }
 
+TEST_P(WriteBatchWithIndexTest, ColumnFamilyWithTimestamp) {
+  ColumnFamilyHandleImplDummy cf2(2,
+                                  test::BytewiseComparatorWithU64TsWrapper());
+
+  // Sanity checks
+  ASSERT_TRUE(batch_->Put(&cf2, "key", "ts", "value").IsNotSupported());
+  ASSERT_TRUE(batch_->Put(/*column_family=*/nullptr, "key", "ts", "value")
+                  .IsInvalidArgument());
+  ASSERT_TRUE(batch_->Delete(&cf2, "key", "ts").IsNotSupported());
+  ASSERT_TRUE(batch_->Delete(/*column_family=*/nullptr, "key", "ts")
+                  .IsInvalidArgument());
+  ASSERT_TRUE(batch_->SingleDelete(&cf2, "key", "ts").IsNotSupported());
+  ASSERT_TRUE(batch_->SingleDelete(/*column_family=*/nullptr, "key", "ts")
+                  .IsInvalidArgument());
+  {
+    std::string value;
+    ASSERT_TRUE(batch_
+                    ->GetFromBatchAndDB(
+                        /*db=*/nullptr, ReadOptions(), &cf2, "key", &value)
+                    .IsInvalidArgument());
+  }
+  {
+    constexpr size_t num_keys = 2;
+    std::array<Slice, num_keys> keys{{Slice(), Slice()}};
+    std::array<PinnableSlice, num_keys> pinnable_vals{
+        {PinnableSlice(), PinnableSlice()}};
+    std::array<Status, num_keys> statuses{{Status(), Status()}};
+    constexpr bool sorted_input = false;
+    batch_->MultiGetFromBatchAndDB(/*db=*/nullptr, ReadOptions(), &cf2,
+                                   num_keys, keys.data(), pinnable_vals.data(),
+                                   statuses.data(), sorted_input);
+    for (const auto& s : statuses) {
+      ASSERT_TRUE(s.IsInvalidArgument());
+    }
+  }
+
+  constexpr uint32_t kMaxKey = 10;
+
+  const auto ts_sz_lookup = [&cf2](uint32_t id) {
+    if (cf2.GetID() == id) {
+      return sizeof(uint64_t);
+    } else {
+      return std::numeric_limits<size_t>::max();
+    }
+  };
+
+  // Put keys
+  for (uint32_t i = 0; i < kMaxKey; ++i) {
+    std::string key;
+    PutFixed32(&key, i);
+    Status s = batch_->Put(&cf2, key, "value" + std::to_string(i));
+    ASSERT_OK(s);
+  }
+
+  WriteBatch* wb = batch_->GetWriteBatch();
+  assert(wb);
+  ASSERT_OK(
+      wb->UpdateTimestamps(std::string(sizeof(uint64_t), '\0'), ts_sz_lookup));
+
+  // Point lookup
+  for (uint32_t i = 0; i < kMaxKey; ++i) {
+    std::string value;
+    std::string key;
+    PutFixed32(&key, i);
+    Status s = batch_->GetFromBatch(&cf2, Options(), key, &value);
+    ASSERT_OK(s);
+    ASSERT_EQ("value" + std::to_string(i), value);
+  }
+
+  // Iterator
+  {
+    std::unique_ptr<WBWIIterator> it(batch_->NewIterator(&cf2));
+    uint32_t start = 0;
+    for (it->SeekToFirst(); it->Valid(); it->Next(), ++start) {
+      std::string key;
+      PutFixed32(&key, start);
+      ASSERT_OK(it->status());
+      ASSERT_EQ(key, it->Entry().key);
+      ASSERT_EQ("value" + std::to_string(start), it->Entry().value);
+      ASSERT_EQ(WriteType::kPutRecord, it->Entry().type);
+    }
+    ASSERT_EQ(kMaxKey, start);
+  }
+
+  // Delete the keys with Delete() or SingleDelete()
+  for (uint32_t i = 0; i < kMaxKey; ++i) {
+    std::string key;
+    PutFixed32(&key, i);
+    Status s;
+    if (0 == (i % 2)) {
+      s = batch_->Delete(&cf2, key);
+    } else {
+      s = batch_->SingleDelete(&cf2, key);
+    }
+    ASSERT_OK(s);
+  }
+
+  ASSERT_OK(wb->UpdateTimestamps(std::string(sizeof(uint64_t), '\xfe'),
+                                 ts_sz_lookup));
+
+  for (uint32_t i = 0; i < kMaxKey; ++i) {
+    std::string value;
+    std::string key;
+    PutFixed32(&key, i);
+    Status s = batch_->GetFromBatch(&cf2, Options(), key, &value);
+    ASSERT_TRUE(s.IsNotFound());
+  }
+
+  // Iterator
+  {
+    const bool overwrite = GetParam();
+    std::unique_ptr<WBWIIterator> it(batch_->NewIterator(&cf2));
+    uint32_t start = 0;
+    for (it->SeekToFirst(); it->Valid(); it->Next(), ++start) {
+      std::string key;
+      PutFixed32(&key, start);
+      ASSERT_EQ(key, it->Entry().key);
+      if (!overwrite) {
+        ASSERT_EQ(WriteType::kPutRecord, it->Entry().type);
+        it->Next();
+        ASSERT_TRUE(it->Valid());
+      }
+      if (0 == (start % 2)) {
+        ASSERT_EQ(WriteType::kDeleteRecord, it->Entry().type);
+      } else {
+        ASSERT_EQ(WriteType::kSingleDeleteRecord, it->Entry().type);
+      }
+    }
+  }
+}
+
+TEST_P(WriteBatchWithIndexTest, IndexNoTs) {
+  const Comparator* const ucmp = test::BytewiseComparatorWithU64TsWrapper();
+  ColumnFamilyHandleImplDummy cf(1, ucmp);
+  WriteBatchWithIndex wbwi;
+  ASSERT_OK(wbwi.Put(&cf, "a", "a0"));
+  ASSERT_OK(wbwi.Put(&cf, "a", "a1"));
+  {
+    std::string ts;
+    PutFixed64(&ts, 10000);
+    ASSERT_OK(wbwi.GetWriteBatch()->UpdateTimestamps(
+        ts, [](uint32_t cf_id) { return cf_id == 1 ? 8 : 0; }));
+  }
+  {
+    std::string value;
+    Status s = wbwi.GetFromBatch(&cf, options_, "a", &value);
+    ASSERT_OK(s);
+    ASSERT_EQ("a1", value);
+  }
+}
+
 INSTANTIATE_TEST_CASE_P(WBWI, WriteBatchWithIndexTest, testing::Bool());
 }  // namespace ROCKSDB_NAMESPACE
 
@@ -2263,12 +2505,3 @@ int main(int argc, char** argv) {
   return RUN_ALL_TESTS();
 }
 
-#else
-#include <stdio.h>
-
-int main() {
-  fprintf(stderr, "SKIPPED\n");
-  return 0;
-}
-
-#endif  // !ROCKSDB_LITE

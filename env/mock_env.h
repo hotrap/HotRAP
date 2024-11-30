@@ -107,6 +107,7 @@ class MockFileSystem : public FileSystem {
   }
 
   Status CorruptBuffer(const std::string& fname);
+  Status PrepareOptions(const ConfigOptions& options) override;
 
  private:
   bool RenameFileInternal(const std::string& src, const std::string& dest);
@@ -130,7 +131,11 @@ class MockEnv : public CompositeEnvWrapper {
   static MockEnv* Create(Env* base);
   static MockEnv* Create(Env* base, const std::shared_ptr<SystemClock>& clock);
 
+  static const char* kClassName() { return "MockEnv"; }
+  const char* Name() const override { return kClassName(); }
+
   Status CorruptBuffer(const std::string& fname);
+
  private:
   MockEnv(Env* env, const std::shared_ptr<FileSystem>& fs,
           const std::shared_ptr<SystemClock>& clock);

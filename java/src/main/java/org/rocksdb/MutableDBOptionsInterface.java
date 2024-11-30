@@ -23,39 +23,11 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
 
   /**
    * NOT SUPPORTED ANYMORE: RocksDB automatically decides this based on the
-   * value of max_background_jobs. This option is ignored.
-   *
-   * Suggested number of concurrent background compaction jobs, submitted to
-   * the default LOW priority thread pool.
-   * Default: -1
-   *
-   * @param baseBackgroundCompactions Suggested number of background compaction
-   *     jobs
-   *
-   * @deprecated Use {@link #setMaxBackgroundJobs(int)}
-   */
-  @Deprecated
-  void setBaseBackgroundCompactions(int baseBackgroundCompactions);
-
-  /**
-   * NOT SUPPORTED ANYMORE: RocksDB automatically decides this based on the
-   * value of max_background_jobs. This option is ignored.
-   *
-   * Suggested number of concurrent background compaction jobs, submitted to
-   * the default LOW priority thread pool.
-   * Default: -1
-   *
-   * @return Suggested number of background compaction jobs
-   */
-  int baseBackgroundCompactions();
-
-  /**
-   * NOT SUPPORTED ANYMORE: RocksDB automatically decides this based on the
    * value of max_background_jobs. For backwards compatibility we will set
    * `max_background_jobs = max_background_compactions + max_background_flushes`
    * in the case where user sets at least one of `max_background_compactions` or
    * `max_background_flushes` (we replace -1 by 1 in case one option is unset).
-   *
+   * <p>
    * Specifies the maximum number of concurrent background compaction jobs,
    * submitted to the default LOW priority thread pool.
    * If you're increasing this, also consider increasing number of threads in
@@ -80,7 +52,7 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * `max_background_jobs = max_background_compactions + max_background_flushes`
    * in the case where user sets at least one of `max_background_compactions` or
    * `max_background_flushes` (we replace -1 by 1 in case one option is unset).
-   *
+   * <p>
    * Returns the maximum number of concurrent background compaction jobs,
    * submitted to the default LOW priority thread pool.
    * When increasing this number, we may also want to consider increasing
@@ -100,9 +72,9 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * By default RocksDB will flush all memtables on DB close if there are
    * unpersisted data (i.e. with WAL disabled) The flush can be skip to speedup
    * DB close. Unpersisted data WILL BE LOST.
-   *
+   * <p>
    * DEFAULT: false
-   *
+   * <p>
    * Dynamically changeable through
    *     {@link RocksDB#setOptions(ColumnFamilyHandle, MutableColumnFamilyOptions)}
    *     API.
@@ -118,9 +90,9 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * By default RocksDB will flush all memtables on DB close if there are
    * unpersisted data (i.e. with WAL disabled) The flush can be skip to speedup
    * DB close. Unpersisted data WILL BE LOST.
-   *
+   * <p>
    * DEFAULT: false
-   *
+   * <p>
    * Dynamically changeable through
    *     {@link RocksDB#setOptions(ColumnFamilyHandle, MutableColumnFamilyOptions)}
    *     API.
@@ -133,7 +105,7 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * This is the maximum buffer size that is used by WritableFileWriter.
    * On Windows, we need to maintain an aligned buffer for writes.
    * We allow the buffer to grow until it's size hits the limit.
-   *
+   * <p>
    * Default: 1024 * 1024 (1 MB)
    *
    * @param writableFileMaxBufferSize the maximum buffer size
@@ -146,7 +118,7 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * This is the maximum buffer size that is used by WritableFileWriter.
    * On Windows, we need to maintain an aligned buffer for writes.
    * We allow the buffer to grow until it's size hits the limit.
-   *
+   * <p>
    * Default: 1024 * 1024 (1 MB)
    *
    * @return the maximum buffer size
@@ -165,11 +137,11 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * if it is not empty, or 16MB if `rater_limiter` is empty. Note that
    * if users change the rate in `rate_limiter` after DB is opened,
    * `delayed_write_rate` won't be adjusted.
-   *
+   * <p>
    * Unit: bytes per second.
-   *
+   * <p>
    * Default: 0
-   *
+   * <p>
    * Dynamically changeable through {@link RocksDB#setDBOptions(MutableDBOptions)}.
    *
    * @param delayedWriteRate the rate in bytes per second
@@ -190,11 +162,11 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * if it is not empty, or 16MB if `rater_limiter` is empty. Note that
    * if users change the rate in `rate_limiter` after DB is opened,
    * `delayed_write_rate` won't be adjusted.
-   *
+   * <p>
    * Unit: bytes per second.
-   *
+   * <p>
    * Default: 0
-   *
+   * <p>
    * Dynamically changeable through {@link RocksDB#setDBOptions(MutableDBOptions)}.
    *
    * @return the rate in bytes per second
@@ -386,7 +358,7 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
 
   /**
    * Same as {@link #setBytesPerSync(long)} , but applies to WAL files
-   *
+   * <p>
    * Default: 0, turned off
    *
    * @param walBytesPerSync size in bytes
@@ -396,7 +368,7 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
 
   /**
    * Same as {@link #bytesPerSync()} , but applies to WAL files
-   *
+   * <p>
    * Default: 0, turned off
    *
    * @return size in bytes
@@ -411,7 +383,7 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    * during file generation, which can lead to a huge sync when the file is
    * finished, even with {@link #bytesPerSync()} / {@link #walBytesPerSync()}
    * properly configured.
-   *
+   * <p>
    * - If `sync_file_range` is supported it achieves this by waiting for any
    *   prior `sync_file_range`s to finish before proceeding. In this way,
    *   processing (compression, etc.) can proceed uninhibited in the gap
@@ -419,11 +391,11 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
    *   behind.
    * - Otherwise the `WritableFile::Sync` method is used. Note this mechanism
    *   always blocks, thus preventing the interleaving of I/O and processing.
-   *
+   * <p>
    * Note: Enabling this option does not provide any additional persistence
    * guarantees, as it may use `sync_file_range`, which does not write out
    * metadata.
-   *
+   * <p>
    * Default: false
    *
    * @param strictBytesPerSync the bytes per sync
@@ -433,7 +405,7 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
 
   /**
    * Return the strict byte limit per sync.
-   *
+   * <p>
    * See {@link #setStrictBytesPerSync(boolean)}
    *
    * @return the limit in bytes.
@@ -443,11 +415,9 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
   /**
    * If non-zero, we perform bigger reads when doing compaction. If you're
    * running RocksDB on spinning disks, you should set this to at least 2MB.
-   *
+   * <p>
    * That way RocksDB's compaction is doing sequential instead of random reads.
-   * When non-zero, we also force
-   * {@link DBOptionsInterface#newTableReaderForCompactionInputs()} to true.
-   *
+   * <p>
    * Default: 0
    *
    * @param compactionReadaheadSize The compaction read-ahead size
@@ -459,11 +429,9 @@ public interface MutableDBOptionsInterface<T extends MutableDBOptionsInterface<T
   /**
    * If non-zero, we perform bigger reads when doing compaction. If you're
    * running RocksDB on spinning disks, you should set this to at least 2MB.
-   *
+   * <p>
    * That way RocksDB's compaction is doing sequential instead of random reads.
-   * When non-zero, we also force
-   * {@link DBOptionsInterface#newTableReaderForCompactionInputs()} to true.
-   *
+   * <p>
    * Default: 0
    *
    * @return The compaction read-ahead size

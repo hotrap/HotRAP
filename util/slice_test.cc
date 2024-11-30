@@ -11,11 +11,17 @@
 #include "port/stack_trace.h"
 #include "rocksdb/data_structure.h"
 #include "rocksdb/types.h"
-#include "rocksdb/utilities/regex.h"
 #include "test_util/testharness.h"
 #include "test_util/testutil.h"
 
 namespace ROCKSDB_NAMESPACE {
+
+TEST(SliceTest, StringView) {
+  std::string s = "foo";
+  std::string_view sv = s;
+  ASSERT_EQ(Slice(s), Slice(sv));
+  ASSERT_EQ(Slice(s), Slice(std::move(sv)));
+}
 
 // Use this to keep track of the cleanups that were actually performed
 void Multiplier(void* arg1, void* arg2) {
@@ -26,8 +32,7 @@ void Multiplier(void* arg1, void* arg2) {
 
 class PinnableSliceTest : public testing::Test {
  public:
-  void AssertSameData(const std::string& expected,
-                      const PinnableSlice& slice) {
+  void AssertSameData(const std::string& expected, const PinnableSlice& slice) {
     std::string got;
     got.assign(slice.data(), slice.size());
     ASSERT_EQ(expected, got);
@@ -168,43 +173,75 @@ class SmallEnumSetTest : public testing::Test {
   ~SmallEnumSetTest() {}
 };
 
-TEST_F(SmallEnumSetTest, SmallSetTest) {
-  FileTypeSet fs;
+TEST_F(SmallEnumSetTest, SmallEnumSetTest1) {
+  FileTypeSet fs;  // based on a legacy enum type
+  ASSERT_TRUE(fs.empty());
   ASSERT_TRUE(fs.Add(FileType::kIdentityFile));
+  ASSERT_FALSE(fs.empty());
   ASSERT_FALSE(fs.Add(FileType::kIdentityFile));
   ASSERT_TRUE(fs.Add(FileType::kInfoLogFile));
   ASSERT_TRUE(fs.Contains(FileType::kIdentityFile));
   ASSERT_FALSE(fs.Contains(FileType::kDBLockFile));
+  ASSERT_FALSE(fs.empty());
+  ASSERT_FALSE(fs.Remove(FileType::kDBLockFile));
+  ASSERT_TRUE(fs.Remove(FileType::kIdentityFile));
+  ASSERT_FALSE(fs.empty());
+  ASSERT_TRUE(fs.Remove(FileType::kInfoLogFile));
+  ASSERT_TRUE(fs.empty());
 }
 
-// ***************************************************************** //
-// Unit test for Regex
-#ifndef ROCKSDB_LITE
-TEST(RegexTest, ParseEtc) {
-  Regex r;
-  ASSERT_OK(Regex::Parse("[abc]{5}", &r));
-  ASSERT_TRUE(r.Matches("abcba"));
-  ASSERT_FALSE(r.Matches("abcb"));    // too short
-  ASSERT_FALSE(r.Matches("abcbaa"));  // too long
+namespace {
+enum class MyEnumClass { A, B, C };
+}  // namespace
 
-  ASSERT_OK(Regex::Parse(".*foo.*", &r));
-  ASSERT_TRUE(r.Matches("123forfoodie456"));
-  ASSERT_FALSE(r.Matches("123forfodie456"));
-  // Ensure copy operator
-  Regex r2;
-  r2 = r;
-  ASSERT_TRUE(r2.Matches("123forfoodie456"));
-  ASSERT_FALSE(r2.Matches("123forfodie456"));
-  // Ensure copy constructor
-  Regex r3{r};
-  ASSERT_TRUE(r3.Matches("123forfoodie456"));
-  ASSERT_FALSE(r3.Matches("123forfodie456"));
+using MyEnumClassSet = SmallEnumSet<MyEnumClass, MyEnumClass::C>;
 
-  ASSERT_TRUE(Regex::Parse("*foo.*", &r).IsInvalidArgument());
-  ASSERT_TRUE(Regex::Parse("[abc", &r).IsInvalidArgument());
-  ASSERT_TRUE(Regex::Parse("[abc]{1", &r).IsInvalidArgument());
+TEST_F(SmallEnumSetTest, SmallEnumSetTest2) {
+  MyEnumClassSet s;  // based on an enum class type
+  ASSERT_TRUE(s.Add(MyEnumClass::A));
+  ASSERT_TRUE(s.Contains(MyEnumClass::A));
+  ASSERT_FALSE(s.Contains(MyEnumClass::B));
+  ASSERT_TRUE(s.With(MyEnumClass::B).Contains(MyEnumClass::B));
+  ASSERT_TRUE(s.With(MyEnumClass::A).Contains(MyEnumClass::A));
+  ASSERT_FALSE(s.Contains(MyEnumClass::B));
+  ASSERT_FALSE(s.Without(MyEnumClass::A).Contains(MyEnumClass::A));
+  ASSERT_FALSE(
+      s.With(MyEnumClass::B).Without(MyEnumClass::B).Contains(MyEnumClass::B));
+  ASSERT_TRUE(
+      s.Without(MyEnumClass::B).With(MyEnumClass::B).Contains(MyEnumClass::B));
+  ASSERT_TRUE(s.Contains(MyEnumClass::A));
+
+  const MyEnumClassSet cs = s;
+  ASSERT_TRUE(cs.Contains(MyEnumClass::A));
+  ASSERT_EQ(cs, MyEnumClassSet{MyEnumClass::A});
+  ASSERT_EQ(cs.Without(MyEnumClass::A), MyEnumClassSet{});
+  ASSERT_EQ(cs, MyEnumClassSet::All().Without(MyEnumClass::B, MyEnumClass::C));
+  ASSERT_EQ(cs.With(MyEnumClass::B, MyEnumClass::C), MyEnumClassSet::All());
+  ASSERT_EQ(
+      MyEnumClassSet::All(),
+      MyEnumClassSet{}.With(MyEnumClass::A, MyEnumClass::B, MyEnumClass::C));
+  ASSERT_NE(cs, MyEnumClassSet{MyEnumClass::B});
+  ASSERT_NE(cs, MyEnumClassSet::All());
+
+  int count = 0;
+  for (MyEnumClass e : cs) {
+    ASSERT_EQ(e, MyEnumClass::A);
+    ++count;
+  }
+  ASSERT_EQ(count, 1);
+
+  count = 0;
+  for (MyEnumClass e : MyEnumClassSet::All().Without(MyEnumClass::B)) {
+    ASSERT_NE(e, MyEnumClass::B);
+    ++count;
+  }
+  ASSERT_EQ(count, 2);
+
+  for (MyEnumClass e : MyEnumClassSet{}) {
+    (void)e;
+    assert(false);
+  }
 }
-#endif  // ROCKSDB_LITE
 
 }  // namespace ROCKSDB_NAMESPACE
 
