@@ -3,7 +3,6 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#ifndef ROCKSDB_LITE
 #include "table/plain/plain_table_builder.h"
 
 #include <assert.h>
@@ -82,8 +81,9 @@ PlainTableBuilder::PlainTableBuilder(
     index_builder_.reset(new PlainTableIndexBuilder(
         &arena_, ioptions, moptions.prefix_extractor.get(), index_sparseness,
         hash_table_ratio, huge_page_tlb_size_));
-    properties_.user_collected_properties
-        [PlainTablePropertyNames::kBloomVersion] = "1";  // For future use
+    properties_
+        .user_collected_properties[PlainTablePropertyNames::kBloomVersion] =
+        "1";  // For future use
   }
 
   properties_.fixed_key_len = user_key_len;
@@ -112,8 +112,8 @@ PlainTableBuilder::PlainTableBuilder(
 
   std::string val;
   PutFixed32(&val, static_cast<uint32_t>(encoder_.GetEncodingType()));
-  properties_.user_collected_properties
-      [PlainTablePropertyNames::kEncodingType] = val;
+  properties_
+      .user_collected_properties[PlainTablePropertyNames::kEncodingType] = val;
 
   assert(int_tbl_prop_collector_factories);
   for (auto& factory : *int_tbl_prop_collector_factories) {
@@ -277,12 +277,13 @@ Status PlainTableBuilder::Finish(double hot_per_byte) {
 
   // -- Write property block
   BlockHandle property_block_handle;
-  IOStatus s = WriteBlock(property_block_builder.Finish(), file_, &offset_,
+  io_status_ = WriteBlock(property_block_builder.Finish(), file_, &offset_,
                           &property_block_handle);
-  if (!s.ok()) {
-    return std::move(s);
+  if (!io_status_.ok()) {
+    status_ = io_status_;
+    return status_;
   }
-  meta_index_builer.Add(kPropertiesBlock, property_block_handle);
+  meta_index_builer.Add(kPropertiesBlockName, property_block_handle);
 
   // -- write metaindex block
   BlockHandle metaindex_block_handle;
@@ -295,30 +296,28 @@ Status PlainTableBuilder::Finish(double hot_per_byte) {
 
   // Write Footer
   // no need to write out new footer if we're using default checksum
-  Footer footer(kLegacyPlainTableMagicNumber, 0);
-  footer.set_metaindex_handle(metaindex_block_handle);
-  footer.set_index_handle(BlockHandle::NullBlockHandle());
-  std::string footer_encoding;
-  footer.EncodeTo(&footer_encoding);
-  io_status_ = file_->Append(footer_encoding);
+  FooterBuilder footer;
+  Status s = footer.Build(kPlainTableMagicNumber, /* format_version */ 0,
+                          offset_, kNoChecksum, metaindex_block_handle);
+  if (!s.ok()) {
+    status_ = s;
+    return status_;
+  }
+  io_status_ = file_->Append(footer.GetSlice());
   if (io_status_.ok()) {
-    offset_ += footer_encoding.size();
+    offset_ += footer.GetSlice().size();
   }
   status_ = io_status_;
   return status_;
 }
 
-void PlainTableBuilder::Abandon() {
-  closed_ = true;
-}
+void PlainTableBuilder::Abandon() { closed_ = true; }
 
 uint64_t PlainTableBuilder::NumEntries() const {
   return properties_.num_entries;
 }
 
-uint64_t PlainTableBuilder::FileSize() const {
-  return offset_;
-}
+uint64_t PlainTableBuilder::FileSize() const { return offset_; }
 
 std::string PlainTableBuilder::GetFileChecksum() const {
   if (file_ != nullptr) {
@@ -335,6 +334,10 @@ const char* PlainTableBuilder::GetFileChecksumFuncName() const {
     return kUnknownFileChecksumFuncName;
   }
 }
+void PlainTableBuilder::SetSeqnoTimeTableProperties(const std::string& string,
+                                                    uint64_t uint_64) {
+  // TODO: storing seqno to time mapping is not yet support for plain table.
+  TableBuilder::SetSeqnoTimeTableProperties(string, uint_64);
+}
 
 }  // namespace ROCKSDB_NAMESPACE
-#endif  // ROCKSDB_LITE

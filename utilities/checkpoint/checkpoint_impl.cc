@@ -7,7 +7,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef ROCKSDB_LITE
 
 #include "utilities/checkpoint/checkpoint_impl.h"
 
@@ -132,11 +131,12 @@ Status CheckpointImpl::CreateCheckpoint(const std::string& checkpoint_dir,
           [&](const std::string& src_dirname, const std::string& fname,
               uint64_t size_limit_bytes, FileType,
               const std::string& /* checksum_func_name */,
-              const std::string& /* checksum_val */) {
+              const std::string& /* checksum_val */,
+              const Temperature temperature) {
             ROCKS_LOG_INFO(db_options.info_log, "Copying %s", fname.c_str());
             return CopyFile(db_->GetFileSystem(), src_dirname + "/" + fname,
                             full_private_path + "/" + fname, size_limit_bytes,
-                            db_options.use_fsync);
+                            db_options.use_fsync, nullptr, temperature);
           } /* copy_file_cb */,
           [&](const std::string& fname, const std::string& contents, FileType) {
             ROCKS_LOG_INFO(db_options.info_log, "Creating %s", fname.c_str());
@@ -191,10 +191,11 @@ Status CheckpointImpl::CreateCustomCheckpoint(
     std::function<Status(const std::string& src_dirname,
                          const std::string& src_fname, FileType type)>
         link_file_cb,
-    std::function<Status(
-        const std::string& src_dirname, const std::string& src_fname,
-        uint64_t size_limit_bytes, FileType type,
-        const std::string& checksum_func_name, const std::string& checksum_val)>
+    std::function<
+        Status(const std::string& src_dirname, const std::string& src_fname,
+               uint64_t size_limit_bytes, FileType type,
+               const std::string& checksum_func_name,
+               const std::string& checksum_val, const Temperature temperature)>
         copy_file_cb,
     std::function<Status(const std::string& fname, const std::string& contents,
                          FileType type)>
@@ -261,11 +262,11 @@ Status CheckpointImpl::CreateCustomCheckpoint(
         if (opts.include_checksum_info) {
           s = copy_file_cb(info.directory, info.relative_filename, info.size,
                            info.file_type, info.file_checksum_func_name,
-                           info.file_checksum);
+                           info.file_checksum, info.temperature);
         } else {
           s = copy_file_cb(info.directory, info.relative_filename, info.size,
                            info.file_type, kUnknownFileChecksumFuncName,
-                           kUnknownFileChecksum);
+                           kUnknownFileChecksum, info.temperature);
         }
       }
     }
@@ -332,7 +333,8 @@ Status CheckpointImpl::ExportColumnFamily(
             ROCKS_LOG_INFO(db_options.info_log, "[%s] Copying %s",
                            cf_name.c_str(), fname.c_str());
             return CopyFile(db_->GetFileSystem(), src_dirname + fname,
-                            tmp_export_dir + fname, 0, db_options.use_fsync);
+                            tmp_export_dir + fname, 0, db_options.use_fsync,
+                            nullptr, Temperature::kUnknown);
           } /*copy_file_cb*/);
 
       const auto enable_status = db_->EnableFileDeletions(false /*force*/);
@@ -370,16 +372,19 @@ Status CheckpointImpl::ExportColumnFamily(
       for (const auto& file_metadata : level_metadata.files) {
         LiveFileMetaData live_file_metadata;
         live_file_metadata.size = file_metadata.size;
-        live_file_metadata.name = std::move(file_metadata.name);
+        live_file_metadata.name = file_metadata.name;
         live_file_metadata.file_number = file_metadata.file_number;
         live_file_metadata.db_path = export_dir;
         live_file_metadata.smallest_seqno = file_metadata.smallest_seqno;
         live_file_metadata.largest_seqno = file_metadata.largest_seqno;
-        live_file_metadata.smallestkey = std::move(file_metadata.smallestkey);
-        live_file_metadata.largestkey = std::move(file_metadata.largestkey);
+        live_file_metadata.smallestkey = file_metadata.smallestkey;
+        live_file_metadata.largestkey = file_metadata.largestkey;
         live_file_metadata.oldest_blob_file_number =
             file_metadata.oldest_blob_file_number;
+        live_file_metadata.epoch_number = file_metadata.epoch_number;
         live_file_metadata.level = level_metadata.level;
+        live_file_metadata.smallest = file_metadata.smallest;
+        live_file_metadata.largest = file_metadata.largest;
         result_metadata->files.push_back(live_file_metadata);
       }
       *metadata = result_metadata;
@@ -463,4 +468,3 @@ Status CheckpointImpl::ExportFilesInMetaData(
 }
 }  // namespace ROCKSDB_NAMESPACE
 
-#endif  // ROCKSDB_LITE
