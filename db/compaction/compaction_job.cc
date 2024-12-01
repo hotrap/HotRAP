@@ -1665,7 +1665,7 @@ Status CompactionJob::FinishCompactionOutputFile(
     TEST_SYNC_POINT("CompactionJob::FinishCompactionOutputFile1");
   }
 
-  if (outputs.is_penultimate_level()) {
+  if (outputs.path_id() == 0) {
     const Comparator* ucmp =
         sub_compact->compaction->immutable_options()->user_comparator;
     std::vector<RangeSeq> promoted_ranges_vec;
