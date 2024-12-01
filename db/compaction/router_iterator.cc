@@ -21,92 +21,177 @@ IKeyValueLevel::IKeyValueLevel(CompactionIterator& c_iter)
   level = ret.first;
 }
 
-optional<Elem> IteratorWithoutRouter::next() {
-	optional<IKeyValueLevel> ret = c_iter_.next();
-	if (ret.has_value())
-		return make_optional<Elem>(Decision::kNextLevel, ret.value());
-	else
-		return nullopt;
-}
+// Future work(hotrap): The caller should ZeroOutSequenceIfPossible if the final
+// decision is kNextLevel
+class CompactionIterWrapper : public TraitIterator<IKeyValueLevel> {
+ public:
+  CompactionIterWrapper(CompactionIterator& c_iter)
+      : c_iter_(c_iter), first_(true) {}
+  CompactionIterWrapper(const CompactionIterWrapper& rhs) = delete;
+  CompactionIterWrapper& operator=(const CompactionIterWrapper& rhs) = delete;
+  CompactionIterWrapper(CompactionIterWrapper&& rhs)
+      : c_iter_(rhs.c_iter_), first_(rhs.first_) {}
+  CompactionIterWrapper& operator=(const CompactionIterWrapper&& rhs) = delete;
+  optional<IKeyValueLevel> next() override {
+    if (first_) {
+      first_ = false;
+    } else {
+      c_iter_.Next();
+    }
+    if (c_iter_.Valid())
+      return make_optional<IKeyValueLevel>(c_iter_);
+    else
+      return nullopt;
+  }
 
-optional<Elem> RouterIteratorIntraTier::next() {
-	optional<IKeyValueLevel> ret = iter_.next();
-	if (!ret.has_value()) {
-		return nullopt;
-	}
-	IKeyValueLevel& kv = ret.value();
-	if (kv.level != -1) {
-		return make_optional<Elem>(Decision::kNextLevel, kv);
-	}
-	promoted_bytes_ += kv.key.size() + kv.value.size();
-	return make_optional<Elem>(Decision::kNextLevel, kv);
-}
+ private:
+  CompactionIterator& c_iter_;
+  bool first_;
+};
 
-RouterIteratorFD2SD::~RouterIteratorFD2SD() {
-	auto stats = c_.immutable_options()->stats;
-	RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
-	RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
-}
+class IteratorWithoutRouter : public TraitIterator<Elem> {
+ public:
+  IteratorWithoutRouter(const Compaction& c, CompactionIterator& c_iter)
+      : c_iter_(c_iter) {}
+  optional<Elem> next() override {
+    optional<IKeyValueLevel> ret = c_iter_.next();
+    if (ret.has_value())
+      return make_optional<Elem>(Decision::kNextLevel, ret.value());
+    else
+      return nullopt;
+  }
 
-Decision RouterIteratorFD2SD::route(const IKeyValueLevel& kv) {
-	// It is guaranteed that all versions of the same user key share the same
-	// decision.
-	const HotRecInfo* hot = hot_iter_.peek();
-	while (hot != nullptr) {
-		if (ucmp_->Compare(hot->last, kv.ikey.user_key) >= 0) break;
-		hot_iter_.next();
-		hot = hot_iter_.peek();
-	}
-  if (!hot) return Decision::kNextLevel;
-	// kv.ikey.user_key <= hot->last
-	Slice first = hot->first.empty() ? hot->last : hot->first;
-	if (ucmp_->Compare(first, kv.ikey.user_key) <= 0) {
-		return Decision::kStartLevel;
-	} else {
-		return Decision::kNextLevel;
-	}
-}
+ private:
+  CompactionIterWrapper c_iter_;
+};
 
-optional<Elem> RouterIteratorFD2SD::next() {
-	optional<IKeyValueLevel> kv_ret = iter_.next();
-	if (!kv_ret.has_value()) {
-		return nullopt;
-	}
-	const IKeyValueLevel& kv = kv_ret.value();
-	RangeBounds range{
-			.start =
-					Bound{
-							.user_key = start_,
-							.excluded = false,
-					},
-			.end = end_,
-	};
-	if (!range.contains(kv.ikey.user_key, ucmp_)) {
-		return make_optional<Elem>(Decision::kNextLevel, kv);
-	}
-	Decision decision = route(kv);
-	while (ranges_it_ != promoted_ranges_.end() &&
-					ucmp_->Compare(ranges_it_->first, kv.ikey.user_key) < 0) {
-		++ranges_it_;
-	}
-	if (decision == Decision::kStartLevel) {
-		size_t kvsize = kv.key.size() + kv.value.size();
-		if (kv.level == -1 || kv.level == c_.output_level()) {
-			kvsize_promoted_ += kvsize;
-		} else {
-			assert(kv.level == c_.start_level());
-			kvsize_retained_ += kvsize;
-		}
-	} else {
-		assert(decision == Decision::kNextLevel);
-		if (ranges_it_ != promoted_ranges_.end() &&
-				ucmp_->Compare(ranges_it_->second.first_user_key, kv.ikey.user_key) <=
-						0) {
-			ranges_it_ = promoted_ranges_.erase(ranges_it_);
-		}
-	}
-	return make_optional<Elem>(decision, kv);
-}
+class RouterIteratorIntraTier : public TraitIterator<Elem> {
+ public:
+  RouterIteratorIntraTier(const Compaction& c, CompactionIterator& c_iter,
+                          Slice start, Bound end, Tickers promotion_type)
+      : c_(c),
+        promotion_type_(promotion_type),
+        promoted_bytes_(0),
+        iter_(c_iter) {}
+  ~RouterIteratorIntraTier() override {
+    auto stats = c_.immutable_options()->stats;
+    RecordTick(stats, promotion_type_, promoted_bytes_);
+  }
+  optional<Elem> next() override {
+    optional<IKeyValueLevel> ret = iter_.next();
+    if (!ret.has_value()) {
+      return nullopt;
+    }
+    IKeyValueLevel& kv = ret.value();
+    if (kv.level != -1) {
+      return make_optional<Elem>(Decision::kNextLevel, kv);
+    }
+    promoted_bytes_ += kv.key.size() + kv.value.size();
+    return make_optional<Elem>(Decision::kNextLevel, kv);
+  }
+
+ private:
+  const Compaction& c_;
+  Tickers promotion_type_;
+  size_t promoted_bytes_;
+  CompactionIterWrapper iter_;
+};
+
+class RouterIteratorFD2SD : public TraitIterator<Elem> {
+ public:
+  RouterIteratorFD2SD(
+      RALT& ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
+      Bound end,
+      std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges)
+      : c_(c),
+        start_(start),
+        end_(end),
+        promoted_ranges_(promoted_ranges),
+        ucmp_(c.column_family_data()->user_comparator()),
+        iter_(c_iter),
+        hot_iter_(ralt.LowerBound(start_)),
+        ranges_it_(promoted_ranges_.begin()),
+        kvsize_promoted_(0),
+        kvsize_retained_(0) {}
+  ~RouterIteratorFD2SD() {
+    auto stats = c_.immutable_options()->stats;
+    RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
+    RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
+  }
+  optional<Elem> next() override {
+    optional<IKeyValueLevel> kv_ret = iter_.next();
+    if (!kv_ret.has_value()) {
+      return nullopt;
+    }
+    const IKeyValueLevel& kv = kv_ret.value();
+    RangeBounds range{
+        .start =
+            Bound{
+                .user_key = start_,
+                .excluded = false,
+            },
+        .end = end_,
+    };
+    if (!range.contains(kv.ikey.user_key, ucmp_)) {
+      return make_optional<Elem>(Decision::kNextLevel, kv);
+    }
+    Decision decision = route(kv);
+    while (ranges_it_ != promoted_ranges_.end() &&
+           ucmp_->Compare(ranges_it_->first, kv.ikey.user_key) < 0) {
+      ++ranges_it_;
+    }
+    if (decision == Decision::kStartLevel) {
+      size_t kvsize = kv.key.size() + kv.value.size();
+      if (kv.level == -1 || kv.level == c_.output_level()) {
+        kvsize_promoted_ += kvsize;
+      } else {
+        assert(kv.level == c_.start_level());
+        kvsize_retained_ += kvsize;
+      }
+    } else {
+      assert(decision == Decision::kNextLevel);
+      if (ranges_it_ != promoted_ranges_.end() &&
+          ucmp_->Compare(ranges_it_->second.first_user_key, kv.ikey.user_key) <=
+              0) {
+        ranges_it_ = promoted_ranges_.erase(ranges_it_);
+      }
+    }
+    return make_optional<Elem>(decision, kv);
+  }
+
+ private:
+  Decision route(const IKeyValueLevel& kv) {
+    // It is guaranteed that all versions of the same user key share the same
+    // decision.
+    const HotRecInfo* hot = hot_iter_.peek();
+    while (hot != nullptr) {
+      if (ucmp_->Compare(hot->last, kv.ikey.user_key) >= 0) break;
+      hot_iter_.next();
+      hot = hot_iter_.peek();
+    }
+    if (!hot) return Decision::kNextLevel;
+    // kv.ikey.user_key <= hot->last
+    Slice first = hot->first.empty() ? hot->last : hot->first;
+    if (ucmp_->Compare(first, kv.ikey.user_key) <= 0) {
+      return Decision::kStartLevel;
+    } else {
+      return Decision::kNextLevel;
+    }
+  }
+
+  const Compaction& c_;
+  const Slice start_;
+  const Bound end_;
+  std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges_;
+
+  const Comparator* ucmp_;
+  CompactionIterWrapper iter_;
+  Peekable<RALT::Iter> hot_iter_;
+  std::map<std::string, RangeFirstSeq, UserKeyCompare>::iterator ranges_it_;
+
+  size_t kvsize_promoted_;
+  size_t kvsize_retained_;
+};
 
 RouterIterator::RouterIterator(
     RALT* ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
@@ -127,8 +212,8 @@ RouterIterator::RouterIterator(
     uint32_t latter_tier = version.path_id(latter_level);
     if (start_tier != latter_tier) {
       assert(c.SupportsPerKeyPlacement());
-      iter_ = std::unique_ptr<RouterIteratorFD2SD>(
-          new RouterIteratorFD2SD(*ralt, c, c_iter, start, end, promoted_ranges));
+      iter_ = std::unique_ptr<RouterIteratorFD2SD>(new RouterIteratorFD2SD(
+          *ralt, c, c_iter, start, end, promoted_ranges));
     } else if (version.path_id(latter_level + 1) != latter_tier) {
       iter_ =
           std::unique_ptr<RouterIteratorIntraTier>(new RouterIteratorIntraTier(
