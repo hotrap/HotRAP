@@ -41,6 +41,8 @@ void CompactionState::AggregateCompactionStats(
   for (const auto& sc : sub_compact_states) {
     sc.AggregateCompactionStats(compaction_stats);
     retained_or_promoted_bytes += sc.retained_or_promoted_bytes;
+    promoted_ranges_to_file += sc.promoted_ranges_to_file;
+    promoted_ranges_dropped += sc.promoted_ranges_dropped;
     compaction_job_stats.Add(sc.compaction_job_stats);
   }
 }

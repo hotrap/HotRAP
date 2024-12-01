@@ -266,6 +266,11 @@ void CompactionJob::Prepare() {
     StopWatch sw(db_options_.clock, stats_, SUBCOMPACTION_SETUP_TIME);
     GenSubcompactionBoundaries();
   }
+  ROCKS_LOG_INFO(db_options_.info_log,
+                 "[%s] [JOB %d] num subcompactions: %zu, promoted ranges from "
+                 "cache: %zu",
+                 cfd->GetName().c_str(), job_id_, boundaries_.size() + 1,
+                 c->cached_ranges_to_promote().size());
   if (boundaries_.size() >= 1) {
     const Comparator* ucmp = c->column_family_data()->user_comparator();
     auto cached_it = c->cached_ranges_to_promote().begin();
@@ -284,10 +289,12 @@ void CompactionJob::Prepare() {
         while (cached_it != cached_end &&
                ucmp->Compare(cached_it->last_user_key, end) <= 0) {
           cached.push_back(std::move(*cached_it));
+          ++cached_it;
         }
       } else {
         while (cached_it != cached_end) {
           cached.push_back(std::move(*cached_it));
+          ++cached_it;
         }
       }
       compact_->sub_compact_states.emplace_back(
@@ -304,8 +311,9 @@ void CompactionJob::Prepare() {
     RecordInHistogram(stats_, NUM_SUBCOMPACTIONS_SCHEDULED,
                       compact_->sub_compact_states.size());
   } else {
-    compact_->sub_compact_states.emplace_back(c, std::nullopt, std::nullopt, std::move(c->cached_ranges_to_promote()),
-                                              /*sub_job_id*/ 0);
+    compact_->sub_compact_states.emplace_back(
+        c, std::nullopt, std::nullopt, std::move(c->cached_ranges_to_promote()),
+        /*sub_job_id*/ 0);
   }
 
   // collect all seqno->time information from the input files which will be used
@@ -1512,6 +1520,10 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   // create a new output file.
   status = sub_compact->CloseCompactionFiles(status, open_file_func,
                                              close_file_func);
+  if (sub_compact->promoted_ranges_out().has_value()) {
+    sub_compact->promoted_ranges_dropped +=
+        sub_compact->promoted_ranges_out().value().size();
+  }
 
   if (blob_file_builder) {
     if (status.ok()) {
@@ -1663,8 +1675,11 @@ Status CompactionJob::FinishCompactionOutputFile(
              ucmp->Compare(promoted_ranges.front().first_user_key,
                            meta->smallest.user_key()) < 0) {
         promoted_ranges.pop_front();
+        sub_compact->promoted_ranges_dropped += 1;
       }
-      while (!promoted_ranges.empty() && ucmp->Compare(promoted_ranges.front().last_user_key, meta->largest.user_key()) <= 0) {
+      while (!promoted_ranges.empty() &&
+             ucmp->Compare(promoted_ranges.front().last_user_key,
+                           meta->largest.user_key()) <= 0) {
         promoted_ranges_vec.emplace_back(std::move(promoted_ranges.front()));
         promoted_ranges.pop_front();
       }
@@ -1676,6 +1691,7 @@ Status CompactionJob::FinishCompactionOutputFile(
         // For simplicity, we just drop the promoted range that crosses the
         // boundary of SSTables.
         promoted_ranges.erase(promoted_ranges.begin());
+        sub_compact->promoted_ranges_dropped += 1;
       }
       while (!promoted_ranges.empty() &&
              ucmp->Compare(promoted_ranges.begin()->first,
@@ -1686,6 +1702,7 @@ Status CompactionJob::FinishCompactionOutputFile(
             node.mapped().sequence);
       }
     }
+    sub_compact->promoted_ranges_to_file += promoted_ranges_vec.size();
     outputs.WritePromotedRanges(promoted_ranges_vec);
   }
 
@@ -1848,12 +1865,17 @@ Status CompactionJob::InstallCompactionResults(
           compaction_stats_.TotalBytesWritten());
     } else {
       ROCKS_LOG_BUFFER(log_buffer_,
-                       "[%s] [JOB %d] Compacted %s => %" PRIu64 " bytes, "
-                       "retained or promoted %" PRIu64 " bytes",
+                       "[%s] [JOB %d] Compacted %s => %" PRIu64
+                       " bytes, "
+                       "retained or promoted %" PRIu64
+                       " bytes, promoted ranges written to file %" PRIu64
+                       ", dropped %" PRIu64,
                        compaction->column_family_data()->GetName().c_str(),
                        job_id_, compaction->InputLevelSummary(&inputs_summary),
                        compaction_stats_.TotalBytesWritten(),
-                       compact_->retained_or_promoted_bytes);
+                       compact_->retained_or_promoted_bytes,
+                       compact_->promoted_ranges_to_file,
+                       compact_->promoted_ranges_dropped);
     }
   }
 

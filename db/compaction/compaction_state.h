@@ -29,6 +29,8 @@ class CompactionState {
   Status status;
 
   uint64_t retained_or_promoted_bytes = 0;
+  uint64_t promoted_ranges_to_file = 0;
+  uint64_t promoted_ranges_dropped = 0;
 
   void AggregateCompactionStats(
       InternalStats::CompactionStatsFull& compaction_stats,

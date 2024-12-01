@@ -69,6 +69,8 @@ class SubcompactionState {
   bool notify_on_subcompaction_completion = false;
 
   uint64_t retained_or_promoted_bytes = 0;
+  uint64_t promoted_ranges_to_file = 0;
+  uint64_t promoted_ranges_dropped = 0;
 
   // compaction job stats for this sub-compaction
   CompactionJobStats compaction_job_stats;
