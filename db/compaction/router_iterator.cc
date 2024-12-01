@@ -1,5 +1,7 @@
 #include "router_iterator.h"
 
+#include "db/compaction/subcompaction_state.h"
+
 namespace ROCKSDB_NAMESPACE {
 
 static std::pair<int, Slice> parse_level_value(Slice input_value) {
@@ -99,22 +101,21 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
 
 class RouterIteratorFD2SD : public TraitIterator<Elem> {
  public:
-  RouterIteratorFD2SD(
-      RALT& ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
-      Bound end,
-      std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges)
-      : c_(c),
+  RouterIteratorFD2SD(RALT& ralt, SubcompactionState& sub_compact,
+                      CompactionIterator& c_iter, Slice start, Bound end)
+      : sub_compact_(sub_compact),
         start_(start),
         end_(end),
-        promoted_ranges_(promoted_ranges),
-        ucmp_(c.column_family_data()->user_comparator()),
+        ucmp_(sub_compact_.compaction->column_family_data()->user_comparator()),
         iter_(c_iter),
         hot_iter_(ralt.LowerBound(start_)),
-        ranges_it_(promoted_ranges_.begin()),
         kvsize_promoted_(0),
-        kvsize_retained_(0) {}
+        kvsize_retained_(0) {
+    sub_compact_.promoted_ranges_out() =
+        std::make_optional<std::deque<RangeSeq>>();
+  }
   ~RouterIteratorFD2SD() {
-    auto stats = c_.immutable_options()->stats;
+    auto stats = sub_compact_.compaction->immutable_options()->stats;
     RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
     RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
   }
@@ -136,24 +137,35 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
       return make_optional<Elem>(Decision::kNextLevel, kv);
     }
     Decision decision = route(kv);
-    while (ranges_it_ != promoted_ranges_.end() &&
-           ucmp_->Compare(ranges_it_->first, kv.ikey.user_key) < 0) {
-      ++ranges_it_;
+    auto& promoted_ranges_in = sub_compact_.promoted_ranges_in();
+		assert(sub_compact_.promoted_ranges_out().has_value());
+    auto& promoted_ranges_out = sub_compact_.promoted_ranges_out().value();
+    while (!promoted_ranges_in.empty()) {
+      auto it = promoted_ranges_in.begin();
+      if (ucmp_->Compare(it->first, kv.ikey.user_key) >= 0) {
+        break;
+      }
+      auto node = promoted_ranges_in.extract(it);
+      promoted_ranges_out.emplace_back(std::move(node.mapped().first_user_key),
+                                       std::move(node.key()),
+                                       node.mapped().sequence);
     }
     if (decision == Decision::kStartLevel) {
+      const Compaction& c = *sub_compact_.compaction;
       size_t kvsize = kv.key.size() + kv.value.size();
-      if (kv.level == -1 || kv.level == c_.output_level()) {
+      if (kv.level == -1 || kv.level == c.output_level()) {
         kvsize_promoted_ += kvsize;
       } else {
-        assert(kv.level == c_.start_level());
+        assert(kv.level == c.start_level());
         kvsize_retained_ += kvsize;
       }
     } else {
       assert(decision == Decision::kNextLevel);
-      if (ranges_it_ != promoted_ranges_.end() &&
-          ucmp_->Compare(ranges_it_->second.first_user_key, kv.ikey.user_key) <=
-              0) {
-        ranges_it_ = promoted_ranges_.erase(ranges_it_);
+      if (!promoted_ranges_in.empty()) {
+        auto it = promoted_ranges_in.begin();
+        if (ucmp_->Compare(it->second.first_user_key, kv.ikey.user_key) <= 0) {
+          promoted_ranges_in.erase(it);
+        }
       }
     }
     return make_optional<Elem>(decision, kv);
@@ -179,25 +191,23 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     }
   }
 
-  const Compaction& c_;
+  SubcompactionState& sub_compact_;
   const Slice start_;
   const Bound end_;
-  std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges_;
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
   Peekable<RALT::Iter> hot_iter_;
-  std::map<std::string, RangeFirstSeq, UserKeyCompare>::iterator ranges_it_;
 
   size_t kvsize_promoted_;
   size_t kvsize_retained_;
 };
 
-RouterIterator::RouterIterator(
-    RALT* ralt, const Compaction& c, CompactionIterator& c_iter, Slice start,
-    Bound end,
-    std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges)
+RouterIterator::RouterIterator(RALT* ralt, SubcompactionState& sub_compact,
+                               CompactionIterator& c_iter, Slice start,
+                               Bound end)
     : c_iter_(c_iter) {
+  const Compaction& c = *sub_compact.compaction;
   int start_level = c.level();
   int latter_level = c.output_level();
   if (ralt == NULL) {
@@ -212,8 +222,8 @@ RouterIterator::RouterIterator(
     uint32_t latter_tier = version.path_id(latter_level);
     if (start_tier != latter_tier) {
       assert(c.SupportsPerKeyPlacement());
-      iter_ = std::unique_ptr<RouterIteratorFD2SD>(new RouterIteratorFD2SD(
-          *ralt, c, c_iter, start, end, promoted_ranges));
+      iter_ = std::unique_ptr<RouterIteratorFD2SD>(
+          new RouterIteratorFD2SD(*ralt, sub_compact, c_iter, start, end));
     } else if (version.path_id(latter_level + 1) != latter_tier) {
       iter_ =
           std::unique_ptr<RouterIteratorIntraTier>(new RouterIteratorIntraTier(

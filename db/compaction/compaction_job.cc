@@ -1193,11 +1193,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   // Although the v2 aggregator is what the level iterator(s) know about,
   // the AddTombstones calls will be propagated down to the v1 aggregator.
   std::unique_ptr<InternalIterator> raw_input(versions_->MakeInputIterator(
-      read_options, sub_compact->compaction, range_del_agg.get(), sub_compact->promoted_ranges(),
-      file_options_for_read_, start, end));
+      read_options, sub_compact->compaction, range_del_agg.get(),
+      sub_compact->promoted_ranges_in(), file_options_for_read_, start, end));
   InternalIterator* input = raw_input.get();
 
-  InsertRanges(sub_compact->promoted_ranges(), ucmp,
+  InsertRanges(sub_compact->promoted_ranges_in(), ucmp,
                std::move(sub_compact->cached_ranges_to_promote));
 
   IterKey start_ikey;
@@ -1386,8 +1386,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                        .user_key = start_level_largest_user_key,
                        .excluded = false,
                    });
-  RouterIterator router_iter(ralt, *c, *c_iter, promotable_start,
-                             promotable_end, sub_compact->promoted_ranges());
+  RouterIterator router_iter(ralt, *sub_compact, *c_iter, promotable_start,
+                             promotable_end);
 
   std::string previous_user_key;
   auto compaction_start = rusty::time::Instant::now();
@@ -1654,41 +1654,37 @@ Status CompactionJob::FinishCompactionOutputFile(
   }
 
   if (outputs.is_penultimate_level()) {
-    // This is ugly. Maybe it's better to let RouterIterator return promoted
-    // ranges.
-    auto &promoted_ranges = sub_compact->promoted_ranges();
     const Comparator* ucmp =
         sub_compact->compaction->immutable_options()->user_comparator;
-    while (!promoted_ranges.empty() &&
-           ucmp->Compare(promoted_ranges.begin()->first,
-                         meta->smallest.user_key()) < 0) {
-      promoted_ranges.erase(promoted_ranges.begin());
-    }
-    if (!promoted_ranges.empty() &&
-        ucmp->Compare(promoted_ranges.begin()->second.first_user_key,
-                      meta->smallest.user_key()) < 0 &&
-        // To make sure that we don't erase a range that may still be
-        // referenced by the RouterIterator
-        ucmp->Compare(promoted_ranges.begin()->first,
-                      meta->largest.user_key()) <= 0) {
-      // For simplicity, we just drop the promoted range that crosses the
-      // boundary of SSTables.
-      promoted_ranges.erase(promoted_ranges.begin());
-    }
-    if (!promoted_ranges.empty() &&
-        ucmp->Compare(promoted_ranges.begin()->first,
-                      meta->largest.user_key()) <= 0) {
-      assert(ucmp->Compare(promoted_ranges.begin()->second.first_user_key,
-                            meta->smallest.user_key()) >= 0);
-    }
     std::vector<RangeSeq> promoted_ranges_vec;
-    while (!promoted_ranges.empty() &&
-            ucmp->Compare(promoted_ranges.begin()->first,
-                          meta->largest.user_key()) <= 0) {
-      auto range = promoted_ranges.begin();
-      promoted_ranges_vec.emplace_back(range->second.first_user_key,
-                                        range->first, range->second.sequence);
-      promoted_ranges.erase(range);
+    if (sub_compact->promoted_ranges_out().has_value()) {
+      auto& promoted_ranges = sub_compact->promoted_ranges_in();
+      if (!promoted_ranges.empty() &&
+          ucmp->Compare(promoted_ranges.begin()->second.first_user_key,
+                        meta->smallest.user_key()) < 0) {
+        // For simplicity, we just drop the promoted range that crosses the
+        // boundary of SSTables.
+        promoted_ranges.erase(promoted_ranges.begin());
+      }
+      while (!promoted_ranges.empty() &&
+             ucmp->Compare(promoted_ranges.begin()->first,
+                           meta->largest.user_key()) <= 0) {
+        auto node = promoted_ranges.extract(promoted_ranges.begin());
+        promoted_ranges_vec.emplace_back(
+            std::move(node.mapped().first_user_key), std::move(node.key()),
+            node.mapped().sequence);
+      }
+    } else {
+      auto& promoted_ranges = sub_compact->promoted_ranges_out().value();
+      while (!promoted_ranges.empty() &&
+             ucmp->Compare(promoted_ranges.front().first_user_key,
+                           meta->smallest.user_key()) < 0) {
+        promoted_ranges.pop_front();
+      }
+      while (!promoted_ranges.empty() && ucmp->Compare(promoted_ranges.front().last_user_key, meta->largest.user_key()) <= 0) {
+        promoted_ranges_vec.emplace_back(std::move(promoted_ranges.front()));
+        promoted_ranges.pop_front();
+      }
     }
     outputs.WritePromotedRanges(promoted_ranges_vec);
   }

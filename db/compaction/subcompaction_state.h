@@ -140,7 +140,7 @@ class SubcompactionState {
                             /*is_penultimate_level=*/false),
         penultimate_level_outputs_(c, c->start_level_path_id(), 1,
                                    /*is_penultimate_level=*/true),
-        promoted_ranges_(c->immutable_options()->user_comparator) {
+        promoted_ranges_in_(c->immutable_options()->user_comparator) {
     assert(compaction != nullptr);
     // Set output split key (used for RoundRobin feature) only for normal
     // compaction_outputs, output to penultimate_level feature doesn't support
@@ -219,8 +219,12 @@ class SubcompactionState {
     return s;
   }
 
-  std::map<std::string, RangeFirstSeq, UserKeyCompare> &promoted_ranges() {
-    return promoted_ranges_;
+  std::map<std::string, RangeFirstSeq, UserKeyCompare>& promoted_ranges_in() {
+    return promoted_ranges_in_;
+  }
+  // If nullopt, then promoted_ranges_in is the output
+  std::optional<std::deque<RangeSeq>>& promoted_ranges_out() {
+    return promoted_ranges_out_;
   }
 
  private:
@@ -231,7 +235,9 @@ class SubcompactionState {
   bool is_current_penultimate_level_ = false;
   bool has_penultimate_level_outputs_ = false;
 
-  std::map<std::string, RangeFirstSeq, UserKeyCompare> promoted_ranges_;
+  std::map<std::string, RangeFirstSeq, UserKeyCompare> promoted_ranges_in_;
+  bool promoted_ranges_pass_through_;
+  std::optional<std::deque<RangeSeq>> promoted_ranges_out_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE
