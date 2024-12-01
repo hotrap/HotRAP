@@ -1658,6 +1658,17 @@ Status CompactionJob::FinishCompactionOutputFile(
         sub_compact->compaction->immutable_options()->user_comparator;
     std::vector<RangeSeq> promoted_ranges_vec;
     if (sub_compact->promoted_ranges_out().has_value()) {
+      auto& promoted_ranges = sub_compact->promoted_ranges_out().value();
+      while (!promoted_ranges.empty() &&
+             ucmp->Compare(promoted_ranges.front().first_user_key,
+                           meta->smallest.user_key()) < 0) {
+        promoted_ranges.pop_front();
+      }
+      while (!promoted_ranges.empty() && ucmp->Compare(promoted_ranges.front().last_user_key, meta->largest.user_key()) <= 0) {
+        promoted_ranges_vec.emplace_back(std::move(promoted_ranges.front()));
+        promoted_ranges.pop_front();
+      }
+    } else {
       auto& promoted_ranges = sub_compact->promoted_ranges_in();
       if (!promoted_ranges.empty() &&
           ucmp->Compare(promoted_ranges.begin()->second.first_user_key,
@@ -1673,17 +1684,6 @@ Status CompactionJob::FinishCompactionOutputFile(
         promoted_ranges_vec.emplace_back(
             std::move(node.mapped().first_user_key), std::move(node.key()),
             node.mapped().sequence);
-      }
-    } else {
-      auto& promoted_ranges = sub_compact->promoted_ranges_out().value();
-      while (!promoted_ranges.empty() &&
-             ucmp->Compare(promoted_ranges.front().first_user_key,
-                           meta->smallest.user_key()) < 0) {
-        promoted_ranges.pop_front();
-      }
-      while (!promoted_ranges.empty() && ucmp->Compare(promoted_ranges.front().last_user_key, meta->largest.user_key()) <= 0) {
-        promoted_ranges_vec.emplace_back(std::move(promoted_ranges.front()));
-        promoted_ranges.pop_front();
       }
     }
     outputs.WritePromotedRanges(promoted_ranges_vec);

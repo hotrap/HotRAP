@@ -236,7 +236,6 @@ class SubcompactionState {
   bool has_penultimate_level_outputs_ = false;
 
   std::map<std::string, RangeFirstSeq, UserKeyCompare> promoted_ranges_in_;
-  bool promoted_ranges_pass_through_;
   std::optional<std::deque<RangeSeq>> promoted_ranges_out_;
 };
 
