@@ -334,10 +334,12 @@ class PromotionCache {
     void insert(std::string &&first_user_key, std::string &&last_user_key,
                 std::vector<std::pair<std::string, std::string>> &&records,
                 SequenceNumber _sequence, uint64_t _num_bytes) const {
-      std::unique_lock<std::mutex> lock(lock_);
+      size_t size = 0;
       for (const auto &record : records) {
-        size_ += record.first.size() + record.second.size();
+        size += record.first.size() + record.second.size();
       }
+      std::unique_lock<std::mutex> lock(lock_);
+      size_ += size;
       max_size_ = std::max(max_size_, size_);
       range_buffer_.emplace_back(std::move(first_user_key),
                                  std::move(last_user_key), std::move(records),
