@@ -329,7 +329,41 @@ class PromotionCache {
           sequence(_sequence),
           num_bytes(_num_bytes) {}
   };
-  MutexProtected<std::vector<RangeBufItem>> range_buffer_;
+  class RangeBuffer {
+   public:
+    void insert(std::string &&first_user_key, std::string &&last_user_key,
+                std::vector<std::pair<std::string, std::string>> &&records,
+                SequenceNumber _sequence, uint64_t _num_bytes) const {
+      std::unique_lock<std::mutex> lock(lock_);
+      for (const auto &record : records) {
+        size_ += record.first.size() + record.second.size();
+      }
+      max_size_ = std::max(max_size_, size_);
+      range_buffer_.emplace_back(std::move(first_user_key),
+                                 std::move(last_user_key), std::move(records),
+                                 _sequence, _num_bytes);
+    }
+    std::optional<std::vector<RangeBufItem>> take_all() const {
+      std::unique_lock<std::mutex> lock(lock_);
+      if (range_buffer_.empty()) return std::nullopt;
+      std::vector<RangeBufItem> range_buffer;
+      std::swap(range_buffer, range_buffer_);
+      size_ = 0;
+      return std::make_optional<std::vector<RangeBufItem>>(
+          std::move(range_buffer_));
+    }
+    size_t max_size() {
+      std::unique_lock<std::mutex> lock(lock_);
+      return max_size_;
+    }
+
+   private:
+    mutable std::mutex lock_;
+    mutable std::vector<RangeBufItem> range_buffer_;
+    mutable size_t size_ = 0;
+    mutable size_t max_size_ = 0;
+  };
+  RangeBuffer range_buffer_;
   RWMutexProtected<Mutable> mut_;
 
   RWMutexProtected<std::map<std::string, RangeFirstSeqVer>> promoted_ranges_;

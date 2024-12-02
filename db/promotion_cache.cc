@@ -135,6 +135,10 @@ PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
 }
 
 PromotionCache::~PromotionCache() {
+  ROCKS_LOG_INFO(
+      db_.immutable_db_options().info_log,
+      "Promotion cache at L%zu: max size %zu, max range buffer size %zu\n",
+      target_level_, max_size(), range_buffer_.max_size());
   assert(switcher_should_stop_);
   if (switcher_.joinable()) switcher_.join();
   assert(checker_should_stop_);
@@ -912,9 +916,8 @@ void PromotionCache::InsertOneRange(
   {
     auto mut = mut_.TryWrite();
     if (!mut.has_value()) {
-      range_buffer_.Lock()->emplace_back(
-          std::move(first_user_key), std::move(last_user_key),
-          std::move(records), sequence, num_bytes);
+      range_buffer_.insert(std::move(first_user_key), std::move(last_user_key),
+                           std::move(records), sequence, num_bytes);
       return;
     }
     mut.value()->InsertOneRange(std::move(records), std::move(first_user_key),
@@ -945,17 +948,12 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
       }
     }
   }
-  {
-    auto range_buffer = range_buffer_.Lock();
-    if (!range_buffer->empty()) {
-      std::vector<RangeBufItem> buffer;
-      std::swap(buffer, *range_buffer);
-      range_buffer.drop();
-      for (RangeBufItem &item : buffer) {
-        mut->InsertOneRange(
-            std::move(item.records), std::move(item.first_user_key),
-            std::move(item.last_user_key), item.sequence, item.num_bytes);
-      }
+  auto range_buffer = range_buffer_.take_all();
+  if (range_buffer.has_value()) {
+    for (RangeBufItem &item : range_buffer.value()) {
+      mut->InsertOneRange(
+          std::move(item.records), std::move(item.first_user_key),
+          std::move(item.last_user_key), item.sequence, item.num_bytes);
     }
   }
 }
