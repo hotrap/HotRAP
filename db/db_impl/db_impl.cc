@@ -2146,9 +2146,11 @@ class TieredIterator : public InternalIterator {
 
   void RecordAccess(const Comparator* ucmp, Slice internal_key,
                     const ParsedInternalKey& ikey) {
+    if (num_accessed_bytes_ > promote_retain_threshold) return;
     bool not_stale_version = UpdateLastUserKey(ucmp, ikey);
     if (not_stale_version) {
       num_accessed_bytes_ += internal_key.size() + value().size();
+      if (num_accessed_bytes_ > promote_retain_threshold) return;
       if (iter_ == merging_it_) {
         std::pair<size_t, Slice> src_value = merging_it_with_src_->value();
         if (src_value.first == kSrcSlowDisk) {
@@ -2174,9 +2176,16 @@ class TieredIterator : public InternalIterator {
     const MutableCFOptions& mutable_cf_options =
         super_version_->mutable_cf_options;
     if (seek_user_key_.empty()) {
+      assert(num_accessed_bytes_ == 0);
       assert(records_to_promote_.empty());
       assert(last_user_key_.empty());
-      assert(num_accessed_bytes_ == 0);
+      return;
+    }
+    if (num_accessed_bytes_ > promote_retain_threshold) {
+      num_accessed_bytes_ = 0;
+      records_to_promote_.clear();
+      seek_user_key_.clear();
+      last_user_key_.clear();
       return;
     }
     assert(!last_user_key_.empty());
@@ -2186,9 +2195,9 @@ class TieredIterator : public InternalIterator {
       assert(records_to_promote_.empty());
       mutable_cf_options.ralt->AccessRange(seek_user_key_, last_user_key_,
                                            num_accessed_bytes_, 0);
+      num_accessed_bytes_ = 0;
       seek_user_key_.clear();
       last_user_key_.clear();
-      num_accessed_bytes_ = 0;
       return;
     }
     RecordTick(stats, SCAN_HIT_T1, 1);
@@ -2199,14 +2208,17 @@ class TieredIterator : public InternalIterator {
     cache.InsertOneRange(mutable_cf_options, std::move(records_to_promote_),
                          std::move(seek_user_key_), std::move(last_user_key_),
                          sequence_, num_accessed_bytes_);
+    num_accessed_bytes_ = 0;
     records_to_promote_ = std::vector<std::pair<std::string, std::string>>();
     seek_user_key_ = std::string();
     last_user_key_ = std::string();
-    num_accessed_bytes_ = 0;
   }
 
   static constexpr size_t kSrcFastDisk = 0;
   static constexpr size_t kSrcSlowDisk = 1;
+
+  // I don't think we can get the block size here. So I hard code it.
+  static constexpr size_t promote_retain_threshold = 16 * 1024;
 
   Arena* arena_;
   SequenceNumber sequence_;
@@ -2224,11 +2236,11 @@ class TieredIterator : public InternalIterator {
   Merge2Iters* merging_it_with_src_;
   IgnoreSource* merging_it_;
 
+  uint64_t num_accessed_bytes_;
   std::vector<std::pair<std::string, std::string>> records_to_promote_;
   std::string seek_user_key_;
   std::string last_user_key_;
   bool is_visible_;
-  uint64_t num_accessed_bytes_;
 };
 
 }  // namespace
