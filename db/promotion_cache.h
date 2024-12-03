@@ -216,6 +216,8 @@ class PromotionCache {
   // For statistics
   size_t max_size() const { return max_size_.load(std::memory_order_relaxed); }
 
+  size_t range_buffer_max_size() const { return range_buffer_.max_size(); }
+
  private:
   class Mutable {
    public:
@@ -354,7 +356,7 @@ class PromotionCache {
       return std::make_optional<std::vector<RangeBufItem>>(
           std::move(range_buffer_));
     }
-    size_t max_size() {
+    size_t max_size() const {
       std::unique_lock<std::mutex> lock(lock_);
       return max_size_;
     }
