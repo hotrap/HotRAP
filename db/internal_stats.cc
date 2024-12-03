@@ -2240,8 +2240,8 @@ void InternalStats::DumpCFStatsNoFileHistogram(bool is_periodic,
 
   auto caches = cfd_->promotion_caches().Read();
   for (const auto& cache : *caches) {
-    value->append("compaction_cache at level " + std::to_string(cache.first) +
-                  ": max_size " + std::to_string(cache.second.max_size()));
+    value->append("Promotion cache at L" + std::to_string(cache.first) +
+                  ": max size " + std::to_string(cache.second.max_size()));
   }
 }
 
