@@ -43,10 +43,10 @@ struct Elem {
 
 class RouterIterator {
  public:
-  RouterIterator(RALT* ralt, const Compaction& c, CompactionIterator& c_iter,
-                 Slice start, Bound end);
+  RouterIterator(const Compaction& c, CompactionIterator& c_iter, Slice start,
+                 Bound end);
 
-	const CompactionIterator &c_iter() const { return c_iter_; }
+  const CompactionIterator& c_iter() const { return c_iter_; }
 
   bool Valid() const { return cur_.has_value(); }
   void Next() {

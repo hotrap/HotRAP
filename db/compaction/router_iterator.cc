@@ -176,12 +176,12 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   size_t kvsize_retained_;
 };
 
-RouterIterator::RouterIterator(RALT* ralt, const Compaction& c,
-                               CompactionIterator& c_iter, Slice start,
-                               Bound end)
+RouterIterator::RouterIterator(const Compaction& c, CompactionIterator& c_iter,
+                               Slice start, Bound end)
     : c_iter_(c_iter) {
   int start_level = c.level();
   int latter_level = c.output_level();
+  RALT* ralt = c.mutable_cf_options()->ralt.get();
   if (ralt == NULL) {
     // Future work(hotrap): Handle the case that it's not empty, which is
     // possible when ralt was not NULL but then is set to NULL.
