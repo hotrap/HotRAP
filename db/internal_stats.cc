@@ -2250,6 +2250,13 @@ void InternalStats::DumpCFStatsNoFileHistogram(bool is_periodic,
                   ", max range buffer size " +
                   std::to_string(pc.range_buffer_max_size()));
   }
+
+  Cache* cache = GetBlockCacheForStats();
+  if (cache) {
+    value->append("Block cache usage " + std::to_string(cache->GetUsage()) +
+                  ", pinned usage " + std::to_string(cache->GetPinnedUsage()) +
+                  '\n');
+  }
 }
 
 void InternalStats::DumpCFFileHistogram(std::string* value) {
