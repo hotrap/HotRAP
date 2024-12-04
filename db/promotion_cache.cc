@@ -224,8 +224,8 @@ void PromotionCache::checker() {
   std::atomic<bool> printer_should_stop(false);
   clockid_t clock_id;
   pthread_getcpuclockid(pthread_self(), &clock_id);
-  std::thread printer(print_stats_in_bg, &printer_should_stop,
-                      db_.dbname_, target_level_, clock_id);
+  std::thread printer(print_stats_in_bg, &printer_should_stop, db_.dbname_,
+                      target_level_, clock_id);
   for (;;) {
     CheckerQueueElem elem;
     {
@@ -250,7 +250,7 @@ void PromotionCache::checker() {
 }
 void PromotionCache::check(CheckerQueueElem &elem) {
   SuperVersion *sv = elem.sv;
-  RALT *ralt = sv->mutable_cf_options.ralt;
+  RALT *ralt = sv->mutable_cf_options.ralt.get();
   if (ralt == nullptr) return;
 
   auto iter = elem.iter;
@@ -351,10 +351,11 @@ void PromotionCache::check(CheckerQueueElem &elem) {
       ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
                       s.ToString().c_str());
     }
-      PinnedIteratorsManager pinned_iters_mgr;
+    PinnedIteratorsManager pinned_iters_mgr;
     sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, nullptr, &s,
-                     &merge_context, &max_covering_tombstone_seq, &pinned_iters_mgr,
-                     nullptr, nullptr, nullptr, nullptr, nullptr, false, target_level_);
+                     &merge_context, &max_covering_tombstone_seq,
+                     &pinned_iters_mgr, nullptr, nullptr, nullptr, nullptr,
+                     nullptr, false, target_level_);
     if (s.ok() || s.IsIncomplete()) {
       return true;
     }
@@ -480,7 +481,8 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     cfd->imm()->Add(m, &memtables_to_free);
     db_.InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
     DBImpl::FlushRequest flush_req;
-    db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}), FlushReason::kPromotionCacheFull, &flush_req);
+    db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
+                             FlushReason::kPromotionCacheFull, &flush_req);
     db_.SchedulePendingFlush(flush_req);
     db_.MaybeScheduleFlushOrCompaction();
 

@@ -1193,7 +1193,7 @@ void MutableCFOptions::Dump(Logger* log) const {
                      : "disable");
   ROCKS_LOG_INFO(log, "                   last_level_temperature: %d",
                  static_cast<int>(last_level_temperature));
-  ROCKS_LOG_INFO(log, "ralt: %p", ralt);
+  ROCKS_LOG_INFO(log, "ralt: %p", ralt.get());
 }
 
 MutableCFOptions::MutableCFOptions(const Options& options)

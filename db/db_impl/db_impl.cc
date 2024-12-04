@@ -1995,7 +1995,7 @@ class TieredIterator : public InternalIterator {
   void Seek(const Slice& internal_key) final override {
     TryPromote();
 
-    RALT* ralt = super_version_->mutable_cf_options.ralt;
+    RALT* ralt = super_version_->mutable_cf_options.ralt.get();
 
     ParsedInternalKey ikey;
     Status s = ParseInternalKey(internal_key, &ikey, false);
@@ -2289,7 +2289,7 @@ InternalIterator* DBImpl::NewInternalIterator(
     if (read_options.read_tier != kMemtableTier) {
       Version* version = super_version->current;
       VersionStorageInfo* storage_info = version->storage_info();
-      RALT* ralt = super_version->mutable_cf_options.ralt;
+      RALT* ralt = super_version->mutable_cf_options.ralt.get();
       internal_iter = nullptr;
       if (ralt) {
         int first_level_in_sd = 0;

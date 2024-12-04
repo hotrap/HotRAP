@@ -165,7 +165,7 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   // Default: nullptr
   std::shared_ptr<CompactionFilterFactory> compaction_filter_factory = nullptr;
 
-  RALT* ralt = nullptr;
+  std::shared_ptr<RALT> ralt;
 
   // -------------------
   // Parameters that affect performance

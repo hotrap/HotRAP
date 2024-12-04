@@ -28,6 +28,7 @@
 #endif
 
 #include <autotuner.h>
+#include <ralt.h>
 
 #include <atomic>
 #include <cinttypes>
@@ -2161,7 +2162,7 @@ class ReporterAgent {
         }
       }
       if (options_.ralt) {
-        ::RALT& ralt = *static_cast<::RALT*>(options_.ralt);
+        ::RALT& ralt = *static_cast<::RALT*>(options_.ralt.get());
         report += ',' + std::to_string(ralt.GetRealHotSetSize()) + ',' +
                   std::to_string(ralt.GetRealPhySize());
       }
@@ -3484,7 +3485,7 @@ class Benchmark {
 
     open_options_.max_bytes_for_level_multiplier_additional.clear();
     if (!FLAGS_ralt_path.empty()) {
-      open_options_.ralt = new ::RALT(
+      open_options_.ralt = std::make_shared<::RALT>(
           open_options_.comparator, FLAGS_ralt_path.c_str(),
           FLAGS_max_hot_set_size, FLAGS_max_hot_set_size,
           FLAGS_max_hot_set_size, FLAGS_max_ralt_size, FLAGS_ralt_bloom_bits);
@@ -3981,7 +3982,6 @@ class Benchmark {
       fprintf(stdout, "Secondary instance updated  %" PRIu64 " times.\n",
               secondary_db_updates_);
     }
-    delete open_options_.ralt;
   }
 
  private:
