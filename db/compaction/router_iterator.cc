@@ -32,16 +32,16 @@ class CompactionIterWrapper : public TraitIterator<IKeyValueLevel> {
   CompactionIterWrapper(CompactionIterWrapper&& rhs)
       : c_iter_(rhs.c_iter_), first_(rhs.first_) {}
   CompactionIterWrapper& operator=(const CompactionIterWrapper&& rhs) = delete;
-  optional<IKeyValueLevel> next() override {
+  std::optional<IKeyValueLevel> next() override {
     if (first_) {
       first_ = false;
     } else {
       c_iter_.Next();
     }
     if (c_iter_.Valid())
-      return make_optional<IKeyValueLevel>(c_iter_);
+      return std::make_optional<IKeyValueLevel>(c_iter_);
     else
-      return nullopt;
+      return std::nullopt;
   }
 
  private:
@@ -53,12 +53,12 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
  public:
   IteratorWithoutRouter(const Compaction& c, CompactionIterator& c_iter)
       : c_iter_(c_iter) {}
-  optional<Elem> next() override {
-    optional<IKeyValueLevel> ret = c_iter_.next();
+  std::optional<Elem> next() override {
+    std::optional<IKeyValueLevel> ret = c_iter_.next();
     if (ret.has_value())
-      return make_optional<Elem>(Decision::kNextLevel, ret.value());
+      return std::make_optional<Elem>(Decision::kNextLevel, ret.value());
     else
-      return nullopt;
+      return std::nullopt;
   }
 
  private:
@@ -77,17 +77,17 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
     auto stats = c_.immutable_options()->stats;
     RecordTick(stats, promotion_type_, promoted_bytes_);
   }
-  optional<Elem> next() override {
-    optional<IKeyValueLevel> ret = iter_.next();
+  std::optional<Elem> next() override {
+    std::optional<IKeyValueLevel> ret = iter_.next();
     if (!ret.has_value()) {
-      return nullopt;
+      return std::nullopt;
     }
     IKeyValueLevel& kv = ret.value();
     if (kv.level != -1) {
-      return make_optional<Elem>(Decision::kNextLevel, kv);
+      return std::make_optional<Elem>(Decision::kNextLevel, kv);
     }
     promoted_bytes_ += kv.key.size() + kv.value.size();
-    return make_optional<Elem>(Decision::kNextLevel, kv);
+    return std::make_optional<Elem>(Decision::kNextLevel, kv);
   }
 
  private:
@@ -114,10 +114,10 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
     RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
   }
-  optional<Elem> next() override {
-    optional<IKeyValueLevel> kv_ret = iter_.next();
+  std::optional<Elem> next() override {
+    std::optional<IKeyValueLevel> kv_ret = iter_.next();
     if (!kv_ret.has_value()) {
-      return nullopt;
+      return std::nullopt;
     }
     const IKeyValueLevel& kv = kv_ret.value();
     RangeBounds range{
@@ -129,7 +129,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
         .end = end_,
     };
     if (!range.contains(kv.ikey.user_key, ucmp_)) {
-      return make_optional<Elem>(Decision::kNextLevel, kv);
+      return std::make_optional<Elem>(Decision::kNextLevel, kv);
     }
     Decision decision = route(kv);
     if (decision == Decision::kStartLevel) {
@@ -143,7 +143,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     } else {
       assert(decision == Decision::kNextLevel);
     }
-    return make_optional<Elem>(decision, kv);
+    return std::make_optional<Elem>(decision, kv);
   }
 
  private:

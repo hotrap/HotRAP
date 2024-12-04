@@ -62,7 +62,7 @@ class RouterIterator {
  private:
   CompactionIterator &c_iter_;
   std::unique_ptr<TraitIterator<Elem>> iter_;
-  optional<Elem> cur_;
+  std::optional<Elem> cur_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE
