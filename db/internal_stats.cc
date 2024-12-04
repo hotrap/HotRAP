@@ -2243,6 +2243,13 @@ void InternalStats::DumpCFStatsNoFileHistogram(bool is_periodic,
     value->append("Promotion cache at L" + std::to_string(cache.first) +
                   ": max size " + std::to_string(cache.second.max_size()));
   }
+
+  Cache* cache = GetBlockCacheForStats();
+  if (cache) {
+    value->append("Block cache usage " + std::to_string(cache->GetUsage()) +
+                  ", pinned usage " + std::to_string(cache->GetPinnedUsage()) +
+                  '\n');
+  }
 }
 
 void InternalStats::DumpCFFileHistogram(std::string* value) {
