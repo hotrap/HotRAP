@@ -142,6 +142,7 @@ class PromotionCache {
   void SwitchMutablePromotionCache();
   void switcher();
   void checker();
+  void check(CheckerQueueElem &elem);
 
   DBImpl &db_;
   ColumnFamilyData &cfd_;
