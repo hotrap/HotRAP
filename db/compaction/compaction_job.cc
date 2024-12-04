@@ -1116,7 +1116,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "anymore.");
     return;
   }
-  RALT* ralt = c->mutable_cf_options()->ralt;
+  RALT* ralt = c->mutable_cf_options()->ralt.get();
   TimerGuard timer_guard =
       cfd->internal_stats()
           ->hotrap_timers_per_level()

@@ -167,7 +167,7 @@ void PromotionCache::checker() {
     std::unordered_set<std::reference_wrapper<const std::string>, RefHash,
                        RefEq>
         stably_hot;
-    RALT *ralt = sv->mutable_cf_options.ralt;
+    RALT *ralt = sv->mutable_cf_options.ralt.get();
     const Comparator *ucmp = cfd->ioptions()->user_comparator;
     auto stats = cfd->ioptions()->stats;
     if (ralt) {
