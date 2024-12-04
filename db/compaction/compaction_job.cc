@@ -47,7 +47,6 @@
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
-#include "rocksdb/ralt.h"
 #include "rocksdb/sst_partitioner.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
@@ -1084,12 +1083,10 @@ void CompactionJob::NotifyOnSubcompactionBegin(
     listener->OnSubcompactionBegin(info);
   }
   info.status.PermitUncheckedError();
-
 }
 
 void CompactionJob::NotifyOnSubcompactionCompleted(
     SubcompactionState* sub_compact) {
-
   if (db_options_.listeners.empty()) {
     return;
   }
@@ -1146,7 +1143,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "anymore.");
     return;
   }
-  RALT* ralt = c->mutable_cf_options()->ralt.get();
   TimerGuard timer_guard =
       cfd->internal_stats()
           ->hotrap_timers_per_level()
@@ -1381,10 +1377,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
                                      &start_level_largest_user_key);
   Slice promotable_start =
-      !start.has_value() ? start_level_smallest_user_key
-                    : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
-                           ? start_level_smallest_user_key
-                           : *start);
+      !start.has_value()
+          ? start_level_smallest_user_key
+          : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
+                 ? start_level_smallest_user_key
+                 : *start);
   Bound promotable_end =
       !end.has_value()
           ? Bound{.user_key = start_level_largest_user_key, .excluded = false}
@@ -1394,7 +1391,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
                        .user_key = start_level_largest_user_key,
                        .excluded = false,
                    });
-  RouterIterator router_iter(ralt, *sub_compact, *c_iter, promotable_start,
+  RouterIterator router_iter(*sub_compact, *c_iter, promotable_start,
                              promotable_end);
 
   std::string previous_user_key;
@@ -1409,8 +1406,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   while (status.ok() && !cfd->IsDropped() && router_iter.Valid()) {
     // Invariant: router_iter.status() is guaranteed to be OK if
     // router_iter->Valid() returns true.
-    assert(!end.has_value() ||
-           ucmp->Compare(router_iter.user_key(), *end) < 0);
+    assert(!end.has_value() || ucmp->Compare(router_iter.user_key(), *end) < 0);
 
     if (c_iter_stats.num_input_records % kRecordStatsEvery ==
         kRecordStatsEvery - 1) {

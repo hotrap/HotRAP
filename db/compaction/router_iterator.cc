@@ -138,7 +138,7 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     }
     Decision decision = route(kv);
     auto& promoted_ranges_in = sub_compact_.promoted_ranges_in();
-		assert(sub_compact_.promoted_ranges_out().has_value());
+    assert(sub_compact_.promoted_ranges_out().has_value());
     auto& promoted_ranges_out = sub_compact_.promoted_ranges_out().value();
     while (!promoted_ranges_in.empty()) {
       auto it = promoted_ranges_in.begin();
@@ -203,13 +203,14 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
   size_t kvsize_retained_;
 };
 
-RouterIterator::RouterIterator(RALT* ralt, SubcompactionState& sub_compact,
+RouterIterator::RouterIterator(SubcompactionState& sub_compact,
                                CompactionIterator& c_iter, Slice start,
                                Bound end)
     : c_iter_(c_iter) {
   const Compaction& c = *sub_compact.compaction;
   int start_level = c.level();
   int latter_level = c.output_level();
+  RALT* ralt = c.mutable_cf_options()->ralt.get();
   if (ralt == NULL) {
     // Future work(hotrap): Handle the case that it's not empty, which is
     // possible when ralt was not NULL but then is set to NULL.
