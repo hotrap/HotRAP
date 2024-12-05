@@ -2240,9 +2240,11 @@ void InternalStats::DumpCFStatsNoFileHistogram(bool is_periodic,
 
   auto caches = cfd_->promotion_caches().Read();
   for (const auto& cache : *caches) {
+    const auto& pc = cache.second;
     value->append("Promotion cache at L" + std::to_string(cache.first) +
-                  ": max size " + std::to_string(cache.second.max_size()) +
-                  '\n');
+                  ": max size " + std::to_string(pc.max_size()) +
+                  ", max mut buffer size " +
+                  std::to_string(pc.mut_buffer_max_size()) + '\n');
   }
 
   Cache* cache = GetBlockCacheForStats();

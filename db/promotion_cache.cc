@@ -364,8 +364,7 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
   {
     auto mut = mut_.TryRead();
     if (!mut.has_value()) {
-      mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
-                                       std::move(value));
+      mut_buffer_.insert(std::move(user_key), sequence, std::move(value));
       return;
     }
     mut_size =
@@ -377,12 +376,9 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
 }
 
 void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
-  auto mut_buffer = mut_buffer_.Lock();
-  if (mut_buffer->empty()) return;
-  std::vector<MutBufItem> buffer;
-  std::swap(buffer, *mut_buffer);
-  mut_buffer.drop();
-  for (MutBufItem &item : buffer) {
+  auto buffer = mut_buffer_.take_all();
+  if (!buffer.has_value()) return;
+  for (MutBufItem &item : buffer.value()) {
     mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
   }
 }
