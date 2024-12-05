@@ -2248,7 +2248,7 @@ void InternalStats::DumpCFStatsNoFileHistogram(bool is_periodic,
     value->append("Promotion cache at L" + std::to_string(cache.first) +
                   ": max size " + std::to_string(pc.max_size()) +
                   ", max range buffer size " +
-                  std::to_string(pc.range_buffer_max_size()));
+                  std::to_string(pc.range_buffer_max_size()) + '\n');
   }
 
   Cache* cache = GetBlockCacheForStats();
