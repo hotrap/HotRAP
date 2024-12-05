@@ -889,8 +889,7 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
   {
     auto mut = mut_.TryWrite();
     if (!mut.has_value()) {
-      mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
-                                       std::move(value));
+      mut_buffer_.insert(std::move(user_key), sequence, std::move(value));
       return;
     }
     mut.value()->Insert(std::move(user_key), sequence, std::move(value));
@@ -939,15 +938,10 @@ void PromotionCache::InsertOneRange(
 }
 
 void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
-  {
-    auto mut_buffer = mut_buffer_.Lock();
-    if (!mut_buffer->empty()) {
-      std::vector<MutBufItem> buffer;
-      std::swap(buffer, *mut_buffer);
-      mut_buffer.drop();
-      for (MutBufItem &item : buffer) {
-        mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
-      }
+  auto buffer = mut_buffer_.take_all();
+  if (buffer.has_value()) {
+    for (MutBufItem &item : buffer.value()) {
+      mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
     }
   }
   auto range_buffer = range_buffer_.take_all();
