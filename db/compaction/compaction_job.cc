@@ -49,7 +49,6 @@
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
-#include "rocksdb/ralt.h"
 #include "rocksdb/sst_partitioner.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
@@ -1118,7 +1117,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "anymore.");
     return;
   }
-  RALT* ralt = c->mutable_cf_options()->ralt;
   TimerGuard timer_guard =
       cfd->internal_stats()
           ->hotrap_timers_per_level()
@@ -1350,7 +1348,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
                                      &start_level_largest_user_key);
 
-  RouterIterator router_iter(ralt, *c, *c_iter,
+  RouterIterator router_iter(*c, *c_iter,
                              start_level_smallest_user_key);
 
   std::string previous_user_key;

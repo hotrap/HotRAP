@@ -2439,7 +2439,7 @@ void Version::TryPromote(
     DBImpl& db, ColumnFamilyData& cfd,
     std::vector<std::reference_wrapper<FileMetaData>> cd_files, int hit_level,
     Slice user_key, SequenceNumber seq, PinnableSlice* value) {
-  RALT* ralt = mutable_cf_options_.ralt;
+  RALT* ralt = mutable_cf_options_.ralt.get();
   if (!ralt || !value) return;
   // I don't think we can get the block size in this context. So I hard code
   // the promotion threshold. Maybe we should make it an option of RALT.
@@ -2476,7 +2476,7 @@ void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
                           PinnableSlice* value, PinnableWideColumns* columns,
                           Status& status) {
-  RALT* ralt = mutable_cf_options_.ralt;
+  RALT* ralt = mutable_cf_options_.ralt.get();
   if (ralt) {
     switch (level_path_id_[hit_level]) {
       case 0:
@@ -2696,7 +2696,7 @@ void Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
       if (level_pc->second.Get(cfd_->internal_stats(), env_get.k.user_key(),
                                env_get.value)) {
         RecordTick(cfd_->ioptions()->stats, Tickers::PROMOTION_CACHE_GET_HIT);
-        RALT* ralt = mutable_cf_options_.ralt;
+        RALT* ralt = mutable_cf_options_.ralt.get();
         if (ralt) {
           ralt->Access(env_get.k.user_key(), env_get.value->size());
         }
@@ -4345,7 +4345,7 @@ void PickSSTAccurateHotSize(const Version& version,
                             SystemClock* clock, int level,
                             int num_non_empty_levels, uint64_t ttl,
                             std::vector<Fsize>* temp) {
-  RALT* ralt = version.GetMutableCFOptions().ralt;
+  RALT* ralt = version.GetMutableCFOptions().ralt.get();
   std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> benefit_cost;
   auto next_level_it = next_level_files.begin();
 
