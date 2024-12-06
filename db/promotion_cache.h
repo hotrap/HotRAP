@@ -105,6 +105,7 @@ class PromotionCache {
 
   // For statistics
   size_t max_size() const { return max_size_.load(std::memory_order_relaxed); }
+  size_t mut_buffer_max_size() const { return mut_buffer_.max_size(); }
 
  private:
   class Mutable {
@@ -142,6 +143,7 @@ class PromotionCache {
   void SwitchMutablePromotionCache();
   void switcher();
   void checker();
+  void check(CheckerQueueElem &elem);
 
   DBImpl &db_;
   ColumnFamilyData &cfd_;
@@ -180,7 +182,35 @@ class PromotionCache {
                std::string &&_value)
         : user_key(std::move(_user_key)), seq(_seq), value(std::move(_value)) {}
   };
-  MutexProtected<std::vector<MutBufItem>> mut_buffer_;
+  class MutBuffer {
+   public:
+    void insert(std::string &&user_key, SequenceNumber seq,
+                std::string &&value) const {
+      std::unique_lock<std::mutex> lock(lock_);
+      size_ += user_key.size() + value.size();
+      max_size_ = std::max(max_size_, size_);
+      buffer_.emplace_back(std::move(user_key), seq, std::move(value));
+    }
+    std::optional<std::vector<MutBufItem>> take_all() const {
+      std::unique_lock<std::mutex> lock(lock_);
+      if (buffer_.empty()) return std::nullopt;
+      std::vector<MutBufItem> ret;
+      std::swap(ret, buffer_);
+      size_ = 0;
+      return std::make_optional(std::move(ret));
+    }
+    size_t max_size() const {
+      std::unique_lock<std::mutex> lock(lock_);
+      return max_size_;
+    }
+
+   private:
+    mutable std::mutex lock_;
+    mutable std::vector<MutBufItem> buffer_;
+    mutable size_t size_ = 0;
+    mutable size_t max_size_ = 0;
+  };
+  MutBuffer mut_buffer_;
   RWMutexProtected<Mutable> mut_;
 
   RWMutexProtected<ImmPromotionCacheList> imm_list_;

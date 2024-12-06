@@ -3,12 +3,12 @@
 #include <algorithm>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <ostream>
 
 #include "rocksdb/comparator.h"
 #include "rocksdb/customizable.h"
 #include "rocksdb/rocksdb_namespace.h"
-#include "rocksdb/utilities/backports.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -21,7 +21,7 @@ class TraitIterator {
   TraitIterator &operator=(const TraitIterator &) = delete;
   virtual ~TraitIterator() = default;
   // TODO: Return std::optional<T> if upgrade to C++17
-  virtual optional<T> next() = 0;
+  virtual std::optional<T> next() = 0;
 };
 
 template <typename T>
@@ -51,16 +51,16 @@ class Peekable : public TraitPeek<typename Iter::Item> {
     if (peeked_.has_value()) return &peeked_.value();
     return nullptr;
   }
-  optional<Item> next() override {
+  std::optional<Item> next() override {
     if (!peeked_.has_value()) return iter_.next();
-    optional<Item> ret(std::move(peeked_.value()));
+    std::optional<Item> ret(std::move(peeked_.value()));
     peeked_.reset();
     return ret;
   }
 
  private:
   Iter iter_;
-  optional<Item> peeked_;
+  std::optional<Item> peeked_;
 };
 
 template <typename Item>
@@ -71,9 +71,9 @@ class Peekable<std::unique_ptr<TraitIterator<Item>>> : public TraitPeek<Item> {
 
   ~Peekable() override = default;
 
-  optional<Item> next() final override {
+  std::optional<Item> next() final override {
     if (!peeked_.has_value()) return iter_->next();
-    optional<Item> ret(std::move(peeked_.value()));
+    std::optional<Item> ret(std::move(peeked_.value()));
     peeked_.reset();
     return ret;
   }
@@ -86,7 +86,7 @@ class Peekable<std::unique_ptr<TraitIterator<Item>>> : public TraitPeek<Item> {
 
  private:
   std::unique_ptr<TraitIterator<Item>> iter_;
-  optional<Item> peeked_;
+  std::optional<Item> peeked_;
 };
 
 struct Bound {

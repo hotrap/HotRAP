@@ -14,10 +14,10 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 #include "port/port.h"
-#include "rocksdb/utilities/backports.h"
 #include "util/fastrange.h"
 #include "util/hash.h"
 
@@ -274,17 +274,17 @@ class RWMutexProtected {
     lock_.WriteLock();
     return WriteGuard<T>(data_, &lock_);
   }
-  optional<ReadGuard<T>> TryRead() const {
+  std::optional<ReadGuard<T>> TryRead() const {
     if (lock_.TryReadLock())
       return ReadGuard<T>(data_, &lock_);
     else
-      return nullopt;
+      return std::nullopt;
   }
-  optional<WriteGuard<T>> TryWrite() const {
+  std::optional<WriteGuard<T>> TryWrite() const {
     if (lock_.TryWriteLock())
       return WriteGuard<T>(data_, &lock_);
     else
-      return nullopt;
+      return std::nullopt;
   }
 
  private:

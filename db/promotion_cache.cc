@@ -122,26 +122,10 @@ static void print_stats_in_bg(std::atomic<bool> *should_stop,
   }
 }
 
-static void mark_updated(ImmPromotionCache &cache,
-                         const std::string &user_key) {
-  auto updated = cache.updated.Lock();
-  updated->insert(user_key);
-}
 // Will unref sv
 void PromotionCache::checker() {
   pthread_setname_np(pthread_self(), "checker");
 
-  struct RefHash {
-    size_t operator()(std::reference_wrapper<const std::string> x) const {
-      return std::hash<std::string>()(x.get());
-    }
-  };
-  struct RefEq {
-    bool operator()(std::reference_wrapper<const std::string> lhs,
-                    std::reference_wrapper<const std::string> rhs) const {
-      return lhs.get() == rhs.get();
-    }
-  };
   std::atomic<bool> printer_should_stop(false);
   clockid_t clock_id;
   pthread_getcpuclockid(pthread_self(), &clock_id);
@@ -158,147 +142,169 @@ void PromotionCache::checker() {
       elem = checker_queue_.front();
       checker_queue_.pop();
     }
-    SuperVersion *sv = elem.sv;
-    auto iter = elem.iter;
-    ColumnFamilyData *cfd = sv->cfd;
-    const auto &hotrap_timers = cfd->internal_stats()->hotrap_timers();
-    ImmPromotionCache &cache = *iter;
-
-    std::unordered_set<std::reference_wrapper<const std::string>, RefHash,
-                       RefEq>
-        stably_hot;
-    RALT *ralt = sv->mutable_cf_options.ralt;
-    const Comparator *ucmp = cfd->ioptions()->user_comparator;
-    auto stats = cfd->ioptions()->stats;
-    if (ralt) {
-      TimerGuard check_stably_hot_start =
-          hotrap_timers.timer(TimerType::kCheckStablyHot).start();
-      for (const auto &item : cache.cache) {
-        const std::string &user_key = item.first;
-        bool is_stably_hot = item.second.count > 1 || ralt->IsHot(user_key);
-        ralt->Access(item.first, item.second.value.size());
-        if (is_stably_hot) {
-          stably_hot.insert(user_key);
-        } else {
-          RecordTick(stats, Tickers::ACCESSED_COLD_BYTES,
-                     user_key.size() + item.second.value.size());
-        }
-      }
-    }
-    TimerGuard check_newer_version_start =
-        hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
-    for (const std::string &user_key : stably_hot) {
-      LookupKey key(user_key, kMaxSequenceNumber);
-      Status s;
-      MergeContext merge_context;
-      SequenceNumber max_covering_tombstone_seq = 0;
-      if (sv->imm->Get(key, nullptr, nullptr, nullptr, &s, &merge_context,
-                       &max_covering_tombstone_seq, read_options_)) {
-        mark_updated(cache, user_key);
-        continue;
-      }
-      if (!s.ok()) {
-        ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
-                        s.ToString().c_str());
-      }
-      PinnedIteratorsManager pinned_iters_mgr;
-      sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, nullptr, &s,
-                       &merge_context, &max_covering_tombstone_seq, &pinned_iters_mgr,
-                       nullptr, nullptr, nullptr, nullptr, nullptr, false,
-                       target_level_);
-      if (s.ok() || s.IsIncomplete()) {
-        mark_updated(cache, user_key);
-        continue;
-      }
-      assert(s.IsNotFound());
-    }
-
-    db_.mutex()->Lock();
-    // No need to SetNextLogNumber, because we don't delete any log file
-    size_t bytes_to_flush = 0;
-    {
-      auto updated = cache.updated.Lock();
-      // We are the only one who is accessing this imm PC, so we can modify it.
-      auto it = cache.cache.begin();
-      while (it != cache.cache.end()) {
-        const std::string &user_key = it->first;
-        const std::string &value = it->second.value;
-        if (stably_hot.find(user_key) == stably_hot.end()) {
-          it = cache.cache.erase(it);
-          continue;
-        }
-        if (updated->find(user_key) != updated->end()) {
-          RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
-                     user_key.size() + value.size());
-          it = cache.cache.erase(it);
-          continue;
-        }
-        bytes_to_flush += user_key.size() + value.size();
-        ++it;
-      }
-    }
-    if (bytes_to_flush * 2 < sv->mutable_cf_options.write_buffer_size) {
-      // There are too few data to flush. There will be too much compaction I/O
-      // in L1 if we force to flush them to L0. Therefore, we just insert them
-      // back to the mutable promotion cache.
-      TimerGuard start =
-          hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
-              .start();
-      auto mut = mut_.Write();
-      for (const auto &item : cache.cache) {
-        mut->Insert(std::string(item.first), item.second.sequence,
-                    std::string(item.second.value));
-      }
-      db_.mutex()->Unlock();
-      ConsumeBuffer(mut);
-    } else {
-      RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
-
-      MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
-      m->Ref();
-      autovector<MemTable *> memtables_to_free;
-      SuperVersionContext svc(true);
-      for (const auto &item : cache.cache) {
-        Status s = m->Add(item.second.sequence, kTypeValue, item.first,
-                          item.second.value, nullptr);
-        if (!s.ok()) {
-          ROCKS_LOG_FATAL(cfd->ioptions()->logger,
-                          "check_newer_version: Unexpected error: %s",
-                          s.ToString().c_str());
-        }
-      }
-      cfd->imm()->Add(m, &memtables_to_free);
-      db_.InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
-      DBImpl::FlushRequest flush_req;
-      db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
-                               FlushReason::kPromotionCacheFull, &flush_req);
-      db_.SchedulePendingFlush(flush_req);
-      db_.MaybeScheduleFlushOrCompaction();
-
-      db_.mutex()->Unlock();
-
-      for (MemTable *table : memtables_to_free) delete table;
-      svc.Clean();
-    }
-
-    std::list<ImmPromotionCache> tmp;
-    {
-      auto list = imm_list_.Write();
-      list->size -= iter->size;
-      tmp.splice(tmp.begin(), list->list, iter);
-    }
-    // tmp will be freed without holding the lock of imm_list
-
-    if (sv->Unref()) {
+    check(elem);
+    if (elem.sv->Unref()) {
       db_.mutex()->Lock();
-      sv->Cleanup();
+      elem.sv->Cleanup();
       db_.mutex()->Unlock();
-      delete sv;
+      delete elem.sv;
     }
   }
   printer_should_stop.store(true, std::memory_order_relaxed);
   printer.join();
 }
+
+static void mark_updated(ImmPromotionCache &cache,
+                         const std::string &user_key) {
+  auto updated = cache.updated.Lock();
+  updated->insert(user_key);
+}
+void PromotionCache::check(CheckerQueueElem &elem) {
+  struct RefHash {
+    size_t operator()(std::reference_wrapper<const std::string> x) const {
+      return std::hash<std::string>()(x.get());
+    }
+  };
+  struct RefEq {
+    bool operator()(std::reference_wrapper<const std::string> lhs,
+                    std::reference_wrapper<const std::string> rhs) const {
+      return lhs.get() == rhs.get();
+    }
+  };
+
+  SuperVersion *sv = elem.sv;
+  RALT *ralt = sv->mutable_cf_options.ralt.get();
+  if (ralt == nullptr) return;
+
+  auto iter = elem.iter;
+  ColumnFamilyData *cfd = sv->cfd;
+  const auto &hotrap_timers = cfd->internal_stats()->hotrap_timers();
+  ImmPromotionCache &cache = *iter;
+
+  std::unordered_set<std::reference_wrapper<const std::string>, RefHash, RefEq>
+      stably_hot;
+  const Comparator *ucmp = cfd->ioptions()->user_comparator;
+  auto stats = cfd->ioptions()->stats;
+  if (ralt) {
+    TimerGuard check_stably_hot_start =
+        hotrap_timers.timer(TimerType::kCheckStablyHot).start();
+    for (const auto &item : cache.cache) {
+      const std::string &user_key = item.first;
+      bool is_stably_hot = item.second.count > 1 || ralt->IsHot(user_key);
+      ralt->Access(item.first, item.second.value.size());
+      if (is_stably_hot) {
+        stably_hot.insert(user_key);
+      } else {
+        RecordTick(stats, Tickers::ACCESSED_COLD_BYTES,
+                   user_key.size() + item.second.value.size());
+      }
+    }
+  }
+  TimerGuard check_newer_version_start =
+      hotrap_timers.timer(TimerType::kCheckNewerVersion).start();
+  for (const std::string &user_key : stably_hot) {
+    LookupKey key(user_key, kMaxSequenceNumber);
+    Status s;
+    MergeContext merge_context;
+    SequenceNumber max_covering_tombstone_seq = 0;
+    if (sv->imm->Get(key, nullptr, nullptr, nullptr, &s, &merge_context,
+                     &max_covering_tombstone_seq, read_options_)) {
+      mark_updated(cache, user_key);
+      continue;
+    }
+    if (!s.ok()) {
+      ROCKS_LOG_FATAL(cfd->ioptions()->logger, "Unexpected error: %s\n",
+                      s.ToString().c_str());
+    }
+    PinnedIteratorsManager pinned_iters_mgr;
+    sv->current->Get(nullptr, read_options_, key, nullptr, nullptr, nullptr, &s,
+                     &merge_context, &max_covering_tombstone_seq,
+                     &pinned_iters_mgr, nullptr, nullptr, nullptr, nullptr,
+                     nullptr, false, target_level_);
+    if (s.ok() || s.IsIncomplete()) {
+      mark_updated(cache, user_key);
+      continue;
+    }
+    assert(s.IsNotFound());
+  }
+
+  db_.mutex()->Lock();
+  // No need to SetNextLogNumber, because we don't delete any log file
+  size_t bytes_to_flush = 0;
+  {
+    auto updated = cache.updated.Lock();
+    // We are the only one who is accessing this imm PC, so we can modify it.
+    auto it = cache.cache.begin();
+    while (it != cache.cache.end()) {
+      const std::string &user_key = it->first;
+      const std::string &value = it->second.value;
+      if (stably_hot.find(user_key) == stably_hot.end()) {
+        it = cache.cache.erase(it);
+        continue;
+      }
+      if (updated->find(user_key) != updated->end()) {
+        RecordTick(stats, Tickers::HAS_NEWER_VERSION_BYTES,
+                   user_key.size() + value.size());
+        it = cache.cache.erase(it);
+        continue;
+      }
+      bytes_to_flush += user_key.size() + value.size();
+      ++it;
+    }
+  }
+  if (bytes_to_flush * 2 < sv->mutable_cf_options.write_buffer_size) {
+    // There are too few data to flush. There will be too much compaction I/O
+    // in L1 if we force to flush them to L0. Therefore, we just insert them
+    // back to the mutable promotion cache.
+    TimerGuard start =
+        hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
+            .start();
+    auto mut = mut_.Write();
+    for (const auto &item : cache.cache) {
+      mut->Insert(std::string(item.first), item.second.sequence,
+                  std::string(item.second.value));
+    }
+    db_.mutex()->Unlock();
+    ConsumeBuffer(mut);
+  } else {
+    RecordTick(stats, Tickers::PROMOTED_FLUSH_BYTES, bytes_to_flush);
+
+    MemTable *m = cfd->ConstructNewMemtable(sv->mutable_cf_options, 0);
+    m->Ref();
+    autovector<MemTable *> memtables_to_free;
+    SuperVersionContext svc(true);
+    for (const auto &item : cache.cache) {
+      Status s = m->Add(item.second.sequence, kTypeValue, item.first,
+                        item.second.value, nullptr);
+      if (!s.ok()) {
+        ROCKS_LOG_FATAL(cfd->ioptions()->logger,
+                        "check_newer_version: Unexpected error: %s",
+                        s.ToString().c_str());
+      }
+    }
+    cfd->imm()->Add(m, &memtables_to_free);
+    db_.InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
+    DBImpl::FlushRequest flush_req;
+    db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
+                             FlushReason::kPromotionCacheFull, &flush_req);
+    db_.SchedulePendingFlush(flush_req);
+    db_.MaybeScheduleFlushOrCompaction();
+
+    db_.mutex()->Unlock();
+
+    for (MemTable *table : memtables_to_free) delete table;
+    svc.Clean();
+  }
+
+  std::list<ImmPromotionCache> tmp;
+  {
+    auto list = imm_list_.Write();
+    list->size -= iter->size;
+    tmp.splice(tmp.begin(), list->list, iter);
+  }
+  // tmp will be freed without holding the lock of imm_list
+}
+
 size_t PromotionCache::Mutable::Insert(std::string &&user_key,
                                        SequenceNumber sequence,
                                        std::string &&value) const {
@@ -358,8 +364,7 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
   {
     auto mut = mut_.TryRead();
     if (!mut.has_value()) {
-      mut_buffer_.Lock()->emplace_back(std::move(user_key), sequence,
-                                       std::move(value));
+      mut_buffer_.insert(std::move(user_key), sequence, std::move(value));
       return;
     }
     mut_size =
@@ -371,12 +376,9 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
 }
 
 void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
-  auto mut_buffer = mut_buffer_.Lock();
-  if (mut_buffer->empty()) return;
-  std::vector<MutBufItem> buffer;
-  std::swap(buffer, *mut_buffer);
-  mut_buffer.drop();
-  for (MutBufItem &item : buffer) {
+  auto buffer = mut_buffer_.take_all();
+  if (!buffer.has_value()) return;
+  for (MutBufItem &item : buffer.value()) {
     mut->Insert(std::move(item.user_key), item.seq, std::move(item.value));
   }
 }
