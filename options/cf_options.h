@@ -335,7 +335,7 @@ struct MutableCFOptions {
   // Per-level target file size.
   std::vector<uint64_t> max_file_size;
 
-  RALT* ralt;
+  std::shared_ptr<RALT> ralt;
 };
 
 uint64_t MultiplyCheckOverflow(uint64_t op1, double op2);

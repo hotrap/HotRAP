@@ -99,7 +99,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
   input_version_->Ref();
   edit_.SetColumnFamily(cfd_->GetID());
 
-  RALT* ralt = cfd_->GetCurrentMutableCFOptions()->ralt;
+  RALT* ralt = cfd_->GetCurrentMutableCFOptions()->ralt.get();
   if (ralt == nullptr) return;
   target_level_to_promote_ = -1;
   if (start_level_ != output_level_) {

@@ -28,6 +28,7 @@
 #endif
 
 #include <autotuner.h>
+#include <ralt.h>
 
 #include <atomic>
 #include <cinttypes>
@@ -2161,7 +2162,7 @@ class ReporterAgent {
         }
       }
       if (options_.ralt) {
-        ::RALT& ralt = *static_cast<::RALT*>(options_.ralt);
+        ::RALT& ralt = *static_cast<::RALT*>(options_.ralt.get());
         report += ',' + std::to_string(ralt.GetRealHotSetSize()) + ',' +
                   std::to_string(ralt.GetRealPhySize());
       }
@@ -3482,7 +3483,7 @@ class Benchmark {
 
     open_options_.max_bytes_for_level_multiplier_additional.clear();
     if (!FLAGS_ralt_path.empty()) {
-      open_options_.ralt = new ::RALT(
+      open_options_.ralt = std::make_shared<::RALT>(
           open_options_.comparator, FLAGS_ralt_path.c_str(),
           FLAGS_max_hot_set_size, FLAGS_max_hot_set_size,
           FLAGS_max_hot_set_size, FLAGS_max_ralt_size, FLAGS_ralt_bloom_bits);
@@ -3834,10 +3835,9 @@ class Benchmark {
       std::unique_ptr<AutoTuner> autotuner;
       if (open_options_.ralt) {
         size_t first_level_in_sd = calc_first_level_in_sd(open_options_);
+        uint64_t fd_size = open_options_.db_paths[0].target_size;
         autotuner = std::make_unique<AutoTuner>(
-            *db_.db, first_level_in_sd,
-            open_options_.db_paths[0].target_size * 0.05,
-            open_options_.db_paths[0].target_size * 0.7);
+            *db_.db, first_level_in_sd, fd_size / 20, 0.85, fd_size / 20);
       }
 
       if (method != nullptr) {
@@ -3980,7 +3980,6 @@ class Benchmark {
       fprintf(stdout, "Secondary instance updated  %" PRIu64 " times.\n",
               secondary_db_updates_);
     }
-    delete open_options_.ralt;
   }
 
  private:
