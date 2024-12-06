@@ -106,7 +106,6 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
         end_(end),
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(c_iter),
-        hot_iter_(ralt.LowerBound(start_)),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
   ~RouterIteratorFD2SD() {
@@ -148,20 +147,18 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
 
  private:
   Decision route(const IKeyValueLevel& kv) {
-    // It is guaranteed that all versions of the same user key share the same
-    // decision.
-    const rocksdb::Slice* hot = hot_iter_.peek();
-    while (hot != nullptr) {
-      if (ucmp_->Compare(*hot, kv.ikey.user_key) >= 0) break;
-      hot_iter_.next();
-      hot = hot_iter_.peek();
+    // Make sure that all versions of the same user key share the same decision.
+    if (previous_decision_ != Decision::kUndetermined &&
+        ucmp_->Compare(kv.ikey.user_key, Slice(previous_user_key_)) == 0) {
+      return previous_decision_;
     }
-    Decision decision;
-    if (hot && ucmp_->Compare(*hot, kv.ikey.user_key) == 0) {
-      return Decision::kStartLevel;
+    if (kv.level == -1) {
+      previous_decision_ = Decision::kStartLevel;
     } else {
-      return Decision::kNextLevel;
+      previous_decision_ = Decision::kNextLevel;
     }
+    previous_user_key_ = kv.ikey.user_key.ToString();
+    return previous_decision_;
   }
 
   const Compaction& c_;
@@ -170,7 +167,9 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
-  Peekable<RALT::Iter> hot_iter_;
+
+  Decision previous_decision_;
+  std::string previous_user_key_;
 
   size_t kvsize_promoted_;
   size_t kvsize_retained_;
