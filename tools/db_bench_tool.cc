@@ -35,6 +35,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <shared_mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -2102,13 +2103,19 @@ class ReporterAgent {
   void FinishedOps(int64_t num_ops, enum OperationType op_type,
                    uint64_t micros) {
     ReportFinishedOps(num_ops);
+    std::shared_lock<std::shared_mutex> lock(lock_);
     auto it = op_count_time_.find(op_type);
     if (it == op_count_time_.end()) {
-      auto res = op_count_time_.emplace(std::piecewise_construct,
-                                        std::forward_as_tuple(op_type),
-                                        std::forward_as_tuple());
-      assert(res.second);
-      it = res.first;
+      lock.unlock();
+      {
+        std::unique_lock<std::shared_mutex> unique_lock(lock_);
+        auto res = op_count_time_.emplace(std::piecewise_construct,
+                                          std::forward_as_tuple(op_type),
+                                          std::forward_as_tuple());
+        assert(res.second);
+        it = res.first;
+      }
+      lock.lock();
     }
     it->second.count.fetch_add(num_ops, std::memory_order_relaxed);
     it->second.micros.fetch_add(micros, std::memory_order_relaxed);
@@ -2123,6 +2130,8 @@ class ReporterAgent {
     return header;
   }
   void SleepAndReport() {
+    std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
+        op_report_file;
     auto* clock = env_->GetSystemClock().get();
     auto time_started = clock->NowMicros();
     while (true) {
@@ -2164,10 +2173,11 @@ class ReporterAgent {
         break;
       }
       last_report_ = total_ops_done_snapshot;
+      std::shared_lock<std::shared_mutex> lock(lock_);
       for (const auto& op_count_time : op_count_time_) {
         OperationType op = op_count_time.first;
-        auto it = op_report_file_.find(op);
-        if (it == op_report_file_.end()) {
+        auto it = op_report_file.find(op);
+        if (it == op_report_file.end()) {
           std::string fname = OperationTypeString[op] + "-count-time";
           std::unique_ptr<WritableFile> file;
           s = env_->NewWritableFile(fname, &file, EnvOptions());
@@ -2182,7 +2192,7 @@ class ReporterAgent {
                     s.ToString().c_str());
             abort();
           }
-          auto res = op_report_file_.emplace(op, std::move(file));
+          auto res = op_report_file.emplace(op, std::move(file));
           assert(res.second);
           it = res.first;
         }
@@ -2213,13 +2223,12 @@ class ReporterAgent {
   uint64_t last_get_hit_t1_;
   const uint64_t report_interval_secs_;
 
-  std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
-      op_report_file_;
   struct CountTime {
     std::atomic<uint64_t> count;
     std::atomic<uint64_t> micros;
     CountTime() : count(0), micros(0) {}
   };
+  std::shared_mutex lock_;
   std::unordered_map<OperationType, CountTime> op_count_time_;
 
   ROCKSDB_NAMESPACE::port::Thread reporting_thread_;
