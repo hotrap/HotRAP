@@ -39,6 +39,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <shared_mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -2132,6 +2133,8 @@ class ReporterAgent {
     return header;
   }
   void SleepAndReport() {
+    std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
+        op_report_file;
     auto* clock = env_->GetSystemClock().get();
     auto time_started = clock->NowMicros();
     while (true) {
@@ -2184,8 +2187,8 @@ class ReporterAgent {
         uint64_t count = count_time.count.load(std::memory_order_relaxed);
         if (count == 0) continue;
         uint64_t micros = count_time.micros.load(std::memory_order_relaxed);
-        auto it = op_report_file_.find(op);
-        if (it == op_report_file_.end()) {
+        auto it = op_report_file.find(op);
+        if (it == op_report_file.end()) {
           std::string fname = OperationTypeString[op] + "-count-time";
           std::unique_ptr<WritableFile> file;
           s = env_->NewWritableFile(fname, &file, EnvOptions());
@@ -2200,7 +2203,7 @@ class ReporterAgent {
                     s.ToString().c_str());
             abort();
           }
-          auto res = op_report_file_.emplace(op, std::move(file));
+          auto res = op_report_file.emplace(op, std::move(file));
           assert(res.second);
           it = res.first;
         }
@@ -2234,8 +2237,6 @@ class ReporterAgent {
                                                 HAS_NEWER_VERSION_BYTES};
   std::unordered_map<Tickers, uint64_t> last_ticker_;
 
-  std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
-      op_report_file_;
   struct CountTime {
     std::atomic<uint64_t> count;
     std::atomic<uint64_t> micros;
