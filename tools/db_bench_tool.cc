@@ -2047,7 +2047,8 @@ enum OperationType : unsigned char {
   kUncompress,
   kCrc,
   kHash,
-  kOthers
+  kOthers,
+  kOperationTypeEnumMax,
 };
 
 static std::unordered_map<OperationType, std::string, std::hash<unsigned char>>
@@ -2103,22 +2104,9 @@ class ReporterAgent {
   void FinishedOps(int64_t num_ops, enum OperationType op_type,
                    uint64_t micros) {
     ReportFinishedOps(num_ops);
-    std::shared_lock<std::shared_mutex> lock(lock_);
-    auto it = op_count_time_.find(op_type);
-    if (it == op_count_time_.end()) {
-      lock.unlock();
-      {
-        std::unique_lock<std::shared_mutex> unique_lock(lock_);
-        auto res = op_count_time_.emplace(std::piecewise_construct,
-                                          std::forward_as_tuple(op_type),
-                                          std::forward_as_tuple());
-        assert(res.second);
-        it = res.first;
-      }
-      lock.lock();
-    }
-    it->second.count.fetch_add(num_ops, std::memory_order_relaxed);
-    it->second.micros.fetch_add(micros, std::memory_order_relaxed);
+    CountTime& count_time = count_time_[op_type];
+    count_time.count.fetch_add(num_ops, std::memory_order_relaxed);
+    count_time.micros.fetch_add(micros, std::memory_order_relaxed);
   }
 
  private:
@@ -2173,9 +2161,12 @@ class ReporterAgent {
         break;
       }
       last_report_ = total_ops_done_snapshot;
-      std::shared_lock<std::shared_mutex> lock(lock_);
-      for (const auto& op_count_time : op_count_time_) {
-        OperationType op = op_count_time.first;
+      for (size_t i = 0; i < kOperationTypeEnumMax; ++i) {
+        OperationType op = static_cast<OperationType>(i);
+        const CountTime& count_time = count_time_[op];
+        uint64_t count = count_time.count.load(std::memory_order_relaxed);
+        if (count == 0) continue;
+        uint64_t micros = count_time.micros.load(std::memory_order_relaxed);
         auto it = op_report_file.find(op);
         if (it == op_report_file.end()) {
           std::string fname = OperationTypeString[op] + "-count-time";
@@ -2196,14 +2187,8 @@ class ReporterAgent {
           assert(res.second);
           it = res.first;
         }
-        report =
-            std::to_string(secs_elapsed) + ' ' +
-            std::to_string(
-                op_count_time.second.count.load(std::memory_order_relaxed)) +
-            ' ' +
-            std::to_string(
-                op_count_time.second.micros.load(std::memory_order_relaxed)) +
-            '\n';
+        report = std::to_string(secs_elapsed) + ' ' + std::to_string(count) +
+                 ' ' + std::to_string(micros) + '\n';
         s = it->second->Append(report);
         if (!s.ok()) {
           fprintf(stderr,
@@ -2228,8 +2213,7 @@ class ReporterAgent {
     std::atomic<uint64_t> micros;
     CountTime() : count(0), micros(0) {}
   };
-  std::shared_mutex lock_;
-  std::unordered_map<OperationType, CountTime> op_count_time_;
+  CountTime count_time_[kOperationTypeEnumMax];
 
   ROCKSDB_NAMESPACE::port::Thread reporting_thread_;
   std::mutex mutex_;
