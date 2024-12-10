@@ -2227,16 +2227,18 @@ class ReporterAgent {
   int64_t last_report_;
   const uint64_t report_interval_secs_;
 
-  const std::vector<Tickers> tickers_to_report_{GET_HIT_T0,
-                                                GET_HIT_T1,
-                                                PROMOTED_FLUSH_BYTES,
-                                                PROMOTED_2FDLAST_BYTES,
-                                                PROMOTED_2SDFRONT_BYTES,
-                                                RETAINED_BYTES,
-                                                ACCESSED_COLD_BYTES,
-                                                HAS_NEWER_VERSION_BYTES,
-                                                SCAN_HIT_T0,
-                                                SCAN_HIT_T1};
+  const std::vector<Tickers> tickers_to_report_{
+      GET_HIT_T0,
+      GET_HIT_T1,
+      PROMOTED_FLUSH_BYTES,
+      PROMOTED_2FDLAST_BYTES,
+      PROMOTED_2SDFRONT_BYTES,
+      RETAINED_BYTES,
+      ACCESSED_COLD_BYTES,
+      HAS_NEWER_VERSION_BYTES,
+      SCAN_HIT_T0,
+      SCAN_HIT_T1,
+  };
   std::unordered_map<Tickers, uint64_t> last_ticker_;
 
   struct CountTime {
