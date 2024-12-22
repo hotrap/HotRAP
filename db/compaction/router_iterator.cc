@@ -183,9 +183,6 @@ RouterIterator::RouterIterator(const Compaction& c, CompactionIterator& c_iter,
   int latter_level = c.output_level();
   RALT* ralt = c.mutable_cf_options()->ralt.get();
   if (ralt == NULL) {
-    // Future work(hotrap): Handle the case that it's not empty, which is
-    // possible when ralt was not NULL but then is set to NULL.
-    assert(c.cached_records_to_promote().empty());
     iter_ = std::unique_ptr<IteratorWithoutRouter>(
         new IteratorWithoutRouter(c, c_iter));
   } else {
