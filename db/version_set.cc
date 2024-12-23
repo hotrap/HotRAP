@@ -2444,6 +2444,8 @@ void Version::TryPromote(
   // I don't think we can get the block size in this context. So I hard code
   // the promotion threshold. Maybe we should make it an option of RALT.
   if (user_key.size() + value->size() >= 16 * 1024) return;
+  ralt->Access(user_key, value->size());
+#if 0
   if (path_id(hit_level) == 0) {
     ralt->Access(user_key, value->size());
     return;
@@ -2471,6 +2473,7 @@ void Version::TryPromote(
                value->ToString());
   RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
   return;
+#endif
 }
 void Version::HandleFound(const ReadOptions& read_options,
                           GetContext& get_context, int hit_level,
