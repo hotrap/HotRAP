@@ -65,17 +65,16 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
   CompactionIterWrapper c_iter_;
 };
 
-class RouterIteratorIntraTier : public TraitIterator<Elem> {
+class RouterIteratorIntraFD : public TraitIterator<Elem> {
  public:
-  RouterIteratorIntraTier(const Compaction& c, CompactionIterator& c_iter,
-                          Slice start, Bound end, Tickers promotion_type)
+  RouterIteratorIntraFD(const Compaction& c, CompactionIterator& c_iter,
+                          Slice start, Bound end)
       : c_(c),
-        promotion_type_(promotion_type),
         promoted_bytes_(0),
         iter_(c_iter) {}
-  ~RouterIteratorIntraTier() override {
+  ~RouterIteratorIntraFD() override {
     auto stats = c_.immutable_options()->stats;
-    RecordTick(stats, promotion_type_, promoted_bytes_);
+    RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, promoted_bytes_);
   }
   std::optional<Elem> next() override {
     std::optional<IKeyValueLevel> ret = iter_.next();
@@ -92,14 +91,13 @@ class RouterIteratorIntraTier : public TraitIterator<Elem> {
 
  private:
   const Compaction& c_;
-  Tickers promotion_type_;
   size_t promoted_bytes_;
   CompactionIterWrapper iter_;
 };
 
-class RouterIteratorFD2SD : public TraitIterator<Elem> {
+class RouterIterator2SD : public TraitIterator<Elem> {
  public:
-  RouterIteratorFD2SD(RALT& ralt, const Compaction& c,
+  RouterIterator2SD(RALT& ralt, const Compaction& c,
                       CompactionIterator& c_iter, Slice start, Bound end)
       : c_(c),
         start_(start),
@@ -109,10 +107,15 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
         hot_iter_(ralt.LowerBound(start_)),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
-  ~RouterIteratorFD2SD() {
+  ~RouterIterator2SD() {
     auto stats = c_.immutable_options()->stats;
-    RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
-    RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
+    if (c_.start_level_path_id() == 0) {
+      RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
+      RecordTick(stats, Tickers::RETAINED_FD_BYTES, kvsize_retained_);
+    } else {
+      RecordTick(stats, Tickers::PROMOTED_2SDFRONT_BYTES, kvsize_promoted_);
+      RecordTick(stats, Tickers::RETAINED_SD_BYTES, kvsize_retained_);
+    }
   }
   std::optional<Elem> next() override {
     std::optional<IKeyValueLevel> kv_ret = iter_.next();
@@ -135,6 +138,9 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
     if (decision == Decision::kStartLevel) {
       size_t kvsize = kv.key.size() + kv.value.size();
       if (kv.level == -1 || kv.level == c_.output_level()) {
+        if (kv.level == -1) {
+          assert(c_.start_level_path_id() == 0);
+        }
         kvsize_promoted_ += kvsize;
       } else {
         assert(kv.level == c_.start_level());
@@ -179,28 +185,19 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
 RouterIterator::RouterIterator(const Compaction& c, CompactionIterator& c_iter,
                                Slice start, Bound end)
     : c_iter_(c_iter) {
-  int start_level = c.level();
-  int latter_level = c.output_level();
   RALT* ralt = c.mutable_cf_options()->ralt.get();
   if (ralt == NULL) {
     iter_ = std::unique_ptr<IteratorWithoutRouter>(
         new IteratorWithoutRouter(c, c_iter));
   } else {
-    const Version& version = *c.input_version();
-    uint32_t start_tier = version.path_id(start_level);
-    uint32_t latter_tier = version.path_id(latter_level);
-    if (start_tier != latter_tier) {
-      assert(c.SupportsPerKeyPlacement());
-      iter_ = std::unique_ptr<RouterIteratorFD2SD>(
-          new RouterIteratorFD2SD(*ralt, c, c_iter, start, end));
-    } else if (version.path_id(latter_level + 1) != latter_tier) {
+    if (c.latter_level_path_id() == 0) {
       iter_ =
-          std::unique_ptr<RouterIteratorIntraTier>(new RouterIteratorIntraTier(
-              c, c_iter, start, end, Tickers::PROMOTED_2FDLAST_BYTES));
+          std::unique_ptr<RouterIteratorIntraFD>(new RouterIteratorIntraFD(
+              c, c_iter, start, end));
     } else {
-      iter_ =
-          std::unique_ptr<RouterIteratorIntraTier>(new RouterIteratorIntraTier(
-              c, c_iter, start, end, Tickers::PROMOTED_2SDFRONT_BYTES));
+      assert(c.SupportsPerKeyPlacement());
+      iter_ = std::unique_ptr<RouterIterator2SD>(
+          new RouterIterator2SD(*ralt, c, c_iter, start, end));
     }
   }
   cur_ = iter_->next();
