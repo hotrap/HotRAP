@@ -2165,7 +2165,7 @@ class ReporterAgent {
         }
       }
       if (options_.ralt) {
-        ::RALT& ralt = *static_cast<::RALT*>(options_.ralt.get());
+        ralt::RALT& ralt = *static_cast<ralt::RALT*>(options_.ralt.get());
         report += ',' + std::to_string(ralt.GetRealHotSetSize()) + ',' +
                   std::to_string(ralt.GetRealPhySize());
       }
@@ -2233,7 +2233,8 @@ class ReporterAgent {
       PROMOTED_FLUSH_BYTES,
       PROMOTED_2FDLAST_BYTES,
       PROMOTED_2SDFRONT_BYTES,
-      RETAINED_BYTES,
+      RETAINED_FD_BYTES,
+      RETAINED_SD_BYTES,
       ACCESSED_COLD_BYTES,
       HAS_NEWER_VERSION_BYTES,
       SCAN_HIT_T0,
@@ -3487,11 +3488,13 @@ class Benchmark {
     }
 
     open_options_.max_bytes_for_level_multiplier_additional.clear();
+    open_options_.db_paths = parse_db_paths(FLAGS_db_paths);
     if (!FLAGS_ralt_path.empty()) {
-      open_options_.ralt = std::make_shared<::RALT>(
+      open_options_.ralt = std::make_shared<ralt::RALT>(
           open_options_.comparator, FLAGS_ralt_path.c_str(),
           FLAGS_max_hot_set_size, FLAGS_max_hot_set_size,
-          FLAGS_max_hot_set_size, FLAGS_max_ralt_size, FLAGS_ralt_bloom_bits);
+          FLAGS_max_hot_set_size, FLAGS_max_ralt_size,
+          open_options_.db_paths[0].target_size);
     }
 
     Open(&open_options_);
@@ -4886,7 +4889,6 @@ class Benchmark {
     }
 
     if (FLAGS_num_multi_db <= 1) {
-      options.db_paths = parse_db_paths(FLAGS_db_paths);
       OpenDb(options, FLAGS_db, &db_);
     } else {
       // Not supported yet.
