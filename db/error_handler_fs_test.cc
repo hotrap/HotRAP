@@ -1043,7 +1043,6 @@ TEST_F(DBErrorHandlingFSTest, CompactionWriteError) {
   Destroy(options);
 }
 
-#if 0
 TEST_F(DBErrorHandlingFSTest, DISABLED_CompactionWriteRetryableError) {
   std::shared_ptr<ErrorHandlerFSListener> listener(
       new ErrorHandlerFSListener());
@@ -1141,7 +1140,6 @@ TEST_F(DBErrorHandlingFSTest, DISABLED_CompactionWriteFileScopeError) {
   ASSERT_OK(s);
   Destroy(options);
 }
-#endif
 
 TEST_F(DBErrorHandlingFSTest, CorruptionError) {
   Options options = GetDefaultOptions();
@@ -2176,7 +2174,6 @@ TEST_F(DBErrorHandlingFSTest,
   Close();
 }
 
-#if 0
 TEST_F(DBErrorHandlingFSTest, CompactionWriteRetryableErrorAutoRecover) {
   // In this test, in the first round of compaction, the FS is set to error.
   // So the first compaction fails due to retryable IO error and it is mapped
@@ -2236,7 +2233,6 @@ TEST_F(DBErrorHandlingFSTest, CompactionWriteRetryableErrorAutoRecover) {
   SyncPoint::GetInstance()->DisableProcessing();
   Destroy(options);
 }
-#endif
 
 TEST_F(DBErrorHandlingFSTest, WALWriteRetryableErrorAutoRecover1) {
   std::shared_ptr<ErrorHandlerFSListener> listener(
