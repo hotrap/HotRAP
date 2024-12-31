@@ -3840,7 +3840,7 @@ class Benchmark {
 
       std::unique_ptr<AutoTuner> autotuner;
       if (open_options_.ralt) {
-        size_t first_level_in_sd = calc_first_level_in_sd(open_options_);
+        size_t first_level_in_sd = calc_first_level_in_last_tier(open_options_);
         uint64_t fd_size = open_options_.db_paths[0].target_size;
         autotuner = std::make_unique<AutoTuner>(
             *db_.db, first_level_in_sd, fd_size / 20, 0.85, fd_size / 20);
