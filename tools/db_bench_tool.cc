@@ -39,6 +39,7 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <shared_mutex>
 #include <thread>
 #include <unordered_map>
 
@@ -2132,6 +2133,8 @@ class ReporterAgent {
     return header;
   }
   void SleepAndReport() {
+    std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
+        op_report_file;
     auto* clock = env_->GetSystemClock().get();
     auto time_started = clock->NowMicros();
     while (true) {
@@ -2162,7 +2165,7 @@ class ReporterAgent {
         }
       }
       if (options_.ralt) {
-        ::RALT& ralt = *static_cast<::RALT*>(options_.ralt.get());
+        ralt::RALT& ralt = *static_cast<ralt::RALT*>(options_.ralt.get());
         report += ',' + std::to_string(ralt.GetRealHotSetSize()) + ',' +
                   std::to_string(ralt.GetRealPhySize());
       }
@@ -2184,8 +2187,8 @@ class ReporterAgent {
         uint64_t count = count_time.count.load(std::memory_order_relaxed);
         if (count == 0) continue;
         uint64_t micros = count_time.micros.load(std::memory_order_relaxed);
-        auto it = op_report_file_.find(op);
-        if (it == op_report_file_.end()) {
+        auto it = op_report_file.find(op);
+        if (it == op_report_file.end()) {
           std::string fname = OperationTypeString[op] + "-count-time";
           std::unique_ptr<WritableFile> file;
           s = env_->NewWritableFile(fname, &file, EnvOptions());
@@ -2200,7 +2203,7 @@ class ReporterAgent {
                     s.ToString().c_str());
             abort();
           }
-          auto res = op_report_file_.emplace(op, std::move(file));
+          auto res = op_report_file.emplace(op, std::move(file));
           assert(res.second);
           it = res.first;
         }
@@ -2224,18 +2227,19 @@ class ReporterAgent {
   int64_t last_report_;
   const uint64_t report_interval_secs_;
 
-  const std::vector<Tickers> tickers_to_report_{GET_HIT_T0,
-                                                GET_HIT_T1,
-                                                PROMOTED_FLUSH_BYTES,
-                                                PROMOTED_2FDLAST_BYTES,
-                                                PROMOTED_2SDFRONT_BYTES,
-                                                RETAINED_BYTES,
-                                                ACCESSED_COLD_BYTES,
-                                                HAS_NEWER_VERSION_BYTES};
+  const std::vector<Tickers> tickers_to_report_{
+      GET_HIT_T0,
+      GET_HIT_T1,
+      PROMOTED_FLUSH_BYTES,
+      PROMOTED_2FDLAST_BYTES,
+      PROMOTED_2SDFRONT_BYTES,
+      RETAINED_FD_BYTES,
+      RETAINED_SD_BYTES,
+      ACCESSED_COLD_BYTES,
+      HAS_NEWER_VERSION_BYTES,
+  };
   std::unordered_map<Tickers, uint64_t> last_ticker_;
 
-  std::unordered_map<OperationType, std::unique_ptr<WritableFile>>
-      op_report_file_;
   struct CountTime {
     std::atomic<uint64_t> count;
     std::atomic<uint64_t> micros;
@@ -3482,11 +3486,13 @@ class Benchmark {
     }
 
     open_options_.max_bytes_for_level_multiplier_additional.clear();
+    open_options_.db_paths = parse_db_paths(FLAGS_db_paths);
     if (!FLAGS_ralt_path.empty()) {
-      open_options_.ralt = std::make_shared<::RALT>(
+      open_options_.ralt = std::make_shared<ralt::RALT>(
           open_options_.comparator, FLAGS_ralt_path.c_str(),
           FLAGS_max_hot_set_size, FLAGS_max_hot_set_size,
-          FLAGS_max_hot_set_size, FLAGS_max_ralt_size, FLAGS_ralt_bloom_bits);
+          FLAGS_max_hot_set_size, FLAGS_max_ralt_size,
+          open_options_.db_paths[0].target_size);
     }
 
     Open(&open_options_);
@@ -3834,7 +3840,7 @@ class Benchmark {
 
       std::unique_ptr<AutoTuner> autotuner;
       if (open_options_.ralt) {
-        size_t first_level_in_sd = calc_first_level_in_sd(open_options_);
+        size_t first_level_in_sd = calc_first_level_in_last_tier(open_options_);
         uint64_t fd_size = open_options_.db_paths[0].target_size;
         autotuner = std::make_unique<AutoTuner>(
             *db_.db, first_level_in_sd, fd_size / 20, 0.85, fd_size / 20);
@@ -4881,7 +4887,6 @@ class Benchmark {
     }
 
     if (FLAGS_num_multi_db <= 1) {
-      options.db_paths = parse_db_paths(FLAGS_db_paths);
       OpenDb(options, FLAGS_db, &db_);
     } else {
       // Not supported yet.

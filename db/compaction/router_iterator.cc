@@ -65,41 +65,9 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
   CompactionIterWrapper c_iter_;
 };
 
-class RouterIteratorIntraTier : public TraitIterator<Elem> {
+class RouterIterator2SD : public TraitIterator<Elem> {
  public:
-  RouterIteratorIntraTier(const Compaction& c, CompactionIterator& c_iter,
-                          Slice start, Bound end, Tickers promotion_type)
-      : c_(c),
-        promotion_type_(promotion_type),
-        promoted_bytes_(0),
-        iter_(c_iter) {}
-  ~RouterIteratorIntraTier() override {
-    auto stats = c_.immutable_options()->stats;
-    RecordTick(stats, promotion_type_, promoted_bytes_);
-  }
-  std::optional<Elem> next() override {
-    std::optional<IKeyValueLevel> ret = iter_.next();
-    if (!ret.has_value()) {
-      return std::nullopt;
-    }
-    IKeyValueLevel& kv = ret.value();
-    if (kv.level != -1) {
-      return std::make_optional<Elem>(Decision::kNextLevel, kv);
-    }
-    promoted_bytes_ += kv.key.size() + kv.value.size();
-    return std::make_optional<Elem>(Decision::kNextLevel, kv);
-  }
-
- private:
-  const Compaction& c_;
-  Tickers promotion_type_;
-  size_t promoted_bytes_;
-  CompactionIterWrapper iter_;
-};
-
-class RouterIteratorFD2SD : public TraitIterator<Elem> {
- public:
-  RouterIteratorFD2SD(RALT& ralt, const Compaction& c,
+  RouterIterator2SD(RALT& ralt, const Compaction& c,
                       CompactionIterator& c_iter,
                       Slice start_level_smallest_user_key)
       : c_(c),
@@ -108,10 +76,15 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
         hot_iter_(ralt.LowerBound(start_level_smallest_user_key)),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
-  ~RouterIteratorFD2SD() {
+  ~RouterIterator2SD() {
     auto stats = c_.immutable_options()->stats;
-    RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
-    RecordTick(stats, Tickers::RETAINED_BYTES, kvsize_retained_);
+    if (c_.start_level_path_id() == 0) {
+      RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, kvsize_promoted_);
+      RecordTick(stats, Tickers::RETAINED_FD_BYTES, kvsize_retained_);
+    } else {
+      RecordTick(stats, Tickers::PROMOTED_2SDFRONT_BYTES, kvsize_promoted_);
+      RecordTick(stats, Tickers::RETAINED_SD_BYTES, kvsize_retained_);
+    }
   }
   std::optional<Elem> next() override {
     std::optional<IKeyValueLevel> kv_ret = iter_.next();
@@ -163,22 +136,17 @@ class RouterIteratorFD2SD : public TraitIterator<Elem> {
 RouterIterator::RouterIterator(const Compaction& c, CompactionIterator& c_iter,
                                Slice start_level_smallest_user_key)
     : c_iter_(c_iter) {
-  int start_level = c.level();
-  int latter_level = c.output_level();
   RALT* ralt = c.mutable_cf_options()->ralt.get();
   if (ralt == NULL) {
-    // Future work(hotrap): Handle the case that it's not empty, which is
-    // possible when ralt was not NULL but then is set to NULL.
-    assert(c.cached_records_to_promote().empty());
     iter_ = std::unique_ptr<IteratorWithoutRouter>(
         new IteratorWithoutRouter(c, c_iter));
   } else {
     const Version& version = *c.input_version();
-    uint32_t start_tier = version.path_id(start_level);
-    uint32_t latter_tier = version.path_id(latter_level);
+    uint32_t start_tier = version.path_id(c.level());
+    uint32_t latter_tier = version.path_id(c.output_level());
     if (start_tier != latter_tier) {
       assert(c.SupportsPerKeyPlacement());
-      iter_ = std::unique_ptr<RouterIteratorFD2SD>(new RouterIteratorFD2SD(
+      iter_ = std::unique_ptr<RouterIterator2SD>(new RouterIterator2SD(
           *ralt, c, c_iter, start_level_smallest_user_key));
     } else {
       iter_ = std::unique_ptr<IteratorWithoutRouter>(
