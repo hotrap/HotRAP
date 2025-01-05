@@ -6584,8 +6584,8 @@ Status VersionSet::ListColumnFamiliesFromManifest(
     if (!s.ok()) {
       return s;
     }
-    file_reader.reset(new SequentialFileReader(std::move(file), manifest_path,
-                                               nullptr /*IOTracer*/));
+    file_reader = std::make_unique<SequentialFileReader>(
+        std::move(file), manifest_path, /*io_tracer=*/nullptr);
   }
 
   VersionSet::LogReporter reporter;
