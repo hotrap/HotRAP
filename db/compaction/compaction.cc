@@ -618,11 +618,6 @@ bool Compaction::IsTrivialMove() const {
     }
   }
 
-  // PerKeyPlacement compaction should never be trivial move.
-  if (SupportsPerKeyPlacement()) {
-    return false;
-  }
-
   return true;
 }
 
