@@ -135,6 +135,8 @@ struct MutableCFOptions {
         level0_stop_writes_trigger(options.level0_stop_writes_trigger),
         db_paths_soft_size_limit_multiplier(
             options.db_paths_soft_size_limit_multiplier),
+        db_paths_hard_size_limit_multiplier(
+            options.db_paths_hard_size_limit_multiplier),
         max_compaction_bytes(options.max_compaction_bytes),
         ignore_max_compaction_bytes_for_input(
             options.ignore_max_compaction_bytes_for_input),
@@ -289,6 +291,7 @@ struct MutableCFOptions {
   int level0_slowdown_writes_trigger;
   int level0_stop_writes_trigger;
   std::vector<double> db_paths_soft_size_limit_multiplier;
+  std::vector<double> db_paths_hard_size_limit_multiplier;
   uint64_t max_compaction_bytes;
   bool ignore_max_compaction_bytes_for_input;
   uint64_t target_file_size_base;
