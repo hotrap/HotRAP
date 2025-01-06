@@ -956,13 +956,21 @@ ColumnFamilyData::GetWriteStallConditionAndCause(
     return {WriteStallCondition::kDelayed,
             WriteStallCause::kPendingCompactionBytes};
   }
-  if (!mutable_cf_options.db_paths_soft_size_limit_multiplier.empty()) {
+  if (!mutable_cf_options.db_paths_soft_size_limit_multiplier.empty() ||
+      !mutable_cf_options.db_paths_hard_size_limit_multiplier.empty()) {
     uint32_t current_path_id = 0;
     size_t used_size = 0;
     for (int level = 0; level < vstorage->num_levels(); ++level) {
       uint32_t path_id =
           GetPathId(immutable_cf_options, mutable_cf_options, level);
       if (current_path_id != path_id) {
+        if (used_size >=
+            immutable_cf_options.cf_paths[current_path_id].target_size *
+                mutable_cf_options
+                    .db_paths_hard_size_limit_multiplier[current_path_id]) {
+          return {WriteStallCondition::kStopped,
+                  WriteStallCause::kDbPathsSizeLimit};
+        }
         if (used_size >=
             immutable_cf_options.cf_paths[current_path_id].target_size *
                 mutable_cf_options
@@ -1034,6 +1042,13 @@ WriteStallCondition ColumnFamilyData::RecalculateWriteStallConditions(
           "[%s] Stopping writes because of estimated pending compaction "
           "bytes %" PRIu64,
           name_.c_str(), compaction_needed_bytes);
+    } else if (write_stall_condition == WriteStallCondition::kStopped &&
+               write_stall_cause == WriteStallCause::kDbPathsSizeLimit) {
+      write_controller_token_ = write_controller->GetStopToken();
+      internal_stats_->AddCFStats(InternalStats::DB_PATH_SIZE_LIMIT_STOPS, 1);
+      ROCKS_LOG_WARN(ioptions_.logger,
+                     "[%s] Stopping writes because DB paths size exceeds limit",
+                     name_.c_str());
     } else if (write_stall_condition == WriteStallCondition::kDelayed &&
                write_stall_cause == WriteStallCause::kMemtableLimit) {
       write_controller_token_ =
@@ -1101,6 +1116,7 @@ WriteStallCondition ColumnFamilyData::RecalculateWriteStallConditions(
           SetupDelay(write_controller, compaction_needed_bytes,
                      prev_compaction_needed_bytes_, was_stopped,
                      mutable_cf_options.disable_auto_compactions);
+      internal_stats_->AddCFStats(InternalStats::DB_PATH_SIZE_LIMIT_DELAYS, 1);
       ROCKS_LOG_WARN(ioptions_.logger,
                      "[%s] Stalling writes because DB paths size exceeds "
                      "limit. rate %" PRIu64,

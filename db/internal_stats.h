@@ -117,6 +117,8 @@ class InternalStats {
     // Write stop caused by l0 file count limit while there is ongoing L0
     // compaction
     L0_FILE_COUNT_LIMIT_STOPS_WITH_ONGOING_COMPACTION,
+    DB_PATH_SIZE_LIMIT_DELAYS,
+    DB_PATH_SIZE_LIMIT_STOPS,
     WRITE_STALLS_ENUM_MAX,
     // End of all write stall stats
     BYTES_FLUSHED,
