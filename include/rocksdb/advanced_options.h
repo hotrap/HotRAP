@@ -777,6 +777,8 @@ struct AdvancedColumnFamilyOptions {
   // SetOptions("compaction_options_universal", "{size_ratio=2;}")
   CompactionOptionsUniversal compaction_options_universal;
 
+  bool disable_intra_l0_compaction = false;
+
   // The options for FIFO compaction style
   //
   // Dynamically changeable through SetOptions() API
