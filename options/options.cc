@@ -80,6 +80,7 @@ AdvancedColumnFamilyOptions::AdvancedColumnFamilyOptions(const Options& options)
       compaction_style(options.compaction_style),
       compaction_pri(options.compaction_pri),
       compaction_options_universal(options.compaction_options_universal),
+      disable_intra_l0_compaction(options.disable_intra_l0_compaction),
       compaction_options_fifo(options.compaction_options_fifo),
       max_sequential_skip_in_iterations(
           options.max_sequential_skip_in_iterations),
