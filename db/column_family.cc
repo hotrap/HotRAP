@@ -938,23 +938,28 @@ ColumnFamilyData::GetWriteStallConditionAndCause(
                  mutable_cf_options.hard_pending_compaction_bytes_limit) {
     return {WriteStallCondition::kStopped,
             WriteStallCause::kPendingCompactionBytes};
-  } else if (mutable_cf_options.max_write_buffer_number > 3 &&
-             num_unflushed_memtables >=
-                 mutable_cf_options.max_write_buffer_number - 1 &&
-             num_unflushed_memtables - 1 >=
-                 immutable_cf_options.min_write_buffer_number_to_merge) {
-    return {WriteStallCondition::kDelayed, WriteStallCause::kMemtableLimit};
+  }
+  WriteStallCondition cond = WriteStallCondition::kNormal;
+  WriteStallCause cause = WriteStallCause::kNone;
+  if (mutable_cf_options.max_write_buffer_number > 3 &&
+      num_unflushed_memtables >=
+          mutable_cf_options.max_write_buffer_number - 1 &&
+      num_unflushed_memtables - 1 >=
+          immutable_cf_options.min_write_buffer_number_to_merge) {
+    cond = WriteStallCondition::kDelayed;
+    cause = WriteStallCause::kMemtableLimit;
   } else if (!mutable_cf_options.disable_auto_compactions &&
              mutable_cf_options.level0_slowdown_writes_trigger >= 0 &&
              num_l0_files >=
                  mutable_cf_options.level0_slowdown_writes_trigger) {
-    return {WriteStallCondition::kDelayed, WriteStallCause::kL0FileCountLimit};
+    cond = WriteStallCondition::kDelayed;
+    cause = WriteStallCause::kL0FileCountLimit;
   } else if (!mutable_cf_options.disable_auto_compactions &&
              mutable_cf_options.soft_pending_compaction_bytes_limit > 0 &&
              vstorage->estimated_compaction_needed_bytes() >=
                  mutable_cf_options.soft_pending_compaction_bytes_limit) {
-    return {WriteStallCondition::kDelayed,
-            WriteStallCause::kPendingCompactionBytes};
+    cond = WriteStallCondition::kDelayed;
+    cause = WriteStallCause::kPendingCompactionBytes;
   }
   if (!mutable_cf_options.db_paths_soft_size_limit_multiplier.empty() ||
       !mutable_cf_options.db_paths_hard_size_limit_multiplier.empty()) {
@@ -975,8 +980,10 @@ ColumnFamilyData::GetWriteStallConditionAndCause(
             immutable_cf_options.cf_paths[current_path_id].target_size *
                 mutable_cf_options
                     .db_paths_soft_size_limit_multiplier[current_path_id]) {
-          return {WriteStallCondition::kDelayed,
-                  WriteStallCause::kDbPathsSizeLimit};
+          if (cond == WriteStallCondition::kNormal) {
+            cond = WriteStallCondition::kDelayed;
+            cause = WriteStallCause::kDbPathsSizeLimit;
+          }
         }
         if (mutable_cf_options.db_paths_soft_size_limit_multiplier.size() - 1 <
             path_id) {
@@ -988,7 +995,7 @@ ColumnFamilyData::GetWriteStallConditionAndCause(
       used_size += vstorage->NumLevelBytes(level);
     }
   }
-  return {WriteStallCondition::kNormal, WriteStallCause::kNone};
+  return {cond, cause};
 }
 
 WriteStallCondition ColumnFamilyData::RecalculateWriteStallConditions(
