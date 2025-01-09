@@ -67,11 +67,8 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
 
 class RouterIteratorIntraFD : public TraitIterator<Elem> {
  public:
-  RouterIteratorIntraFD(const Compaction& c, CompactionIterator& c_iter,
-                          Slice start, Bound end)
-      : c_(c),
-        promoted_bytes_(0),
-        iter_(c_iter) {}
+  RouterIteratorIntraFD(const Compaction& c, CompactionIterator& c_iter)
+      : c_(c), promoted_bytes_(0), iter_(c_iter) {}
   ~RouterIteratorIntraFD() override {
     auto stats = c_.immutable_options()->stats;
     RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, promoted_bytes_);
@@ -191,9 +188,8 @@ RouterIterator::RouterIterator(const Compaction& c, CompactionIterator& c_iter,
         new IteratorWithoutRouter(c, c_iter));
   } else {
     if (c.latter_level_path_id() == 0) {
-      iter_ =
-          std::unique_ptr<RouterIteratorIntraFD>(new RouterIteratorIntraFD(
-              c, c_iter, start, end));
+      iter_ = std::unique_ptr<RouterIteratorIntraFD>(
+          new RouterIteratorIntraFD(c, c_iter));
     } else {
       assert(c.SupportsPerKeyPlacement());
       iter_ = std::unique_ptr<RouterIterator2SD>(
