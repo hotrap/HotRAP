@@ -1338,28 +1338,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
             sub_compact->end.has_value() ? &end_user_key : nullptr);
       };
 
-  // Future work(hotrap): How to handle other cases?
-  assert(c->num_input_levels() <= 2);
-  const CompactionInputFiles& start_level_inputs = (*c->inputs())[0];
-  assert(start_level_inputs.level == c->start_level());
-  Slice start_level_smallest_user_key, start_level_largest_user_key;
-  start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
-                                     &start_level_largest_user_key);
-  Slice promotable_start =
-      !start.has_value() ? start_level_smallest_user_key
-                    : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
-                           ? start_level_smallest_user_key
-                           : *start);
-  Bound promotable_end =
-      !end.has_value()
-          ? Bound{.user_key = start_level_largest_user_key, .excluded = false}
-          : (ucmp->Compare(*end, start_level_largest_user_key) <= 0
-                 ? Bound{.user_key = *end, .excluded = true}
-                 : Bound{
-                       .user_key = start_level_largest_user_key,
-                       .excluded = false,
-                   });
-  RouterIterator router_iter(*c, *c_iter, promotable_start, promotable_end);
+  RouterIterator router_iter(*sub_compact, *c_iter);
 
   std::string previous_user_key;
   auto compaction_start = rusty::time::Instant::now();
