@@ -1336,7 +1336,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
             sub_compact->end.has_value() ? &end_user_key : nullptr);
       };
 
-  RouterIterator router_iter(*sub_compact, *c_iter);
+  auto router_iter = NewRouterIterator(*sub_compact, *c_iter);
 
   auto compaction_start = rusty::time::Instant::now();
 
@@ -1346,11 +1346,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       reinterpret_cast<void*>(
           const_cast<Compaction*>(sub_compact->compaction)));
   uint64_t last_cpu_micros = prev_cpu_micros;
-  while (status.ok() && !cfd->IsDropped() && router_iter.Valid()) {
-    // Invariant: router_iter.status() is guaranteed to be OK if
+  while (status.ok() && !cfd->IsDropped() && router_iter->Valid()) {
+    // Invariant: router_iter->status() is guaranteed to be OK if
     // router_iter->Valid() returns true.
     assert(!end.has_value() ||
-           cfd->user_comparator()->Compare(router_iter.user_key(), *end) < 0);
+           cfd->user_comparator()->Compare(router_iter->user_key(), *end) < 0);
 
     if (c_iter_stats.num_input_records % kRecordStatsEvery ==
         kRecordStatsEvery - 1) {
@@ -1371,7 +1371,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     // TODO: it would be better to have the compaction file open/close moved
     // into `CompactionOutputs` which has the output file information.
     status =
-        sub_compact->AddToOutput(router_iter, open_file_func, close_file_func);
+        sub_compact->AddToOutput(*router_iter, open_file_func, close_file_func);
     if (!status.ok()) {
       break;
     }
@@ -1380,7 +1380,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "CompactionJob::Run():PausingManualCompaction:2",
         reinterpret_cast<void*>(
             const_cast<std::atomic<bool>*>(&manual_compaction_canceled_)));
-    router_iter.Next();
+    router_iter->Next();
     if (c_iter->status().IsManualCompactionPaused()) {
       break;
     }
