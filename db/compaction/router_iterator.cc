@@ -1,5 +1,7 @@
 #include "router_iterator.h"
 
+#include "db/compaction/subcompaction_state.h"
+
 namespace ROCKSDB_NAMESPACE {
 
 // Future work(hotrap): The caller should ZeroOutSequenceIfPossible if the final
@@ -116,17 +118,44 @@ class RouterIterator2SD : public TraitIterator<Elem> {
   uint64_t kvsize_to_start_level_;
 };
 
-RouterIterator::RouterIterator(const Compaction& c, CompactionIterator& c_iter,
-                               Slice start, Bound end)
+RouterIterator::RouterIterator(SubcompactionState& sub_compact,
+                               CompactionIterator& c_iter)
     : c_iter_(c_iter) {
+  const Compaction& c = *sub_compact.compaction;
   RALT* ralt = c.mutable_cf_options()->ralt.get();
   if (ralt == NULL || c.latter_level_path_id() == 0) {
     iter_ = std::unique_ptr<IteratorWithoutRouter>(
         new IteratorWithoutRouter(c, c_iter));
   } else {
     assert(c.SupportsPerKeyPlacement());
-    iter_ = std::unique_ptr<RouterIterator2SD>(
-        new RouterIterator2SD(*ralt, c, c_iter, start, end));
+    const Comparator* ucmp =
+        c.column_family_data()->ioptions()->user_comparator;
+    // Future work(hotrap): How to handle other cases?
+    assert(c.num_input_levels() <= 2);
+    const CompactionInputFiles& start_level_inputs = (*c.inputs())[0];
+    assert(start_level_inputs.level == c.start_level());
+    Slice start_level_smallest_user_key, start_level_largest_user_key;
+    start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
+                                       &start_level_largest_user_key);
+    std::optional<Slice> start = sub_compact.start;
+    std::optional<Slice> end = sub_compact.end;
+    Slice promotable_start =
+        !start.has_value()
+            ? start_level_smallest_user_key
+            : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
+                   ? start_level_smallest_user_key
+                   : *start);
+    Bound promotable_end =
+        !end.has_value()
+            ? Bound{.user_key = start_level_largest_user_key, .excluded = false}
+            : (ucmp->Compare(*end, start_level_largest_user_key) <= 0
+                   ? Bound{.user_key = *end, .excluded = true}
+                   : Bound{
+                         .user_key = start_level_largest_user_key,
+                         .excluded = false,
+                     });
+    iter_ = std::unique_ptr<RouterIterator2SD>(new RouterIterator2SD(
+        *ralt, c, c_iter, promotable_start, promotable_end));
   }
   cur_ = iter_->next();
 }

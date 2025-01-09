@@ -4,6 +4,8 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+class SubcompactionState;
+
 struct IKeyValue {
   Slice key;
   ParsedInternalKey ikey;
@@ -28,8 +30,7 @@ struct Elem {
 
 class RouterIterator {
  public:
-  RouterIterator(const Compaction& c, CompactionIterator& c_iter, Slice start,
-                 Bound end);
+  RouterIterator(SubcompactionState& sub_compact, CompactionIterator& c_iter);
 
   const CompactionIterator& c_iter() const { return c_iter_; }
 
@@ -45,7 +46,7 @@ class RouterIterator {
   const Slice& value() const { return cur_.value().kv.value; }
 
  private:
-  CompactionIterator &c_iter_;
+  CompactionIterator& c_iter_;
   std::unique_ptr<TraitIterator<Elem>> iter_;
   std::optional<Elem> cur_;
 };
