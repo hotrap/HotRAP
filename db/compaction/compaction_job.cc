@@ -1096,9 +1096,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
   uint64_t prev_cpu_micros = db_options_.clock->CPUMicros();
 
-  const Compaction* c = sub_compact->compaction;
-  ColumnFamilyData* cfd = c->column_family_data();
-  const Comparator* ucmp = cfd->user_comparator();
+  ColumnFamilyData* cfd = sub_compact->compaction->column_family_data();
 
   // Create compaction filter and fail the compaction if
   // IgnoreSnapshots() = false because it is not supported anymore
@@ -1106,7 +1104,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       cfd->ioptions()->compaction_filter;
   std::unique_ptr<CompactionFilter> compaction_filter_from_factory = nullptr;
   if (compaction_filter == nullptr) {
-    compaction_filter_from_factory = c->CreateCompactionFilter();
+    compaction_filter_from_factory =
+        sub_compact->compaction->CreateCompactionFilter();
     compaction_filter = compaction_filter_from_factory.get();
   }
   if (compaction_filter != nullptr && !compaction_filter->IgnoreSnapshots()) {
@@ -1118,10 +1117,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   TimerGuard timer_guard =
       cfd->internal_stats()
           ->hotrap_timers_per_level()
-          .timer(c->start_level(),
+          .timer(sub_compact->compaction->start_level(),
                  PerLevelTimerType::kProcessKeyValueCompaction)
           .start();
-  const int level = c->level();
 
   NotifyOnSubcompactionBegin(sub_compact);
 
@@ -1261,8 +1259,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
 
   MergeHelper merge(
-      env_, ucmp, cfd->ioptions()->merge_operator.get(), compaction_filter,
-      db_options_.info_log.get(),
+      env_, cfd->user_comparator(), cfd->ioptions()->merge_operator.get(),
+      compaction_filter, db_options_.info_log.get(),
       false /* internal key corruption is expected */,
       existing_snapshots_.empty() ? 0 : existing_snapshots_.back(),
       snapshot_checker_, compact_->compaction->level(), db_options_.stats);
@@ -1340,7 +1338,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
   RouterIterator router_iter(*sub_compact, *c_iter);
 
-  std::string previous_user_key;
   auto compaction_start = rusty::time::Instant::now();
 
   Status status;
@@ -1353,7 +1350,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     // Invariant: router_iter.status() is guaranteed to be OK if
     // router_iter->Valid() returns true.
     assert(!end.has_value() ||
-           ucmp->Compare(router_iter.user_key(), *end) < 0);
+           cfd->user_comparator()->Compare(router_iter.user_key(), *end) < 0);
 
     if (c_iter_stats.num_input_records % kRecordStatsEvery ==
         kRecordStatsEvery - 1) {
@@ -1724,9 +1721,8 @@ Status CompactionJob::FinishCompactionOutputFile(
       s = add_s;
     }
     if (sfm->IsMaxAllowedSpaceReached()) {
-      // TODO(ajkr): should we return OK() if max space was reached by the
-      // final compaction output file (similarly to how flush works when
-      // full)?
+      // TODO(ajkr): should we return OK() if max space was reached by the final
+      // compaction output file (similarly to how flush works when full)?
       s = Status::SpaceLimit("Max allowed space was reached");
       TEST_SYNC_POINT(
           "CompactionJob::FinishCompactionOutputFile:MaxAllowedSpaceReached");
