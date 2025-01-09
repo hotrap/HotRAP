@@ -80,7 +80,7 @@ class RouterIterator2SD : public TraitIterator<Elem> {
                 },
             .end = end,
         },
-        ucmp_(c.column_family_data()->user_comparator()),
+        ucmp_(c.immutable_options()->user_comparator),
         iter_(c_iter),
         hot_iter_(ralt.LowerBound(start)),
         kvsize_to_start_level_(0) {}
@@ -144,8 +144,7 @@ class RouterIteratorImpl : public RouterIterator {
     const Compaction& c = *sub_compact.compaction;
     RALT& ralt = *c.mutable_cf_options()->ralt.get();
     assert(c.SupportsPerKeyPlacement());
-    const Comparator* ucmp =
-        c.column_family_data()->ioptions()->user_comparator;
+    const Comparator* ucmp = c.immutable_options()->user_comparator;
     // Future work(hotrap): How to handle other cases?
     assert(c.num_input_levels() <= 2);
     const CompactionInputFiles& start_level_inputs = (*c.inputs())[0];

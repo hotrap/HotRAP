@@ -1893,8 +1893,8 @@ Status CompactionJob::OpenCompactionOutputFile(SubcompactionState* sub_compact,
   s = io_s;
   if (sub_compact->io_status.ok()) {
     sub_compact->io_status = io_s;
-    // Since this error is really a copy of the io_s that is checked below as
-    // s, it does not also need to be checked.
+    // Since this error is really a copy of the io_s that is checked below as s,
+    // it does not also need to be checked.
     sub_compact->io_status.PermitUncheckedError();
   }
   if (!s.ok()) {
@@ -1992,10 +1992,6 @@ Status CompactionJob::OpenCompactionOutputFile(SubcompactionState* sub_compact,
   outputs.NewBuilder(tboptions);
 
   LogFlush(db_options_.info_log);
-  // if (level_output == &sub_compact->start_level_output) {
-  //   ROCKS_LOG_INFO(db_options_.info_log, "Compaction output file of start
-  //   level opened: %s\n", fname.c_str());
-  // }
   return s;
 }
 
