@@ -1,5 +1,7 @@
 #include "router_iterator.h"
 
+#include "db/compaction/subcompaction_state.h"
+
 namespace ROCKSDB_NAMESPACE {
 
 static std::pair<int, Slice> parse_level_value(Slice input_value) {
@@ -14,12 +16,54 @@ static std::pair<int, Slice> parse_level_value(Slice input_value) {
   return std::make_pair(level, Slice(data, len));
 }
 
-IKeyValueLevel::IKeyValueLevel(CompactionIterator& c_iter)
-    : key(c_iter.key()), ikey(c_iter.ikey()) {
-  auto ret = parse_level_value(c_iter.value());
-  value = ret.second;
-  level = ret.first;
-}
+class IteratorWithoutRouter : public RouterIterator {
+ public:
+  IteratorWithoutRouter(CompactionIterator& c_iter) : c_iter_(c_iter) {}
+
+  const CompactionIterator& c_iter() const override { return c_iter_; }
+
+  bool Valid() const override { return c_iter_.Valid(); }
+  void Next() override { return c_iter_.Next(); }
+  Decision decision() const override { return Decision::kNextLevel; }
+  Slice key() const override { return c_iter_.key(); }
+  const ParsedInternalKey& ikey() const override { return c_iter_.ikey(); }
+  Slice user_key() const override { return c_iter_.user_key(); }
+  Slice value() const override {
+    return parse_level_value(c_iter_.value()).second;
+  }
+
+ private:
+  CompactionIterator& c_iter_;
+};
+
+struct IKeyValueLevel {
+  Slice key;
+  ParsedInternalKey ikey;
+  Slice value;
+  int level;
+
+  IKeyValueLevel(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value,
+                 int arg_level)
+      : key(arg_key), ikey(arg_ikey), value(arg_value), level(arg_level) {}
+
+  IKeyValueLevel(CompactionIterator& c_iter)
+      : key(c_iter.key()), ikey(c_iter.ikey()) {
+    auto ret = parse_level_value(c_iter.value());
+    value = ret.second;
+    level = ret.first;
+  }
+};
+
+struct IKeyValue {
+  Slice key;
+  ParsedInternalKey ikey;
+  Slice value;
+
+  IKeyValue(const IKeyValueLevel& rhs)
+      : IKeyValue(rhs.key, rhs.ikey, rhs.value) {}
+  IKeyValue(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value)
+      : key(arg_key), ikey(arg_ikey), value(arg_value) {}
+};
 
 // Future work(hotrap): The caller should ZeroOutSequenceIfPossible if the final
 // decision is kNextLevel
@@ -49,29 +93,17 @@ class CompactionIterWrapper : public TraitIterator<IKeyValueLevel> {
   bool first_;
 };
 
-class IteratorWithoutRouter : public TraitIterator<Elem> {
- public:
-  IteratorWithoutRouter(const Compaction& c, CompactionIterator& c_iter)
-      : c_iter_(c_iter) {}
-  std::optional<Elem> next() override {
-    std::optional<IKeyValueLevel> ret = c_iter_.next();
-    if (ret.has_value())
-      return std::make_optional<Elem>(Decision::kNextLevel, ret.value());
-    else
-      return std::nullopt;
-  }
-
- private:
-  CompactionIterWrapper c_iter_;
+struct Elem {
+  Decision decision;
+  IKeyValue kv;
+  Elem(Decision arg_decision, const IKeyValueLevel& arg_kv)
+      : decision(arg_decision), kv(arg_kv) {}
 };
 
 class RouterIteratorIntraFD : public TraitIterator<Elem> {
  public:
-  RouterIteratorIntraFD(const Compaction& c, CompactionIterator& c_iter,
-                          Slice start, Bound end)
-      : c_(c),
-        promoted_bytes_(0),
-        iter_(c_iter) {}
+  RouterIteratorIntraFD(const Compaction& c, CompactionIterator& c_iter)
+      : c_(c), promoted_bytes_(0), iter_(c_iter) {}
   ~RouterIteratorIntraFD() override {
     auto stats = c_.immutable_options()->stats;
     RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, promoted_bytes_);
@@ -97,14 +129,20 @@ class RouterIteratorIntraFD : public TraitIterator<Elem> {
 
 class RouterIterator2SD : public TraitIterator<Elem> {
  public:
-  RouterIterator2SD(RALT& ralt, const Compaction& c,
-                      CompactionIterator& c_iter, Slice start, Bound end)
+  RouterIterator2SD(RALT& ralt, const Compaction& c, CompactionIterator& c_iter,
+                    Slice start, Bound end)
       : c_(c),
-        start_(start),
-        end_(end),
-        ucmp_(c.column_family_data()->user_comparator()),
+        promotable_range_{
+            .start =
+                Bound{
+                    .user_key = start,
+                    .excluded = false,
+                },
+            .end = end,
+        },
+        ucmp_(c.immutable_options()->user_comparator),
         iter_(c_iter),
-        hot_iter_(ralt.LowerBound(start_)),
+        hot_iter_(ralt.LowerBound(start)),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
   ~RouterIterator2SD() {
@@ -123,15 +161,7 @@ class RouterIterator2SD : public TraitIterator<Elem> {
       return std::nullopt;
     }
     const IKeyValueLevel& kv = kv_ret.value();
-    RangeBounds range{
-        .start =
-            Bound{
-                .user_key = start_,
-                .excluded = false,
-            },
-        .end = end_,
-    };
-    if (!range.contains(kv.ikey.user_key, ucmp_)) {
+    if (!promotable_range_.contains(kv.ikey.user_key, ucmp_)) {
       return std::make_optional<Elem>(Decision::kNextLevel, kv);
     }
     Decision decision = route(kv);
@@ -171,8 +201,7 @@ class RouterIterator2SD : public TraitIterator<Elem> {
   }
 
   const Compaction& c_;
-  const Slice start_;
-  const Bound end_;
+  RangeBounds promotable_range_;
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
@@ -182,25 +211,82 @@ class RouterIterator2SD : public TraitIterator<Elem> {
   size_t kvsize_retained_;
 };
 
-RouterIterator::RouterIterator(const Compaction& c, CompactionIterator& c_iter,
-                               Slice start, Bound end)
-    : c_iter_(c_iter) {
-  RALT* ralt = c.mutable_cf_options()->ralt.get();
-  if (ralt == NULL) {
-    iter_ = std::unique_ptr<IteratorWithoutRouter>(
-        new IteratorWithoutRouter(c, c_iter));
-  } else {
+class RouterIteratorImpl : public RouterIterator {
+ public:
+  RouterIteratorImpl(SubcompactionState& sub_compact,
+                     CompactionIterator& c_iter)
+      : c_iter_(c_iter) {
+    const Compaction& c = *sub_compact.compaction;
+    RALT& ralt = *c.mutable_cf_options()->ralt.get();
     if (c.latter_level_path_id() == 0) {
-      iter_ =
-          std::unique_ptr<RouterIteratorIntraFD>(new RouterIteratorIntraFD(
-              c, c_iter, start, end));
+      iter_ = std::unique_ptr<RouterIteratorIntraFD>(
+          new RouterIteratorIntraFD(c, c_iter));
     } else {
       assert(c.SupportsPerKeyPlacement());
-      iter_ = std::unique_ptr<RouterIterator2SD>(
-          new RouterIterator2SD(*ralt, c, c_iter, start, end));
+      const Comparator* ucmp = c.immutable_options()->user_comparator;
+      // Future work(hotrap): How to handle other cases?
+      assert(c.num_input_levels() <= 2);
+      const CompactionInputFiles& start_level_inputs = (*c.inputs())[0];
+      assert(start_level_inputs.level == c.start_level());
+      Slice start_level_smallest_user_key, start_level_largest_user_key;
+      start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
+                                         &start_level_largest_user_key);
+      std::optional<Slice> start = sub_compact.start;
+      std::optional<Slice> end = sub_compact.end;
+      Slice promotable_start =
+          !start.has_value()
+              ? start_level_smallest_user_key
+              : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
+                     ? start_level_smallest_user_key
+                     : *start);
+      Bound promotable_end =
+          !end.has_value()
+              ? Bound{.user_key = start_level_largest_user_key,
+                      .excluded = false}
+              : (ucmp->Compare(*end, start_level_largest_user_key) <= 0
+                     ? Bound{.user_key = *end, .excluded = true}
+                     : Bound{
+                           .user_key = start_level_largest_user_key,
+                           .excluded = false,
+                       });
+      iter_ = std::unique_ptr<RouterIterator2SD>(new RouterIterator2SD(
+          ralt, c, c_iter, promotable_start, promotable_end));
     }
+    cur_ = iter_->next();
   }
-  cur_ = iter_->next();
+
+  const CompactionIterator& c_iter() const override { return c_iter_; }
+
+  bool Valid() const override { return cur_.has_value(); }
+  void Next() override {
+    assert(Valid());
+    cur_ = iter_->next();
+  }
+  Decision decision() const override { return cur_.value().decision; }
+  Slice key() const override { return cur_.value().kv.key; }
+  const ParsedInternalKey& ikey() const override {
+    return cur_.value().kv.ikey;
+  }
+  Slice user_key() const override {
+    return cur_.value().kv.ikey.user_key;
+  }
+  Slice value() const override { return cur_.value().kv.value; }
+
+ private:
+  CompactionIterator& c_iter_;
+  std::unique_ptr<TraitIterator<Elem>> iter_;
+  std::optional<Elem> cur_;
+};
+
+std::unique_ptr<RouterIterator> NewRouterIterator(
+    SubcompactionState& sub_compact, CompactionIterator& c_iter) {
+  const Compaction& c = *sub_compact.compaction;
+  RALT* ralt = c.mutable_cf_options()->ralt.get();
+  if (ralt == NULL) {
+    return std::make_unique<IteratorWithoutRouter>(c_iter);
+  } else {
+    return std::make_unique<RouterIteratorImpl>(sub_compact, c_iter);
+  }
 }
 
 }  // namespace ROCKSDB_NAMESPACE

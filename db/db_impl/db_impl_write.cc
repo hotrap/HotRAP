@@ -2294,10 +2294,6 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
   cfd->mem()->SetNextLogNumber(logfile_number_);
 
   {
-    auto guard = cfd->internal_stats()
-                     ->hotrap_timers()
-                     .timer(TimerType::kInvalidateOld)
-                     .start();
     Arena arena;
     ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
     // We need to hold the read lock of promotion_caches so that there won't be
@@ -2308,13 +2304,19 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
       const PromotionCache& cache = level_cache.second;
       imm_lists.push_back(cache.imm_list().Read());
     }
-    for (mem_it->SeekToFirst(); mem_it->Valid(); mem_it->Next()) {
-      std::string user_key = mem_it->user_key().ToString();
-      for (auto& imm_list : imm_lists) {
-        for (const ImmPromotionCache& imm : imm_list->list) {
-          // TODO: Avoid requiring ownership after upgrading to C++14
-          auto it = imm.cache.find(user_key);
-          if (it != imm.cache.end()) imm.updated.Lock()->insert(user_key);
+    if (!imm_lists.empty()) {
+      auto guard = cfd->internal_stats()
+                       ->hotrap_timers()
+                       .timer(TimerType::kInvalidateOld)
+                       .start();
+      for (mem_it->SeekToFirst(); mem_it->Valid(); mem_it->Next()) {
+        std::string user_key = mem_it->user_key().ToString();
+        for (auto& imm_list : imm_lists) {
+          for (const ImmPromotionCache& imm : imm_list->list) {
+            // TODO: Avoid requiring ownership after upgrading to C++14
+            auto it = imm.cache.find(user_key);
+            if (it != imm.cache.end()) imm.updated.Lock()->insert(user_key);
+          }
         }
       }
     }

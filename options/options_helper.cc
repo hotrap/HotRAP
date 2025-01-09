@@ -245,9 +245,14 @@ void UpdateColumnFamilyOptions(const MutableCFOptions& moptions,
   for (auto value : moptions.db_paths_soft_size_limit_multiplier) {
     cf_opts->db_paths_soft_size_limit_multiplier.emplace_back(value);
   }
+  cf_opts->db_paths_hard_size_limit_multiplier.clear();
+  for (auto value : moptions.db_paths_hard_size_limit_multiplier) {
+    cf_opts->db_paths_hard_size_limit_multiplier.emplace_back(value);
+  }
 
   cf_opts->compaction_options_fifo = moptions.compaction_options_fifo;
   cf_opts->compaction_options_universal = moptions.compaction_options_universal;
+  cf_opts->disable_intra_l0_compaction = moptions.disable_intra_l0_compaction;
 
   // Blob file related options
   cf_opts->enable_blob_files = moptions.enable_blob_files;
