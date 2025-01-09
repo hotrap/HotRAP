@@ -7384,64 +7384,6 @@ class VecIter : public InternalIterator {
   typename std::vector<std::pair<std::string, std::string>>::const_iterator it_;
 };
 
-class InternalIterAppendLevel : public InternalIterator {
- public:
-  InternalIterAppendLevel(int level, InternalIterator* iter) : iter_(iter) {
-    *(int*)buf_ = level;
-  }
-  ~InternalIterAppendLevel() override { delete iter_; }
-
-  bool Valid() const override { return iter_->Valid(); }
-  void SeekToFirst() override {
-    iter_->SeekToFirst();
-    update_buf();
-  }
-  void SeekToLast() override {
-    iter_->SeekToLast();
-    update_buf();
-  }
-  void Seek(const Slice& target) override {
-    iter_->Seek(target);
-    update_buf();
-  }
-  void SeekForPrev(const Slice& target) override {
-    iter_->SeekForPrev(target);
-    update_buf();
-  }
-  void Next() override {
-    iter_->Next();
-    update_buf();
-  }
-  void Prev() override {
-    iter_->Prev();
-    update_buf();
-  }
-  Slice key() const override { return iter_->key(); }
-  Slice user_key() const override { return iter_->user_key(); }
-  Slice value() const override {
-    assert(Valid());
-    assert(!IsDeleteRangeSentinelKey());
-    return Slice(buf_, size_);
-  }
-  Status status() const override { return iter_->status(); }
-
-  bool IsDeleteRangeSentinelKey() const override {
-    return iter_->IsDeleteRangeSentinelKey();
-  }
-
- private:
-  void update_buf() {
-    if (!Valid()) return;
-    if (IsDeleteRangeSentinelKey()) return;
-    Slice value = iter_->value();
-    *(const char**)(buf_ + sizeof(int)) = value.data();
-    *(size_t*)(buf_ + sizeof(int) + sizeof(const char*)) = value.size();
-  }
-  static constexpr size_t size_ = sizeof(int) + sizeof(char*) + sizeof(size_t);
-  char buf_[size_];
-  InternalIterator* iter_;
-};
-
 InternalIterator* VersionSet::MakeInputIterator(
     const ReadOptions& read_options, const Compaction* c,
     RangeDelAggregator* range_del_agg,
@@ -7450,11 +7392,10 @@ InternalIterator* VersionSet::MakeInputIterator(
     const std::optional<const Slice>& end) {
   auto cfd = c->column_family_data();
 
-  InternalIterAppendLevel* promotion_cache_iter = nullptr;
+  InternalIterator* promotion_cache_iter = nullptr;
   if (!c->cached_records_to_promote().empty()) {
-    InternalIterator* iter =
+    promotion_cache_iter =
         new VecIter(cfd->user_comparator(), c->cached_records_to_promote());
-    promotion_cache_iter = new InternalIterAppendLevel(-1, iter);
   }
 
   // Level-0 files have to be merged together.  For other levels,
@@ -7496,41 +7437,37 @@ InternalIterator* VersionSet::MakeInputIterator(
             continue;
           }
           TruncatedRangeDelIterator* range_tombstone_iter = nullptr;
-          list[num++] = new InternalIterAppendLevel(
-              0, cfd->table_cache()->NewIterator(
-                read_options, file_options_compactions,
-                cfd->internal_comparator(), fmd, range_del_agg,
-                c->mutable_cf_options()->prefix_extractor,
-                /*table_reader_ptr=*/nullptr,
-                /*file_read_hist=*/nullptr, TableReaderCaller::kCompaction,
-                /*arena=*/nullptr,
-                /*skip_filters=*/false,
-                /*level=*/static_cast<int>(c->level(which)),
-                MaxFileSizeForL0MetaPin(*c->mutable_cf_options()),
-                /*smallest_compaction_key=*/nullptr,
-                /*largest_compaction_key=*/nullptr,
-                /*allow_unprepared_value=*/false,
-                c->mutable_cf_options()->block_protection_bytes_per_key,
-                /*range_del_read_seqno=*/nullptr,
-                /*range_del_iter=*/&range_tombstone_iter));
+          list[num++] = cfd->table_cache()->NewIterator(
+              read_options, file_options_compactions,
+              cfd->internal_comparator(), fmd, range_del_agg,
+              c->mutable_cf_options()->prefix_extractor,
+              /*table_reader_ptr=*/nullptr,
+              /*file_read_hist=*/nullptr, TableReaderCaller::kCompaction,
+              /*arena=*/nullptr,
+              /*skip_filters=*/false,
+              /*level=*/static_cast<int>(c->level(which)),
+              MaxFileSizeForL0MetaPin(*c->mutable_cf_options()),
+              /*smallest_compaction_key=*/nullptr,
+              /*largest_compaction_key=*/nullptr,
+              /*allow_unprepared_value=*/false,
+              c->mutable_cf_options()->block_protection_bytes_per_key,
+              /*range_del_read_seqno=*/nullptr,
+              /*range_del_iter=*/&range_tombstone_iter);
           range_tombstones.emplace_back(range_tombstone_iter, nullptr);
         }
       } else {
         // Create concatenating iterator for the files from this level
         TruncatedRangeDelIterator*** tombstone_iter_ptr = nullptr;
-        list[num++] = new InternalIterAppendLevel(
-            c->level(which),
-            new LevelIterator(
-                cfd->table_cache(), read_options, file_options_compactions,
-                cfd->internal_comparator(), c->input_levels(which),
-                c->mutable_cf_options()->prefix_extractor,
-                /*should_sample=*/false,
-                /*no per level latency histogram=*/nullptr,
-                TableReaderCaller::kCompaction, /*skip_filters=*/false,
-                /*level=*/static_cast<int>(c->level(which)),
-                c->mutable_cf_options()->block_protection_bytes_per_key,
-                range_del_agg, c->boundaries(which), false,
-                &tombstone_iter_ptr));
+        list[num++] = new LevelIterator(
+            cfd->table_cache(), read_options, file_options_compactions,
+            cfd->internal_comparator(), c->input_levels(which),
+            c->mutable_cf_options()->prefix_extractor,
+            /*should_sample=*/false,
+            /*no per level latency histogram=*/nullptr,
+            TableReaderCaller::kCompaction, /*skip_filters=*/false,
+            /*level=*/static_cast<int>(c->level(which)),
+            c->mutable_cf_options()->block_protection_bytes_per_key,
+            range_del_agg, c->boundaries(which), false, &tombstone_iter_ptr);
         range_tombstones.emplace_back(nullptr, tombstone_iter_ptr);
       }
     }

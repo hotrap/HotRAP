@@ -4,26 +4,11 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-struct IKeyValueLevel {
-  Slice key;
-  ParsedInternalKey ikey;
-  Slice value;
-  int level;
-
-  IKeyValueLevel(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value,
-                 int arg_level)
-      : key(arg_key), ikey(arg_ikey), value(arg_value), level(arg_level) {}
-
-  IKeyValueLevel(CompactionIterator& c_iter);
-};
-
 struct IKeyValue {
   Slice key;
   ParsedInternalKey ikey;
   Slice value;
 
-  IKeyValue(const IKeyValueLevel& rhs)
-      : IKeyValue(rhs.key, rhs.ikey, rhs.value) {}
   IKeyValue(Slice arg_key, ParsedInternalKey arg_ikey, Slice arg_value)
       : key(arg_key), ikey(arg_ikey), value(arg_value) {}
 };
@@ -37,7 +22,7 @@ enum class Decision {
 struct Elem {
   Decision decision;
   IKeyValue kv;
-  Elem(Decision arg_decision, const IKeyValueLevel& arg_kv)
+  Elem(Decision arg_decision, const IKeyValue& arg_kv)
       : decision(arg_decision), kv(arg_kv) {}
 };
 
