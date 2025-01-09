@@ -135,6 +135,8 @@ struct MutableCFOptions {
         level0_stop_writes_trigger(options.level0_stop_writes_trigger),
         db_paths_soft_size_limit_multiplier(
             options.db_paths_soft_size_limit_multiplier),
+        db_paths_hard_size_limit_multiplier(
+            options.db_paths_hard_size_limit_multiplier),
         max_compaction_bytes(options.max_compaction_bytes),
         ignore_max_compaction_bytes_for_input(
             options.ignore_max_compaction_bytes_for_input),
@@ -148,6 +150,7 @@ struct MutableCFOptions {
             options.max_bytes_for_level_multiplier_additional),
         compaction_options_fifo(options.compaction_options_fifo),
         compaction_options_universal(options.compaction_options_universal),
+        disable_intra_l0_compaction(options.disable_intra_l0_compaction),
         enable_blob_files(options.enable_blob_files),
         min_blob_size(options.min_blob_size),
         blob_file_size(options.blob_file_size),
@@ -289,6 +292,7 @@ struct MutableCFOptions {
   int level0_slowdown_writes_trigger;
   int level0_stop_writes_trigger;
   std::vector<double> db_paths_soft_size_limit_multiplier;
+  std::vector<double> db_paths_hard_size_limit_multiplier;
   uint64_t max_compaction_bytes;
   bool ignore_max_compaction_bytes_for_input;
   uint64_t target_file_size_base;
@@ -300,6 +304,7 @@ struct MutableCFOptions {
   std::vector<double> max_bytes_for_level_multiplier_additional;
   CompactionOptionsFIFO compaction_options_fifo;
   CompactionOptionsUniversal compaction_options_universal;
+  bool disable_intra_l0_compaction;
 
   // Blob file related options
   bool enable_blob_files;

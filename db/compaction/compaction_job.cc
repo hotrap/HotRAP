@@ -1055,12 +1055,10 @@ void CompactionJob::NotifyOnSubcompactionBegin(
     listener->OnSubcompactionBegin(info);
   }
   info.status.PermitUncheckedError();
-
 }
 
 void CompactionJob::NotifyOnSubcompactionCompleted(
     SubcompactionState* sub_compact) {
-
   if (db_options_.listeners.empty()) {
     return;
   }
@@ -1098,9 +1096,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
 
   uint64_t prev_cpu_micros = db_options_.clock->CPUMicros();
 
-  const Compaction* c = sub_compact->compaction;
-  ColumnFamilyData* cfd = c->column_family_data();
-  const Comparator* ucmp = cfd->user_comparator();
+  ColumnFamilyData* cfd = sub_compact->compaction->column_family_data();
 
   // Create compaction filter and fail the compaction if
   // IgnoreSnapshots() = false because it is not supported anymore
@@ -1108,7 +1104,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       cfd->ioptions()->compaction_filter;
   std::unique_ptr<CompactionFilter> compaction_filter_from_factory = nullptr;
   if (compaction_filter == nullptr) {
-    compaction_filter_from_factory = c->CreateCompactionFilter();
+    compaction_filter_from_factory =
+        sub_compact->compaction->CreateCompactionFilter();
     compaction_filter = compaction_filter_from_factory.get();
   }
   if (compaction_filter != nullptr && !compaction_filter->IgnoreSnapshots()) {
@@ -1120,10 +1117,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   TimerGuard timer_guard =
       cfd->internal_stats()
           ->hotrap_timers_per_level()
-          .timer(c->start_level(),
+          .timer(sub_compact->compaction->start_level(),
                  PerLevelTimerType::kProcessKeyValueCompaction)
           .start();
-  const int level = c->level();
 
   NotifyOnSubcompactionBegin(sub_compact);
 
@@ -1263,8 +1259,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
 
   MergeHelper merge(
-      env_, ucmp, cfd->ioptions()->merge_operator.get(), compaction_filter,
-      db_options_.info_log.get(),
+      env_, cfd->user_comparator(), cfd->ioptions()->merge_operator.get(),
+      compaction_filter, db_options_.info_log.get(),
       false /* internal key corruption is expected */,
       existing_snapshots_.empty() ? 0 : existing_snapshots_.back(),
       snapshot_checker_, compact_->compaction->level(), db_options_.stats);
@@ -1340,18 +1336,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
             sub_compact->end.has_value() ? &end_user_key : nullptr);
       };
 
-  // Future work(hotrap): How to handle other cases?
-  assert(c->num_input_levels() <= 2);
-  const CompactionInputFiles& start_level_inputs = (*c->inputs())[0];
-  assert(start_level_inputs.level == c->start_level());
-  Slice start_level_smallest_user_key, start_level_largest_user_key;
-  start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
-                                     &start_level_largest_user_key);
+  auto router_iter = NewRouterIterator(*sub_compact, *c_iter);
 
-  RouterIterator router_iter(*c, *c_iter,
-                             start_level_smallest_user_key);
-
-  std::string previous_user_key;
   auto compaction_start = rusty::time::Instant::now();
 
   Status status;
@@ -1360,11 +1346,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       reinterpret_cast<void*>(
           const_cast<Compaction*>(sub_compact->compaction)));
   uint64_t last_cpu_micros = prev_cpu_micros;
-  while (status.ok() && !cfd->IsDropped() && router_iter.Valid()) {
-    // Invariant: router_iter.status() is guaranteed to be OK if
+  while (status.ok() && !cfd->IsDropped() && router_iter->Valid()) {
+    // Invariant: router_iter->status() is guaranteed to be OK if
     // router_iter->Valid() returns true.
     assert(!end.has_value() ||
-           ucmp->Compare(router_iter.user_key(), *end) < 0);
+           cfd->user_comparator()->Compare(router_iter->user_key(), *end) < 0);
 
     if (c_iter_stats.num_input_records % kRecordStatsEvery ==
         kRecordStatsEvery - 1) {
@@ -1385,7 +1371,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     // TODO: it would be better to have the compaction file open/close moved
     // into `CompactionOutputs` which has the output file information.
     status =
-        sub_compact->AddToOutput(router_iter, open_file_func, close_file_func);
+        sub_compact->AddToOutput(*router_iter, open_file_func, close_file_func);
     if (!status.ok()) {
       break;
     }
@@ -1394,7 +1380,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "CompactionJob::Run():PausingManualCompaction:2",
         reinterpret_cast<void*>(
             const_cast<std::atomic<bool>*>(&manual_compaction_canceled_)));
-    router_iter.Next();
+    router_iter->Next();
     if (c_iter->status().IsManualCompactionPaused()) {
       break;
     }
@@ -1735,9 +1721,8 @@ Status CompactionJob::FinishCompactionOutputFile(
       s = add_s;
     }
     if (sfm->IsMaxAllowedSpaceReached()) {
-      // TODO(ajkr): should we return OK() if max space was reached by the
-      // final compaction output file (similarly to how flush works when
-      // full)?
+      // TODO(ajkr): should we return OK() if max space was reached by the final
+      // compaction output file (similarly to how flush works when full)?
       s = Status::SpaceLimit("Max allowed space was reached");
       TEST_SYNC_POINT(
           "CompactionJob::FinishCompactionOutputFile:MaxAllowedSpaceReached");
@@ -1774,7 +1759,8 @@ Status CompactionJob::InstallCompactionResults(
           compaction_stats_.TotalBytesWritten());
     } else {
       ROCKS_LOG_BUFFER(log_buffer_,
-                       "[%s] [JOB %d] Compacted %s => %" PRIu64 " bytes, "
+                       "[%s] [JOB %d] Compacted %s => %" PRIu64
+                       " bytes, "
                        "retained or promoted %" PRIu64 " bytes",
                        compaction->column_family_data()->GetName().c_str(),
                        job_id_, compaction->InputLevelSummary(&inputs_summary),
@@ -1908,8 +1894,8 @@ Status CompactionJob::OpenCompactionOutputFile(SubcompactionState* sub_compact,
   s = io_s;
   if (sub_compact->io_status.ok()) {
     sub_compact->io_status = io_s;
-    // Since this error is really a copy of the io_s that is checked below as
-    // s, it does not also need to be checked.
+    // Since this error is really a copy of the io_s that is checked below as s,
+    // it does not also need to be checked.
     sub_compact->io_status.PermitUncheckedError();
   }
   if (!s.ok()) {
@@ -2007,10 +1993,6 @@ Status CompactionJob::OpenCompactionOutputFile(SubcompactionState* sub_compact,
   outputs.NewBuilder(tboptions);
 
   LogFlush(db_options_.info_log);
-  // if (level_output == &sub_compact->start_level_output) {
-  //   ROCKS_LOG_INFO(db_options_.info_log, "Compaction output file of start
-  //   level opened: %s\n", fname.c_str());
-  // }
   return s;
 }
 

@@ -4382,10 +4382,23 @@ void PickSSTAccurateHotSize(const Version& version,
     if (ralt && version.path_id(level) != version.path_id(level + 1)) {
       uint64_t hot_size = ralt->RangeHotSize(file->smallest.user_key(),
                                              file->largest.user_key());
-      if (benefit < hot_size) {
+      if (file->estimated_hot_size >= benefit &&
+          hot_size < file->estimated_hot_size) {
+        ROCKS_LOG_INFO(version.cfd()->ioptions()->info_log,
+                       "RangeHotSize returned by RALT for file %" PRIu64
+                       " is likely to be underestimated: %" PRIu64
+                       ". Using estimated_hot_size %" PRIu64
+                       " to avoid infinite compaction. Additional info: "
+                       "raw_key_size %" PRIu64 ", raw_value_size %" PRIu64 "\n",
+                       file->fd.GetNumber(), hot_size, file->estimated_hot_size,
+                       file->raw_key_size, file->raw_value_size);
         benefit = 0;
       } else {
-        benefit -= hot_size;
+        if (benefit < hot_size) {
+          benefit = 0;
+        } else {
+          benefit -= hot_size;
+        }
       }
     }
     if (file->num_deletions != 0) {
