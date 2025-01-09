@@ -94,14 +94,20 @@ class RouterIteratorIntraFD : public TraitIterator<Elem> {
 
 class RouterIterator2SD : public TraitIterator<Elem> {
  public:
-  RouterIterator2SD(RALT& ralt, const Compaction& c,
-                      CompactionIterator& c_iter, Slice start, Bound end)
+  RouterIterator2SD(RALT& ralt, const Compaction& c, CompactionIterator& c_iter,
+                    Slice start, Bound end)
       : c_(c),
-        start_(start),
-        end_(end),
+        promotable_range_{
+            .start =
+                Bound{
+                    .user_key = start,
+                    .excluded = false,
+                },
+            .end = end,
+        },
         ucmp_(c.column_family_data()->user_comparator()),
         iter_(c_iter),
-        hot_iter_(ralt.LowerBound(start_)),
+        hot_iter_(ralt.LowerBound(start)),
         kvsize_promoted_(0),
         kvsize_retained_(0) {}
   ~RouterIterator2SD() {
@@ -120,15 +126,7 @@ class RouterIterator2SD : public TraitIterator<Elem> {
       return std::nullopt;
     }
     const IKeyValueLevel& kv = kv_ret.value();
-    RangeBounds range{
-        .start =
-            Bound{
-                .user_key = start_,
-                .excluded = false,
-            },
-        .end = end_,
-    };
-    if (!range.contains(kv.ikey.user_key, ucmp_)) {
+    if (!promotable_range_.contains(kv.ikey.user_key, ucmp_)) {
       return std::make_optional<Elem>(Decision::kNextLevel, kv);
     }
     Decision decision = route(kv);
@@ -168,8 +166,7 @@ class RouterIterator2SD : public TraitIterator<Elem> {
   }
 
   const Compaction& c_;
-  const Slice start_;
-  const Bound end_;
+  RangeBounds promotable_range_;
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
