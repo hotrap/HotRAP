@@ -724,6 +724,8 @@ struct AdvancedColumnFamilyOptions {
   // (db_paths[i].target_size * db_paths_soft_size_limit_multiplier[i]).
   std::vector<double> db_paths_soft_size_limit_multiplier;
 
+  std::vector<double> db_paths_hard_size_limit_multiplier;
+
   // We try to limit number of bytes in one compaction to be lower than this
   // threshold. But it's not guaranteed.
   // Value 0 will be sanitized.
@@ -765,8 +767,8 @@ struct AdvancedColumnFamilyOptions {
 
   // If level compaction_style = kCompactionStyleLevel, for each level,
   // which files are prioritized to be picked to compact.
-  // Default: kMinOverlappingRatio
-  CompactionPri compaction_pri = kMinOverlappingRatio;
+  // Default: kAccurateHotSize
+  CompactionPri compaction_pri = kAccurateHotSize;
 
   // The options needed to support Universal Style compactions
   //
@@ -774,6 +776,8 @@ struct AdvancedColumnFamilyOptions {
   // Dynamic change example:
   // SetOptions("compaction_options_universal", "{size_ratio=2;}")
   CompactionOptionsUniversal compaction_options_universal;
+
+  bool disable_intra_l0_compaction = false;
 
   // The options for FIFO compaction style
   //
