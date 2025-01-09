@@ -55,10 +55,10 @@ class RouterIterator {
     cur_ = iter_->next();
   }
   Decision decision() const { return cur_.value().decision; }
-  const Slice& key() const { return cur_.value().kv.key; }
+  Slice key() const { return cur_.value().kv.key; }
   const ParsedInternalKey& ikey() const { return cur_.value().kv.ikey; }
-  const Slice& user_key() const { return cur_.value().kv.ikey.user_key; }
-  const Slice& value() const { return cur_.value().kv.value; }
+  Slice user_key() const { return cur_.value().kv.ikey.user_key; }
+  Slice value() const { return cur_.value().kv.value; }
 
  private:
   CompactionIterator &c_iter_;
