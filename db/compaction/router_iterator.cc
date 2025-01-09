@@ -53,8 +53,7 @@ class CompactionIterWrapper : public TraitIterator<IKeyValueLevel> {
 
 class IteratorWithoutRouter : public TraitIterator<Elem> {
  public:
-  IteratorWithoutRouter(const Compaction& c, CompactionIterator& c_iter)
-      : c_iter_(c_iter) {}
+  IteratorWithoutRouter(CompactionIterator& c_iter) : c_iter_(c_iter) {}
   std::optional<Elem> next() override {
     std::optional<IKeyValueLevel> ret = c_iter_.next();
     if (ret.has_value())
@@ -185,7 +184,7 @@ RouterIterator::RouterIterator(SubcompactionState& sub_compact,
   RALT* ralt = c.mutable_cf_options()->ralt.get();
   if (ralt == NULL) {
     iter_ = std::unique_ptr<IteratorWithoutRouter>(
-        new IteratorWithoutRouter(c, c_iter));
+        new IteratorWithoutRouter(c_iter));
   } else {
     if (c.latter_level_path_id() == 0) {
       iter_ = std::unique_ptr<RouterIteratorIntraFD>(
