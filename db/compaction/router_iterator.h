@@ -45,8 +45,7 @@ struct Elem {
 
 class RouterIterator {
  public:
-  RouterIterator(SubcompactionState& sub_compact, CompactionIterator& c_iter,
-                 Slice start, Bound end);
+  RouterIterator(SubcompactionState& sub_compact, CompactionIterator& c_iter);
 
   const CompactionIterator& c_iter() const { return c_iter_; }
 

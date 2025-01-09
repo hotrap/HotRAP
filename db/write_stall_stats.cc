@@ -17,6 +17,7 @@ const std::string& WriteStallCauseToHyphenString(WriteStallCause cause) {
   static const std::string kPendingCompactionBytes = "pending-compaction-bytes";
   static const std::string kWriteBufferManagerLimit =
       "write-buffer-manager-limit";
+  static const std::string kDbPathsSizeLimit = "db-paths-size-limit";
   switch (cause) {
     case WriteStallCause::kMemtableLimit:
       return kMemtableLimit;
@@ -26,6 +27,8 @@ const std::string& WriteStallCauseToHyphenString(WriteStallCause cause) {
       return kPendingCompactionBytes;
     case WriteStallCause::kWriteBufferManagerLimit:
       return kWriteBufferManagerLimit;
+    case WriteStallCause::kDbPathsSizeLimit:
+      return kDbPathsSizeLimit;
     default:
       break;
   }
@@ -82,6 +85,16 @@ InternalStats::InternalCFStatsType InternalCFStat(
           break;
       }
       break;
+    }
+    case WriteStallCause::kDbPathsSizeLimit: {
+      switch (condition) {
+        case WriteStallCondition::kDelayed:
+          return InternalStats::DB_PATH_SIZE_LIMIT_DELAYS;
+        case WriteStallCondition::kStopped:
+          return InternalStats::DB_PATH_SIZE_LIMIT_STOPS;
+        case WriteStallCondition::kNormal:
+          break;
+      }
     }
     default:
       break;

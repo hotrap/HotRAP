@@ -69,11 +69,8 @@ class IteratorWithoutRouter : public TraitIterator<Elem> {
 
 class RouterIteratorIntraFD : public TraitIterator<Elem> {
  public:
-  RouterIteratorIntraFD(const Compaction& c, CompactionIterator& c_iter,
-                          Slice start, Bound end)
-      : c_(c),
-        promoted_bytes_(0),
-        iter_(c_iter) {}
+  RouterIteratorIntraFD(const Compaction& c, CompactionIterator& c_iter)
+      : c_(c), promoted_bytes_(0), iter_(c_iter) {}
   ~RouterIteratorIntraFD() override {
     auto stats = c_.immutable_options()->stats;
     RecordTick(stats, Tickers::PROMOTED_2FDLAST_BYTES, promoted_bytes_);
@@ -100,13 +97,19 @@ class RouterIteratorIntraFD : public TraitIterator<Elem> {
 class RouterIterator2SD : public TraitIterator<Elem> {
  public:
   RouterIterator2SD(RALT& ralt, SubcompactionState& sub_compact,
-                      CompactionIterator& c_iter, Slice start, Bound end)
+                    CompactionIterator& c_iter, Slice start, Bound end)
       : sub_compact_(sub_compact),
-        start_(start),
-        end_(end),
+        promotable_range_{
+            .start =
+                Bound{
+                    .user_key = start,
+                    .excluded = false,
+                },
+            .end = end,
+        },
         ucmp_(sub_compact_.compaction->column_family_data()->user_comparator()),
         iter_(c_iter),
-        hot_iter_(ralt.LowerBound(start_)),
+        hot_iter_(ralt.LowerBound(start)),
         kvsize_promoted_(0),
         kvsize_retained_(0) {
     sub_compact_.promoted_ranges_out() =
@@ -128,15 +131,7 @@ class RouterIterator2SD : public TraitIterator<Elem> {
       return std::nullopt;
     }
     const IKeyValueLevel& kv = kv_ret.value();
-    RangeBounds range{
-        .start =
-            Bound{
-                .user_key = start_,
-                .excluded = false,
-            },
-        .end = end_,
-    };
-    if (!range.contains(kv.ikey.user_key, ucmp_)) {
+    if (!promotable_range_.contains(kv.ikey.user_key, ucmp_)) {
       return std::make_optional<Elem>(Decision::kNextLevel, kv);
     }
     Decision decision = route(kv);
@@ -198,8 +193,7 @@ class RouterIterator2SD : public TraitIterator<Elem> {
   }
 
   SubcompactionState& sub_compact_;
-  const Slice start_;
-  const Bound end_;
+  RangeBounds promotable_range_;
 
   const Comparator* ucmp_;
   CompactionIterWrapper iter_;
@@ -210,8 +204,7 @@ class RouterIterator2SD : public TraitIterator<Elem> {
 };
 
 RouterIterator::RouterIterator(SubcompactionState& sub_compact,
-                               CompactionIterator& c_iter, Slice start,
-                               Bound end)
+                               CompactionIterator& c_iter)
     : c_iter_(c_iter) {
   const Compaction& c = *sub_compact.compaction;
   RALT* ralt = c.mutable_cf_options()->ralt.get();
@@ -220,13 +213,39 @@ RouterIterator::RouterIterator(SubcompactionState& sub_compact,
         new IteratorWithoutRouter(c, c_iter));
   } else {
     if (c.latter_level_path_id() == 0) {
-      iter_ =
-          std::unique_ptr<RouterIteratorIntraFD>(new RouterIteratorIntraFD(
-              c, c_iter, start, end));
+      iter_ = std::unique_ptr<RouterIteratorIntraFD>(
+          new RouterIteratorIntraFD(c, c_iter));
     } else {
       assert(c.SupportsPerKeyPlacement());
-      iter_ = std::unique_ptr<RouterIterator2SD>(
-          new RouterIterator2SD(*ralt, sub_compact, c_iter, start, end));
+      const Comparator* ucmp =
+          c.column_family_data()->ioptions()->user_comparator;
+      // Future work(hotrap): How to handle other cases?
+      assert(c.num_input_levels() <= 2);
+      const CompactionInputFiles& start_level_inputs = (*c.inputs())[0];
+      assert(start_level_inputs.level == c.start_level());
+      Slice start_level_smallest_user_key, start_level_largest_user_key;
+      start_level_inputs.GetBoundaryKeys(ucmp, &start_level_smallest_user_key,
+                                         &start_level_largest_user_key);
+      std::optional<Slice> start = sub_compact.start;
+      std::optional<Slice> end = sub_compact.end;
+      Slice promotable_start =
+          !start.has_value()
+              ? start_level_smallest_user_key
+              : (ucmp->Compare(*start, start_level_smallest_user_key) < 0
+                     ? start_level_smallest_user_key
+                     : *start);
+      Bound promotable_end =
+          !end.has_value()
+              ? Bound{.user_key = start_level_largest_user_key,
+                      .excluded = false}
+              : (ucmp->Compare(*end, start_level_largest_user_key) <= 0
+                     ? Bound{.user_key = *end, .excluded = true}
+                     : Bound{
+                           .user_key = start_level_largest_user_key,
+                           .excluded = false,
+                       });
+      iter_ = std::unique_ptr<RouterIterator2SD>(new RouterIterator2SD(
+          *ralt, sub_compact, c_iter, promotable_start, promotable_end));
     }
   }
   cur_ = iter_->next();
