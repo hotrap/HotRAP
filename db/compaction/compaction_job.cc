@@ -722,8 +722,9 @@ Status CompactionJob::Run() {
         files_output.emplace_back(&output);
       }
     }
-    ColumnFamilyData* cfd = c->column_family_data();
-    auto& prefix_extractor = c->mutable_cf_options()->prefix_extractor;
+    ColumnFamilyData* cfd = compact_->compaction->column_family_data();
+    auto& prefix_extractor =
+        compact_->compaction->mutable_cf_options()->prefix_extractor;
     std::atomic<size_t> next_file_idx(0);
     auto verify_table = [&](Status& output_status) {
       while (true) {
