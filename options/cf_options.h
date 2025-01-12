@@ -186,7 +186,8 @@ struct MutableCFOptions {
         memtable_max_range_deletions(options.memtable_max_range_deletions),
         bottommost_file_compaction_delay(
             options.bottommost_file_compaction_delay),
-        ralt(options.ralt) {
+        ralt(options.ralt),
+        disable_hotrap(options.disable_hotrap) {
     RefreshDerivedOptions(options.num_levels, options.compaction_style);
   }
 
@@ -341,6 +342,8 @@ struct MutableCFOptions {
   std::vector<uint64_t> max_file_size;
 
   std::shared_ptr<RALT> ralt;
+  bool disable_hotrap;
+  RALT* get_ralt() const { return disable_hotrap ? nullptr : ralt.get(); }
 };
 
 uint64_t MultiplyCheckOverflow(uint64_t op1, double op2);

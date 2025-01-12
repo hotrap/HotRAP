@@ -25,6 +25,7 @@ namespace ROCKSDB_NAMESPACE {
 class BlobFileBuilder;
 class BlobFetcher;
 class PrefetchBufferCollection;
+class SubcompactionState;
 
 // A wrapper of internal iterator whose purpose is to count how
 // many entries there are in the iterator.
@@ -208,7 +209,8 @@ class CompactionIterator {
       BlobFileBuilder* blob_file_builder, bool allow_data_in_errors,
       bool enforce_single_del_contracts,
       const std::atomic<bool>& manual_compaction_canceled,
-      bool must_count_input_entries, const Compaction* compaction = nullptr,
+      bool must_count_input_entries,
+      const SubcompactionState* sub_compact = nullptr,
       const CompactionFilter* compaction_filter = nullptr,
       const std::atomic<bool>* shutting_down = nullptr,
       const std::shared_ptr<Logger> info_log = nullptr,
@@ -216,6 +218,7 @@ class CompactionIterator {
       const SequenceNumber preserve_time_min_seqno = kMaxSequenceNumber,
       const SequenceNumber preclude_last_level_min_seqno = kMaxSequenceNumber);
 
+#if 0
   // Constructor with custom CompactionProxy, used for tests.
   CompactionIterator(
       InternalIterator* input, const Comparator* cmp, MergeHelper* merge_helper,
@@ -235,6 +238,7 @@ class CompactionIterator {
       const std::string* full_history_ts_low = nullptr,
       const SequenceNumber preserve_time_min_seqno = kMaxSequenceNumber,
       const SequenceNumber preclude_last_level_min_seqno = kMaxSequenceNumber);
+#endif
 
   ~CompactionIterator();
 
@@ -273,8 +277,6 @@ class CompactionIterator {
   Status InputStatus() const { return input_.status(); }
 
   bool IsDeleteRangeSentinelKey() const { return is_range_del_; }
-
-  void ZeroOutSequenceIfPossible();
 
  private:
   // Processes the input stream to find the next output
@@ -394,6 +396,9 @@ class CompactionIterator {
   // is in `NextFromInput()` and `PrepareOutput()`.
   // If nullptr, NO GC will be performed and all history will be preserved.
   const std::string* const full_history_ts_low_;
+
+  RangeBounds promotable_range_;
+  std::optional<Peekable<RALT::Iter>> hot_iter_;
 
   // State
   //

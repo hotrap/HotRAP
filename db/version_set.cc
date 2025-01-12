@@ -2444,7 +2444,7 @@ void Version::TryPromote(
   // I don't think we can get the block size in this context. So I hard code
   // the promotion threshold. Maybe we should make it an option of RALT.
   if (user_key.size() + value->size() >= 16 * 1024) return;
-  if (path_id(hit_level) == 0) {
+  if (mutable_cf_options_.disable_hotrap || path_id(hit_level) == 0) {
     ralt->Access(user_key, value->size());
     return;
   }
@@ -4345,7 +4345,7 @@ void PickSSTAccurateHotSize(const Version& version,
                             SystemClock* clock, int level,
                             int num_non_empty_levels, uint64_t ttl,
                             std::vector<Fsize>* temp) {
-  RALT* ralt = version.GetMutableCFOptions().ralt.get();
+  RALT* ralt = version.GetMutableCFOptions().get_ralt();
   std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> benefit_cost;
   auto next_level_it = next_level_files.begin();
 

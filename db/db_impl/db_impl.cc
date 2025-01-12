@@ -2172,8 +2172,9 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         }
 
         RecordTick(stats_, MEMTABLE_HIT);
-        if (sv->mutable_cf_options.ralt) {
-          sv->mutable_cf_options.ralt->HitLevel(-2, key);
+        RALT* ralt = sv->mutable_cf_options.ralt.get();
+        if (ralt) {
+          ralt->HitLevel(-2, key);
         }
       } else if ((s.ok() || s.IsMergeInProgress()) &&
                  sv->imm->Get(lkey,
@@ -2191,8 +2192,9 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         }
 
         RecordTick(stats_, MEMTABLE_HIT);
-        if (sv->mutable_cf_options.ralt) {
-          sv->mutable_cf_options.ralt->HitLevel(-1, key);
+        RALT* ralt = sv->mutable_cf_options.ralt.get();
+        if (ralt) {
+          ralt->HitLevel(-1, key);
         }
       }
     } else {

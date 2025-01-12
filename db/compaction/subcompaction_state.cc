@@ -10,7 +10,6 @@
 
 #include "db/compaction/subcompaction_state.h"
 
-#include "db/compaction/router_iterator.h"
 #include "rocksdb/sst_partitioner.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -90,18 +89,11 @@ Slice SubcompactionState::LargestUserKey() const {
 }
 
 Status SubcompactionState::AddToOutput(
-    const RouterIterator& iter,
+    const CompactionIterator& iter,
     const CompactionFileOpenFunc& open_file_func,
     const CompactionFileCloseFunc& close_file_func) {
-  // Currently we ignore iter.c_iter().output_to_penultimate_level()
-  // Maybe it's better to implement routing in the compaction iterator.
-  // But we need to get the source level of the record, which is currently
-  // implemented by appending the level in the value part.
-  // The compaction iterator is also used in flushing, so we can't parse the
-  // value in the compaction iterator.
-
   // update target output first
-  is_current_penultimate_level_ = (iter.decision() == Decision::kStartLevel);
+  is_current_penultimate_level_ = iter.output_to_penultimate_level();
   current_outputs_ = is_current_penultimate_level_ ? &penultimate_level_outputs_
                                                    : &compaction_outputs_;
   if (is_current_penultimate_level_) {

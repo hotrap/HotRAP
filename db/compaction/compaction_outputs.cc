@@ -221,9 +221,9 @@ uint64_t CompactionOutputs::GetCurrentKeyGrandparentOverlappedBytes(
   return overlapped_bytes;
 }
 
-bool CompactionOutputs::ShouldStopBefore(const RouterIterator& iter) {
-  assert(iter.Valid());
-  const Slice& internal_key = iter.key();
+bool CompactionOutputs::ShouldStopBefore(const CompactionIterator& c_iter) {
+  assert(c_iter.Valid());
+  const Slice& internal_key = c_iter.key();
 #ifndef NDEBUG
   bool should_stop = false;
   std::pair<bool*, const Slice> p{&should_stop, internal_key};
@@ -258,7 +258,7 @@ bool CompactionOutputs::ShouldStopBefore(const RouterIterator& iter) {
 
   // If there's user defined partitioner, check that first
   if (partitioner_ && partitioner_->ShouldPartition(PartitionerRequest(
-                          last_key_for_partitioner_, iter.user_key(),
+                          last_key_for_partitioner_, c_iter.user_key(),
                           current_output_file_size_)) == kRequired) {
     return true;
   }
@@ -350,22 +350,20 @@ bool CompactionOutputs::ShouldStopBefore(const RouterIterator& iter) {
 }
 
 Status CompactionOutputs::AddToOutput(
-    const RouterIterator& iter,
+    const CompactionIterator& c_iter,
     const CompactionFileOpenFunc& open_file_func,
     const CompactionFileCloseFunc& close_file_func) {
   Status s;
-  bool is_range_del = iter.c_iter().IsDeleteRangeSentinelKey();
-  // Not supported yet
-  assert(!is_range_del);
+  bool is_range_del = c_iter.IsDeleteRangeSentinelKey();
   if (is_range_del && compaction_->bottommost_level()) {
     // We don't consider range tombstone for bottommost level since:
     // 1. there is no grandparent and hence no overlap to consider
     // 2. range tombstone may be dropped at bottommost level.
     return s;
   }
-  const Slice& key = iter.key();
-  if (ShouldStopBefore(iter) && HasBuilder()) {
-    s = close_file_func(*this, iter.c_iter().InputStatus(), key);
+  const Slice& key = c_iter.key();
+  if (ShouldStopBefore(c_iter) && HasBuilder()) {
+    s = close_file_func(*this, c_iter.InputStatus(), key);
     if (!s.ok()) {
       return s;
     }
@@ -373,6 +371,13 @@ Status CompactionOutputs::AddToOutput(
     grandparent_boundary_switched_num_ = 0;
     grandparent_overlapped_bytes_ =
         GetCurrentKeyGrandparentOverlappedBytes(key);
+    if (UNLIKELY(is_range_del)) {
+      // lower bound for this new output file, this is needed as the lower bound
+      // does not come from the smallest point key in this case.
+      range_tombstone_lower_bound_.DecodeFrom(key);
+    } else {
+      range_tombstone_lower_bound_.Clear();
+    }
   }
 
   // Open output file if necessary
@@ -386,8 +391,8 @@ Status CompactionOutputs::AddToOutput(
   // c_iter may emit range deletion keys, so update `last_key_for_partitioner_`
   // here before returning below when `is_range_del` is true
   if (partitioner_) {
-    last_key_for_partitioner_.assign(iter.user_key().data_,
-                                     iter.user_key().size_);
+    last_key_for_partitioner_.assign(c_iter.user_key().data_,
+                                     c_iter.user_key().size_);
   }
 
   if (UNLIKELY(is_range_del)) {
@@ -395,7 +400,7 @@ Status CompactionOutputs::AddToOutput(
   }
 
   assert(builder_ != nullptr);
-  const Slice& value = iter.value();
+  const Slice& value = c_iter.value();
   s = current_output().validator.Add(key, value);
   if (!s.ok()) {
     return s;
@@ -413,7 +418,7 @@ Status CompactionOutputs::AddToOutput(
     return s;
   }
 
-  const ParsedInternalKey& ikey = iter.ikey();
+  const ParsedInternalKey& ikey = c_iter.ikey();
   s = current_output().meta.UpdateBoundaries(key, value, ikey.sequence,
                                              ikey.type);
 

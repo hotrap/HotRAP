@@ -166,6 +166,7 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   std::shared_ptr<CompactionFilterFactory> compaction_filter_factory = nullptr;
 
   std::shared_ptr<RALT> ralt;
+  bool disable_hotrap = false;
 
   // -------------------
   // Parameters that affect performance
