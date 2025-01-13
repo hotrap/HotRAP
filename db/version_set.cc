@@ -39,7 +39,7 @@
 #include "db/merge_context.h"
 #include "db/merge_helper.h"
 #include "db/pinned_iterators_manager.h"
-#include "db/promotion_cache.h"
+#include "db/promotion_buffer.h"
 #include "db/table_cache.h"
 #include "db/version_builder.h"
 #include "db/version_edit.h"
@@ -2453,23 +2453,23 @@ void Version::TryPromote(
   while (path_id(target_level) == 1) {
     target_level -= 1;
   }
-  const PromotionCache& cache =
-      cfd.get_or_create_promotion_cache(db, target_level);
+  const PromotionBuffer& cache =
+      cfd.get_or_create_promotion_buffer(db, target_level);
   if (!cache.being_or_has_been_compacted_lock().TryReadLock()) {
-    RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_LOCK);
+    RecordTick(cfd.ioptions()->stats, PROMOTION_BUFFER_INSERT_FAIL_LOCK);
     return;
   }
   for (auto f : cd_files) {
     if (f.get().being_or_has_been_compacted) {
       cache.being_or_has_been_compacted_lock().ReadUnlock();
-      RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT_FAIL_COMPACTED);
+      RecordTick(cfd.ioptions()->stats, PROMOTION_BUFFER_INSERT_FAIL_COMPACTED);
       return;
     }
   }
   cache.being_or_has_been_compacted_lock().ReadUnlock();
   cache.Insert(mutable_cf_options_, user_key.ToString(), seq,
                value->ToString());
-  RecordTick(cfd.ioptions()->stats, PROMOTION_CACHE_INSERT);
+  RecordTick(cfd.ioptions()->stats, PROMOTION_BUFFER_INSERT);
   return;
 }
 void Version::HandleFound(const ReadOptions& read_options,
@@ -2676,10 +2676,10 @@ void Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
                 internal_comparator());
   FdWithKeyRange* f = fp.GetNextFile();
 
-  autovector<std::map<size_t, rocksdb::PromotionCache>::const_iterator>
+  autovector<std::map<size_t, rocksdb::PromotionBuffer>::const_iterator>
       level_pcs;
   {
-    auto caches = cfd_->promotion_caches().Read();
+    auto caches = cfd_->promotion_buffers().Read();
     for (auto it = caches->cbegin(); it != caches->cend(); ++it)
       level_pcs.push_back(it);
   }
@@ -2695,7 +2695,7 @@ void Version::Get(EnvGet& env_get, GetContext& get_context, int last_level) {
       assert((int)level_pc->first < last_level);
       if (level_pc->second.Get(cfd_->internal_stats(), env_get.k.user_key(),
                                env_get.value)) {
-        RecordTick(cfd_->ioptions()->stats, Tickers::PROMOTION_CACHE_GET_HIT);
+        RecordTick(cfd_->ioptions()->stats, Tickers::PROMOTION_BUFFER_GET_HIT);
         RALT* ralt = mutable_cf_options_.ralt.get();
         if (ralt) {
           ralt->Access(env_get.k.user_key(), env_get.value->size());
@@ -7392,9 +7392,9 @@ InternalIterator* VersionSet::MakeInputIterator(
     const std::optional<const Slice>& end) {
   auto cfd = c->column_family_data();
 
-  InternalIterator* promotion_cache_iter = nullptr;
+  InternalIterator* promotion_buffer_iter = nullptr;
   if (!c->cached_records_to_promote().empty()) {
-    promotion_cache_iter =
+    promotion_buffer_iter =
         new VecIter(cfd->user_comparator(), c->cached_records_to_promote());
   }
 
@@ -7404,7 +7404,7 @@ InternalIterator* VersionSet::MakeInputIterator(
   size_t space = (c->level() == 0 ? c->input_levels(0)->num_files +
                                               c->num_input_levels() - 1
                                         : c->num_input_levels());
-  if (promotion_cache_iter) {
+  if (promotion_buffer_iter) {
     space += 1;
   }
   InternalIterator** list = new InternalIterator*[space];
@@ -7472,9 +7472,9 @@ InternalIterator* VersionSet::MakeInputIterator(
       }
     }
   }
-  if (promotion_cache_iter) {
-    list[num++] = promotion_cache_iter;
-    promotion_cache_iter = nullptr;
+  if (promotion_buffer_iter) {
+    list[num++] = promotion_buffer_iter;
+    promotion_buffer_iter = nullptr;
     range_tombstones.emplace_back(nullptr, nullptr);
   }
   assert(num <= space);

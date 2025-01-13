@@ -497,13 +497,13 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
   shutting_down_.store(true, std::memory_order_release);
   bg_cv_.SignalAll();
   for (ColumnFamilyData* cfd : *versions_->GetColumnFamilySet()) {
-    for (auto& level_cache : *cfd->promotion_caches().Write()) {
+    for (auto& level_cache : *cfd->promotion_buffers().Write()) {
       level_cache.second.stop_checker_no_wait();
     }
   }
   mutex_.Unlock();
   for (ColumnFamilyData* cfd : *versions_->GetColumnFamilySet()) {
-    for (auto& level_cache : *cfd->promotion_caches().Write()) {
+    for (auto& level_cache : *cfd->promotion_buffers().Write()) {
       // Enforce waiting to guarantee correctness.
       // Not sure how RocksDB guarantees correctness without waiting.
       level_cache.second.wait_for_checker_to_stop();

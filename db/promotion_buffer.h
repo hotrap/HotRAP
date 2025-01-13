@@ -24,7 +24,7 @@ class DBImpl;
 class InternalStats;
 struct SuperVersion;
 
-class PromotionCache;
+class PromotionBuffer;
 struct PCData {
   SequenceNumber sequence;
   std::string value;
@@ -59,26 +59,26 @@ class InternalKeyCompare {
   InternalKeyComparator icmp_;
 };
 
-struct ImmPromotionCache {
+struct ImmPromotionBuffer {
   std::unordered_map<std::string, PCData> cache;
   size_t size;
   MutexProtected<std::unordered_set<std::string>> updated;
-  ImmPromotionCache(std::unordered_map<std::string, PCData> &&arg_cache,
-                    size_t arg_size)
+  ImmPromotionBuffer(std::unordered_map<std::string, PCData> &&arg_cache,
+                     size_t arg_size)
       : cache(std::move(arg_cache)), size(arg_size) {}
 };
-struct ImmPromotionCacheList {
-  std::list<ImmPromotionCache> list;
+struct ImmPromotionBufferList {
+  std::list<ImmPromotionBuffer> list;
   size_t size = 0;
 };
 
-class PromotionCache {
+class PromotionBuffer {
  public:
-  PromotionCache(DBImpl &db, ColumnFamilyData &cfd, int target_level,
-                 const Comparator *ucmp);
-  PromotionCache(const PromotionCache &) = delete;
-  PromotionCache &operator=(const PromotionCache &) = delete;
-  ~PromotionCache();
+  PromotionBuffer(DBImpl &db, ColumnFamilyData &cfd, int target_level,
+                  const Comparator *ucmp);
+  PromotionBuffer(const PromotionBuffer &) = delete;
+  PromotionBuffer &operator=(const PromotionBuffer &) = delete;
+  ~PromotionBuffer();
 
   // Should be called with db mutex held
   void stop_checker_no_wait();
@@ -99,7 +99,7 @@ class PromotionCache {
       InternalStats *internal_stats, RALT *ralt, Slice smallest,
       Slice largest) const;
 
-  const RWMutexProtected<ImmPromotionCacheList> &imm_list() const {
+  const RWMutexProtected<ImmPromotionBufferList> &imm_list() const {
     return imm_list_;
   }
 
@@ -128,7 +128,7 @@ class PromotionCache {
     const Comparator *ucmp_;
     mutable PCHashTable cache;
     mutable std::atomic<size_t> size_;
-    friend class PromotionCache;
+    friend class PromotionBuffer;
   };
 
   void ConsumeBuffer(WriteGuard<Mutable> &mut) const;
@@ -138,9 +138,9 @@ class PromotionCache {
   void ScheduleSwitchMut() const;
   struct CheckerQueueElem {
     SuperVersion *sv;
-    std::list<ImmPromotionCache>::iterator iter;
+    std::list<ImmPromotionBuffer>::iterator iter;
   };
-  void SwitchMutablePromotionCache();
+  void SwitchMutablePromotionBuffer();
   void switcher();
   void checker();
   void check(CheckerQueueElem &elem);
@@ -213,7 +213,7 @@ class PromotionCache {
   MutBuffer mut_buffer_;
   RWMutexProtected<Mutable> mut_;
 
-  RWMutexProtected<ImmPromotionCacheList> imm_list_;
+  RWMutexProtected<ImmPromotionBufferList> imm_list_;
 
   mutable std::mutex switcher_lock_;
   mutable bool should_switch_;
