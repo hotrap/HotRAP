@@ -115,7 +115,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
         }
       }
     };
-    auto caches = cfd_->promotion_caches().Read();
+    auto caches = cfd_->promotion_buffers().Read();
     auto it = caches->find(start_level_);
     if (it == caches->end()) {
       // We hold the read lock of caches so that the new cache won't be
@@ -125,7 +125,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
       assert(it->first == (size_t)start_level_);
       const auto& cache = it->second;
       caches.drop();
-      // PromotionCache::Insert
+      // PromotionBuffer::Insert
       // (1) happens before mark_fn, so that the inserted records can be handled
       // by TakeRange.
       // (2) happens after mark_fn, so that records in the compaction range

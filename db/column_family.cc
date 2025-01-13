@@ -649,7 +649,7 @@ ColumnFamilyData::ColumnFamilyData(
 ColumnFamilyData::~ColumnFamilyData() {
   assert(refs_.load(std::memory_order_relaxed) == 0);
 
-  for (auto& cache : *promotion_caches().Write()) {
+  for (auto& cache : *promotion_buffers().Write()) {
     cache.second.stop_checker_no_wait();
   }
 
@@ -1223,32 +1223,32 @@ void ColumnFamilyData::CreateNewMemtable(
   mem_->Ref();
 }
 
-const PromotionCache* ColumnFamilyData::get_promotion_cache(size_t level) {
-  auto caches = promotion_caches().Read();
+const PromotionBuffer* ColumnFamilyData::get_promotion_buffer(size_t level) {
+  auto buffers = promotion_buffers().Read();
   // The first whose level <= target_level
-  auto it = caches->find(level);
-  if (it == caches->end()) {
+  auto it = buffers->find(level);
+  if (it == buffers->end()) {
     return nullptr;
   } else {
     return &it->second;
   }
 }
-const PromotionCache& ColumnFamilyData::get_or_create_promotion_cache(
+const PromotionBuffer& ColumnFamilyData::get_or_create_promotion_buffer(
     DBImpl& db, size_t level) {
-  const PromotionCache* cache = get_promotion_cache(level);
+  const PromotionBuffer* cache = get_promotion_buffer(level);
   if (cache == nullptr) {
-    auto caches = promotion_caches().Write();
+    auto buffers = promotion_buffers().Write();
     // It seems that even if the key already exists, emplace still construct
-    // PromotionCache then destruct it. However, PromotionCache should only be
+    // PromotionBuffer then destruct it. However, PromotionBuffer should only be
     // destructed when shutting down the database. Therefore we firstly make
-    // sure that the key does not exist to avoid destructing PromotionCache
+    // sure that the key does not exist to avoid destructing PromotionBuffer
     // here.
-    auto it = caches->find(level);
-    if (it == caches->end()) {
+    auto it = buffers->find(level);
+    if (it == buffers->end()) {
       auto ret =
-          caches->emplace(std::piecewise_construct, std::make_tuple(level),
-                          std::make_tuple(std::ref(db), std::ref(*this), level,
-                                          user_comparator()));
+          buffers->emplace(std::piecewise_construct, std::make_tuple(level),
+                           std::make_tuple(std::ref(db), std::ref(*this), level,
+                                           user_comparator()));
       assert(ret.second);
       it = ret.first;
     }
