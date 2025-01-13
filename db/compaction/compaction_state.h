@@ -28,8 +28,6 @@ class CompactionState {
   std::vector<SubcompactionState> sub_compact_states;
   Status status;
 
-  uint64_t retained_or_promoted_bytes = 0;
-
   void AggregateCompactionStats(
       InternalStats::CompactionStatsFull& compaction_stats,
       CompactionJobStats& compaction_job_stats);

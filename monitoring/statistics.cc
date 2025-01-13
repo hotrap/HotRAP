@@ -268,12 +268,12 @@ const std::vector<std::pair<Tickers, std::string>> TickersNameMap = {
     {TO_FD_LAST_BYTES, "hotrap.2fdlast.bytes"},
     {TO_SD_FRONT_BYTES, "hotrap.2sdfront.bytes"},
     {PROMOTED_FLUSH_BYTES, "hotrap.promoted.flush.bytes"},
-    {PROMOTION_CACHE_GET_HIT, "hotrap.promotion_cache.get.hit"},
-    {PROMOTION_CACHE_INSERT_FAIL_LOCK,
-     "hotrap.promotion_cache.insert.fail.lock"},
-    {PROMOTION_CACHE_INSERT_FAIL_COMPACTED,
-     "hotrap.promotion_cache.insert.fail.compacted"},
-    {PROMOTION_CACHE_INSERT, "hotrap.promotion_cache.insert"},
+    {PROMOTION_BUFFER_GET_HIT, "hotrap.promotion_buffer.get.hit"},
+    {PROMOTION_BUFFER_INSERT_FAIL_LOCK,
+     "hotrap.promotion_buffer.insert.fail.lock"},
+    {PROMOTION_BUFFER_INSERT_FAIL_COMPACTED,
+     "hotrap.promotion_buffer.insert.fail.compacted"},
+    {PROMOTION_BUFFER_INSERT, "hotrap.promotion_buffer.insert"},
 };
 
 const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap = {

@@ -16,7 +16,7 @@
 
 #include "cache/cache_reservation_manager.h"
 #include "db/memtable_list.h"
-#include "db/promotion_cache.h"
+#include "db/promotion_buffer.h"
 #include "db/table_cache.h"
 #include "db/table_properties_collector.h"
 #include "db/write_batch_internal.h"
@@ -381,11 +381,12 @@ class ColumnFamilyData {
   TableCache* table_cache() const { return table_cache_.get(); }
   BlobSource* blob_source() const { return blob_source_.get(); }
 
-  RWMutexProtected<std::map<size_t, PromotionCache>>& promotion_caches() {
-    return promotion_caches_;
+  RWMutexProtected<std::map<size_t, PromotionBuffer>>& promotion_buffers() {
+    return promotion_buffers_;
   }
-  const PromotionCache* get_promotion_cache(size_t level);
-  const PromotionCache& get_or_create_promotion_cache(DBImpl& db, size_t level);
+  const PromotionBuffer* get_promotion_buffer(size_t level);
+  const PromotionBuffer& get_or_create_promotion_buffer(DBImpl& db,
+                                                        size_t level);
 
   // See documentation in compaction_picker.h
   // REQUIRES: DB mutex held
@@ -595,7 +596,7 @@ class ColumnFamilyData {
 
   // Map from level to its promotion cache
   // The promotion cache of level i is considered between level i and level i+1
-  RWMutexProtected<std::map<size_t, PromotionCache>> promotion_caches_;
+  RWMutexProtected<std::map<size_t, PromotionBuffer>> promotion_buffers_;
 
   std::unique_ptr<InternalStats> internal_stats_;
 

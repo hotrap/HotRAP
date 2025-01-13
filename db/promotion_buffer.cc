@@ -1,4 +1,4 @@
-#include "promotion_cache.h"
+#include "promotion_buffer.h"
 
 #include <bits/types/clockid_t.h>
 #include <pthread.h>
@@ -28,8 +28,8 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
-                               int target_level, const Comparator *ucmp)
+PromotionBuffer::PromotionBuffer(DBImpl &db, ColumnFamilyData &cfd,
+                                 int target_level, const Comparator *ucmp)
     : db_(db),
       cfd_(cfd),
       target_level_(target_level),
@@ -43,14 +43,14 @@ PromotionCache::PromotionCache(DBImpl &db, ColumnFamilyData &cfd,
   read_options_.read_tier = kBlockCacheTier;
 }
 
-PromotionCache::~PromotionCache() {
+PromotionBuffer::~PromotionBuffer() {
   assert(switcher_should_stop_);
   if (switcher_.joinable()) switcher_.join();
   assert(checker_should_stop_);
   if (checker_.joinable()) checker_.join();
 }
 
-void PromotionCache::stop_checker_no_wait() {
+void PromotionBuffer::stop_checker_no_wait() {
   db_.mutex()->AssertHeld();
   {
     std::unique_lock<std::mutex> lock(switcher_lock_);
@@ -73,9 +73,9 @@ void PromotionCache::stop_checker_no_wait() {
     }
   }
 }
-void PromotionCache::wait_for_checker_to_stop() { checker_.join(); }
-bool PromotionCache::Get(InternalStats *internal_stats, Slice user_key,
-                         PinnableSlice *value) const {
+void PromotionBuffer::wait_for_checker_to_stop() { checker_.join(); }
+bool PromotionBuffer::Get(InternalStats *internal_stats, Slice user_key,
+                          PinnableSlice *value) const {
   auto res = mut_.TryRead();
   if (!res.has_value()) return false;
   const auto &mut = res.value();
@@ -123,14 +123,14 @@ static void print_stats_in_bg(std::atomic<bool> *should_stop,
 }
 
 // Will unref sv
-void PromotionCache::checker() {
+void PromotionBuffer::checker() {
   pthread_setname_np(pthread_self(), "checker");
 
   std::atomic<bool> printer_should_stop(false);
   clockid_t clock_id;
   pthread_getcpuclockid(pthread_self(), &clock_id);
-  std::thread printer(print_stats_in_bg, &printer_should_stop,
-                      db_.dbname_, target_level_, clock_id);
+  std::thread printer(print_stats_in_bg, &printer_should_stop, db_.dbname_,
+                      target_level_, clock_id);
   for (;;) {
     CheckerQueueElem elem;
     {
@@ -154,12 +154,12 @@ void PromotionCache::checker() {
   printer.join();
 }
 
-static void mark_updated(ImmPromotionCache &cache,
+static void mark_updated(ImmPromotionBuffer &cache,
                          const std::string &user_key) {
   auto updated = cache.updated.Lock();
   updated->insert(user_key);
 }
-void PromotionCache::check(CheckerQueueElem &elem) {
+void PromotionBuffer::check(CheckerQueueElem &elem) {
   struct RefHash {
     size_t operator()(std::reference_wrapper<const std::string> x) const {
       return std::hash<std::string>()(x.get());
@@ -179,7 +179,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
   auto iter = elem.iter;
   ColumnFamilyData *cfd = sv->cfd;
   const auto &hotrap_timers = cfd->internal_stats()->hotrap_timers();
-  ImmPromotionCache &cache = *iter;
+  ImmPromotionBuffer &cache = *iter;
 
   std::unordered_set<std::reference_wrapper<const std::string>, RefHash, RefEq>
       stably_hot;
@@ -257,7 +257,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     // in L1 if we force to flush them to L0. Therefore, we just insert them
     // back to the mutable promotion cache.
     TimerGuard start =
-        hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionCache)
+        hotrap_timers.timer(TimerType::kWriteBackToMutablePromotionBuffer)
             .start();
     auto mut = mut_.Write();
     for (const auto &item : cache.cache) {
@@ -286,7 +286,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     db_.InstallSuperVersionAndScheduleWork(cfd, &svc, sv->mutable_cf_options);
     DBImpl::FlushRequest flush_req;
     db_.GenerateFlushRequest(autovector<ColumnFamilyData *>({cfd}),
-                             FlushReason::kPromotionCacheFull, &flush_req);
+                             FlushReason::kPromotionBufferFull, &flush_req);
     db_.SchedulePendingFlush(flush_req);
     db_.MaybeScheduleFlushOrCompaction();
 
@@ -296,7 +296,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
     svc.Clean();
   }
 
-  std::list<ImmPromotionCache> tmp;
+  std::list<ImmPromotionBuffer> tmp;
   {
     auto list = imm_list_.Write();
     list->size -= iter->size;
@@ -305,9 +305,9 @@ void PromotionCache::check(CheckerQueueElem &elem) {
   // tmp will be freed without holding the lock of imm_list
 }
 
-size_t PromotionCache::Mutable::Insert(std::string &&user_key,
-                                       SequenceNumber sequence,
-                                       std::string &&value) const {
+size_t PromotionBuffer::Mutable::Insert(std::string &&user_key,
+                                        SequenceNumber sequence,
+                                        std::string &&value) const {
   size_t size;
 
   PCHashTable::accessor it;
@@ -323,8 +323,8 @@ size_t PromotionCache::Mutable::Insert(std::string &&user_key,
   return size;
 }
 std::vector<std::pair<std::string, std::string>>
-PromotionCache::Mutable::TakeRange(InternalStats *internal_stats, RALT *ralt,
-                                   Slice smallest, Slice largest) {
+PromotionBuffer::Mutable::TakeRange(InternalStats *internal_stats, RALT *ralt,
+                                    Slice smallest, Slice largest) {
   auto guard =
       internal_stats->hotrap_timers().timer(TimerType::kTakeRange).start();
   std::vector<std::pair<InternalKey, std::pair<std::string, uint64_t>>>
@@ -357,9 +357,9 @@ PromotionCache::Mutable::TakeRange(InternalStats *internal_stats, RALT *ralt,
 }
 
 // Return the mutable promotion size, or 0 if inserted to buffer.
-void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
-                            std::string &&user_key, SequenceNumber sequence,
-                            std::string &&value) const {
+void PromotionBuffer::Insert(const MutableCFOptions &mutable_cf_options,
+                             std::string &&user_key, SequenceNumber sequence,
+                             std::string &&value) const {
   size_t mut_size;
   {
     auto mut = mut_.TryRead();
@@ -375,7 +375,7 @@ void PromotionCache::Insert(const MutableCFOptions &mutable_cf_options,
   ScheduleSwitchMut();
 }
 
-void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
+void PromotionBuffer::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
   auto buffer = mut_buffer_.take_all();
   if (!buffer.has_value()) return;
   for (MutBufItem &item : buffer.value()) {
@@ -383,7 +383,7 @@ void PromotionCache::ConsumeBuffer(WriteGuard<Mutable> &mut) const {
   }
 }
 
-void PromotionCache::try_update_max_size(size_t mut_size) const {
+void PromotionBuffer::try_update_max_size(size_t mut_size) const {
   // Try to update stats.
   auto imm_list = imm_list_.TryRead();
   if (!imm_list.has_value()) return;
@@ -391,7 +391,7 @@ void PromotionCache::try_update_max_size(size_t mut_size) const {
   rusty::intrinsics::atomic_max_relaxed(max_size_, tot);
 }
 
-void PromotionCache::ScheduleSwitchMut() const {
+void PromotionBuffer::ScheduleSwitchMut() const {
   {
     std::unique_lock<std::mutex> switcher_lock(switcher_lock_);
     if (should_switch_) return;
@@ -404,9 +404,9 @@ void PromotionCache::ScheduleSwitchMut() const {
   switcher_signal_.notify_one();
 }
 
-void PromotionCache::SwitchMutablePromotionCache() {
+void PromotionBuffer::SwitchMutablePromotionBuffer() {
   SuperVersion *sv;
-  std::list<rocksdb::ImmPromotionCache>::iterator iter;
+  std::list<rocksdb::ImmPromotionBuffer>::iterator iter;
   size_t mut_size;
   {
     // We need to take snapshot before emptying mutable promotion cache to make
@@ -420,7 +420,7 @@ void PromotionCache::SwitchMutablePromotionCache() {
 
     auto start = cfd_.internal_stats()
                      ->hotrap_timers()
-                     .timer(TimerType::kSwitchMutablePromotionCache)
+                     .timer(TimerType::kSwitchMutablePromotionBuffer)
                      .start();
 
     db_.mutex()->Lock();
@@ -479,7 +479,7 @@ void PromotionCache::SwitchMutablePromotionCache() {
                  "Checker queue length %zu\n", queue_len);
   checker_signal_.notify_one();
 }
-void PromotionCache::switcher() {
+void PromotionBuffer::switcher() {
   pthread_setname_np(pthread_self(), "switcher");
   for (;;) {
     {
@@ -488,11 +488,11 @@ void PromotionCache::switcher() {
           lock, [&] { return switcher_should_stop_ || should_switch_; });
       if (switcher_should_stop_) break;
     }
-    SwitchMutablePromotionCache();
+    SwitchMutablePromotionBuffer();
   }
 }
 
-std::vector<std::pair<std::string, std::string>> PromotionCache::TakeRange(
+std::vector<std::pair<std::string, std::string>> PromotionBuffer::TakeRange(
     InternalStats *internal_stats, RALT *ralt, Slice smallest,
     Slice largest) const {
   auto mut = mut_.Write();
