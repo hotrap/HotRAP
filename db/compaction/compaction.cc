@@ -114,7 +114,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
         }
       }
     };
-    auto caches = cfd_->promotion_caches().Read();
+    auto caches = cfd_->promotion_buffers().Read();
     auto it = caches->find(start_level_);
     if (it == caches->end()) {
       // We hold the read lock of caches so that the new cache won't be
@@ -125,7 +125,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
       target_level_to_promote_ = start_level_;
       const auto& cache = it->second;
       caches.drop();
-      // PromotionCache::Insert
+      // PromotionBuffer::Insert
       // (1) happens before mark_fn, so that the inserted records can be handled
       // by TakeRange.
       // (2) happens after mark_fn, so that records in the compaction range
@@ -138,7 +138,7 @@ void Compaction::SetInputVersion(Version* _input_version) {
           cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
     }
   }
-  auto cache = cfd_->get_promotion_cache(output_level_);
+  auto cache = cfd_->get_promotion_buffer(output_level_);
   if (cache) {
     // Future work(hotrap): Handle the other case which is possible if ralt
     // changes.
@@ -147,6 +147,12 @@ void Compaction::SetInputVersion(Version* _input_version) {
     cached_records_to_promote_ = cache->TakeRange(
         cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
   }
+  size_t taken_bytes = 0;
+  for (const auto& record : cached_records_to_promote_) {
+    taken_bytes += record.first.size() + record.second.size();
+  }
+  RecordTick(cfd_->ioptions()->stats, Tickers::PROMOTION_BUFFER_TAKEN_BYTES,
+             taken_bytes);
 }
 
 void Compaction::GetBoundaryKeys(

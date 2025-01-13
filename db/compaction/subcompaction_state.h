@@ -66,8 +66,6 @@ class SubcompactionState {
   // sub-compaction begin.
   bool notify_on_subcompaction_completion = false;
 
-  uint64_t retained_or_promoted_bytes = 0;
-
   // compaction job stats for this sub-compaction
   CompactionJobStats compaction_job_stats;
 

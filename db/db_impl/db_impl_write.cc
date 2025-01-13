@@ -11,7 +11,7 @@
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
 #include "db/event_helpers.h"
-#include "db/promotion_cache.h"
+#include "db/promotion_buffer.h"
 #include "logging/logging.h"
 #include "monitoring/perf_context_imp.h"
 #include "options/options_helper.h"
@@ -2294,12 +2294,12 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
   cfd->mem()->SetNextLogNumber(logfile_number_);
 
   {
-    // We need to hold the read lock of promotion_caches so that there won't be
-    // any new PromotionCache and we are holding the lock of all imm_lists.
-    auto caches = cfd->promotion_caches().Read();
-    std::vector<ReadGuard<ImmPromotionCacheList>> imm_lists;
+    // We need to hold the read lock of promotion_buffers so that there won't be
+    // any new PromotionBuffer and we are holding the lock of all imm_lists.
+    auto caches = cfd->promotion_buffers().Read();
+    std::vector<ReadGuard<ImmPromotionBufferList>> imm_lists;
     for (const auto& level_cache : *caches) {
-      const PromotionCache& cache = level_cache.second;
+      const PromotionBuffer& cache = level_cache.second;
       imm_lists.push_back(cache.imm_list().Read());
     }
     if (!imm_lists.empty()) {
@@ -2312,7 +2312,7 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
       for (mem_it->SeekToFirst(); mem_it->Valid(); mem_it->Next()) {
         std::string user_key = mem_it->user_key().ToString();
         for (auto& imm_list : imm_lists) {
-          for (const ImmPromotionCache& imm : imm_list->list) {
+          for (const ImmPromotionBuffer& imm : imm_list->list) {
             // TODO: Avoid requiring ownership after upgrading to C++14
             auto it = imm.cache.find(user_key);
             if (it != imm.cache.end()) imm.updated.Lock()->insert(user_key);

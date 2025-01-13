@@ -1672,10 +1672,6 @@ Status CompactionJob::FinishCompactionOutputFile(
     meta = nullptr;
   }
 
-  if (s.ok() && meta && outputs.is_penultimate_level()) {
-    sub_compact->retained_or_promoted_bytes += meta->fd.file_size;
-  }
-
   if (s.ok() && (current_entries > 0 || tp.num_range_deletions > 0)) {
     // Output to event logger and fire events.
     outputs.UpdateTableProperties();
@@ -1753,14 +1749,21 @@ Status CompactionJob::InstallCompactionResults(
           compaction_stats_.penultimate_level_stats.bytes_written,
           compaction_stats_.stats.bytes_written,
           compaction_stats_.TotalBytesWritten());
+      compaction->output_level();
+      Tickers type;
+      if (compaction->start_level_path_id() == 0) {
+        type = Tickers::TO_FD_LAST_BYTES;
+      } else {
+        type = Tickers::TO_SD_FRONT_BYTES;
+      }
+      RecordTick(stats_, type,
+                  compaction_stats_.penultimate_level_stats.bytes_written);
     } else {
       ROCKS_LOG_BUFFER(log_buffer_,
-                       "[%s] [JOB %d] Compacted %s => %" PRIu64 " bytes, "
-                       "retained or promoted %" PRIu64 " bytes",
+                       "[%s] [JOB %d] Compacted %s => %" PRIu64 " bytes",
                        compaction->column_family_data()->GetName().c_str(),
                        job_id_, compaction->InputLevelSummary(&inputs_summary),
-                       compaction_stats_.TotalBytesWritten(),
-                       compact_->retained_or_promoted_bytes);
+                       compaction_stats_.TotalBytesWritten());
     }
   }
 

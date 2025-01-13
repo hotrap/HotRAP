@@ -1618,7 +1618,7 @@ class DBImpl : public DB {
   friend class WriteUnpreparedTransactionTest_RecoveryTest_Test;
 #endif
 
-  friend class PromotionCache;
+  friend class PromotionBuffer;
 
   struct CompactionState;
   struct PrepickedCompaction;

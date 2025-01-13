@@ -42,10 +42,10 @@ const char* timer_names[] = {
     "InvalidateOld",
     "TakeRange",
     "ScheduleSwitchMut",
-    "SwitchMutablePromotionCache",
+    "SwitchMutablePromotionBuffer",
     "CheckStablyHot",
     "CheckNewerVersion",
-    "WriteBackToMutablePromotionCache",
+    "WriteBackToMutablePromotionBuffer",
 };
 static_assert(sizeof(timer_names) / sizeof(const char*) == timer_num);
 
@@ -2238,7 +2238,7 @@ void InternalStats::DumpCFStatsNoFileHistogram(bool is_periodic,
   }
   value->append("]\n");
 
-  auto caches = cfd_->promotion_caches().Read();
+  auto caches = cfd_->promotion_buffers().Read();
   for (const auto& cache : *caches) {
     const auto& pc = cache.second;
     value->append("Promotion cache at L" + std::to_string(cache.first) +

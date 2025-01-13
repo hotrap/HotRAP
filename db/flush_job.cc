@@ -81,8 +81,8 @@ const char* GetFlushReasonString(FlushReason flush_reason) {
       return "WAL Full";
     case FlushReason::kCatchUpAfterErrorRecovery:
       return "Catch Up After Error Recovery";
-    case FlushReason::kPromotionCacheFull:
-      return "Promotion Cache Full";
+    case FlushReason::kPromotionBufferFull:
+      return "Promotion Buffer Full";
     default:
       return "Invalid";
   }
