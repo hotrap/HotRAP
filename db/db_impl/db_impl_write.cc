@@ -2294,8 +2294,6 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
   cfd->mem()->SetNextLogNumber(logfile_number_);
 
   {
-    Arena arena;
-    ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
     // We need to hold the read lock of promotion_caches so that there won't be
     // any new PromotionCache and we are holding the lock of all imm_lists.
     auto caches = cfd->promotion_caches().Read();
@@ -2309,6 +2307,8 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
                        ->hotrap_timers()
                        .timer(TimerType::kInvalidateOld)
                        .start();
+      Arena arena;
+      ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
       for (mem_it->SeekToFirst(); mem_it->Valid(); mem_it->Next()) {
         std::string user_key = mem_it->user_key().ToString();
         for (auto& imm_list : imm_lists) {
