@@ -13,7 +13,6 @@
 #include "db/blob/blob_garbage_meter.h"
 #include "db/compaction/compaction.h"
 #include "db/compaction/compaction_iterator.h"
-#include "db/compaction/router_iterator.h"
 #include "db/internal_stats.h"
 #include "db/output_validator.h"
 
@@ -228,7 +227,7 @@ class CompactionOutputs {
 
   // Returns true iff we should stop building the current output
   // before processing the current key in compaction iterator.
-  bool ShouldStopBefore(const RouterIterator& iter);
+  bool ShouldStopBefore(const CompactionIterator& c_iter);
 
   void Cleanup() {
     if (builder_ != nullptr) {
@@ -258,7 +257,7 @@ class CompactionOutputs {
 
   // Add current key from compaction_iterator to the output file. If needed
   // close and open new compaction output with the functions provided.
-  Status AddToOutput(const RouterIterator& iter,
+  Status AddToOutput(const CompactionIterator& c_iter,
                      const CompactionFileOpenFunc& open_file_func,
                      const CompactionFileCloseFunc& close_file_func);
 

@@ -23,7 +23,6 @@
 #include "db/builder.h"
 #include "db/compaction/clipping_iterator.h"
 #include "db/compaction/compaction_state.h"
-#include "db/compaction/router_iterator.h"
 #include "db/db_impl/db_impl.h"
 #include "db/dbformat.h"
 #include "db/error_handler.h"
@@ -47,7 +46,7 @@
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
-#include "rocksdb/sst_partitioner.h"
+#include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
 #include "rocksdb/table.h"
@@ -715,15 +714,15 @@ Status CompactionJob::Run() {
   }
   if (status.ok()) {
     thread_pool.clear();
-    Compaction* c = compact_->compaction;
     std::vector<const CompactionOutputs::Output*> files_output;
     for (const auto& state : compact_->sub_compact_states) {
       for (const auto& output : state.GetOutputs()) {
         files_output.emplace_back(&output);
       }
     }
-    ColumnFamilyData* cfd = c->column_family_data();
-    auto& prefix_extractor = c->mutable_cf_options()->prefix_extractor;
+    ColumnFamilyData* cfd = compact_->compaction->column_family_data();
+    auto& prefix_extractor =
+        compact_->compaction->mutable_cf_options()->prefix_extractor;
     std::atomic<size_t> next_file_idx(0);
     auto verify_table = [&](Status& output_status) {
       while (true) {
@@ -1308,8 +1307,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       db_options_.enforce_single_del_contracts, manual_compaction_canceled_,
       sub_compact->compaction
           ->DoesInputReferenceBlobFiles() /* must_count_input_entries */,
-      sub_compact->compaction, compaction_filter, shutting_down_,
-      db_options_.info_log, full_history_ts_low, preserve_time_min_seqno_,
+      sub_compact, compaction_filter, shutting_down_, db_options_.info_log,
+      full_history_ts_low, preserve_time_min_seqno_,
       preclude_last_level_min_seqno_);
   c_iter->SeekToFirst();
 
@@ -1336,8 +1335,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
             sub_compact->end.has_value() ? &end_user_key : nullptr);
       };
 
-  auto router_iter = NewRouterIterator(*sub_compact, *c_iter);
-
   auto compaction_start = rusty::time::Instant::now();
 
   Status status;
@@ -1346,11 +1343,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       reinterpret_cast<void*>(
           const_cast<Compaction*>(sub_compact->compaction)));
   uint64_t last_cpu_micros = prev_cpu_micros;
-  while (status.ok() && !cfd->IsDropped() && router_iter->Valid()) {
-    // Invariant: router_iter->status() is guaranteed to be OK if
-    // router_iter->Valid() returns true.
+  while (status.ok() && !cfd->IsDropped() && c_iter->Valid()) {
+    // Invariant: c_iter.status() is guaranteed to be OK if c_iter->Valid()
+    // returns true.
     assert(!end.has_value() ||
-           cfd->user_comparator()->Compare(router_iter->user_key(), *end) < 0);
+           cfd->user_comparator()->Compare(c_iter->user_key(), *end) < 0);
 
     if (c_iter_stats.num_input_records % kRecordStatsEvery ==
         kRecordStatsEvery - 1) {
@@ -1370,8 +1367,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     // and `close_file_func`.
     // TODO: it would be better to have the compaction file open/close moved
     // into `CompactionOutputs` which has the output file information.
-    status =
-        sub_compact->AddToOutput(*router_iter, open_file_func, close_file_func);
+    status = sub_compact->AddToOutput(*c_iter, open_file_func, close_file_func);
     if (!status.ok()) {
       break;
     }
@@ -1380,7 +1376,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "CompactionJob::Run():PausingManualCompaction:2",
         reinterpret_cast<void*>(
             const_cast<std::atomic<bool>*>(&manual_compaction_canceled_)));
-    router_iter->Next();
+    c_iter->Next();
     if (c_iter->status().IsManualCompactionPaused()) {
       break;
     }

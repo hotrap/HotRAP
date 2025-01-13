@@ -287,6 +287,7 @@ void UpdateColumnFamilyOptions(const MutableCFOptions& moptions,
   cf_opts->bottommost_temperature = moptions.last_level_temperature;
   cf_opts->memtable_max_range_deletions = moptions.memtable_max_range_deletions;
   cf_opts->ralt = moptions.ralt;
+  cf_opts->disable_hotrap = moptions.disable_hotrap;
 }
 
 void UpdateColumnFamilyOptions(const ImmutableCFOptions& ioptions,

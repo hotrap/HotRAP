@@ -578,6 +578,10 @@ static std::unordered_map<std::string, OptionTypeInfo>
                      offsetof(struct MutableCFOptions, ralt),
                      OptionVerificationType::kByName,
                      OptionTypeFlags::kMutable | OptionTypeFlags::kAllowNull)},
+        {"disable_hotrap",
+         {offsetof(struct MutableCFOptions, disable_hotrap),
+          OptionType::kBoolean, OptionVerificationType::kNormal,
+          OptionTypeFlags::kMutable}},
         // End special case properties
         {"memtable_max_range_deletions",
          {offsetof(struct MutableCFOptions, memtable_max_range_deletions),
@@ -1204,6 +1208,7 @@ void MutableCFOptions::Dump(Logger* log) const {
   ROCKS_LOG_INFO(log, "                   last_level_temperature: %d",
                  static_cast<int>(last_level_temperature));
   ROCKS_LOG_INFO(log, "ralt: %p", ralt.get());
+  ROCKS_LOG_INFO(log, "disable_hotrap: %d", disable_hotrap);
 }
 
 MutableCFOptions::MutableCFOptions(const Options& options)

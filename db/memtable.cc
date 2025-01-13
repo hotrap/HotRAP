@@ -784,7 +784,6 @@ Status MemTable::Add(SequenceNumber s, ValueType type,
     if (first_seqno_ == 0 || s < first_seqno_) {
       first_seqno_.store(s, std::memory_order_relaxed);
 
-      // FIXME
       if (earliest_seqno_ == kMaxSequenceNumber) {
         earliest_seqno_.store(GetFirstSequenceNumber(),
                               std::memory_order_relaxed);

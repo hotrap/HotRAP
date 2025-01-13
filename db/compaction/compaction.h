@@ -448,10 +448,11 @@ class Compaction {
   // penultimate level. The safe key range is populated by
   // `PopulatePenultimateLevelOutputRange()`.
   // Which could potentially disable all penultimate level output.
-  static int EvaluatePenultimateLevel(const VersionStorageInfo* vstorage,
-                                      const ImmutableOptions& immutable_options,
-                                      const int start_level,
-                                      const int output_level);
+  static int EvaluatePenultimateLevel(
+      const VersionStorageInfo* vstorage,
+      const ImmutableOptions& immutable_options,
+      const MutableCFOptions& mutable_cf_options, const int start_level,
+      const int output_level);
 
  private:
   void SetInputVersion(Version* input_version);

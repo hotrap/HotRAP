@@ -173,7 +173,7 @@ void PromotionCache::check(CheckerQueueElem &elem) {
   };
 
   SuperVersion *sv = elem.sv;
-  RALT *ralt = sv->mutable_cf_options.ralt.get();
+  RALT *ralt = sv->mutable_cf_options.get_ralt();
   if (ralt == nullptr) return;
 
   auto iter = elem.iter;
