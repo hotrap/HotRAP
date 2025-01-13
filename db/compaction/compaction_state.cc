@@ -40,7 +40,6 @@ void CompactionState::AggregateCompactionStats(
     CompactionJobStats& compaction_job_stats) {
   for (const auto& sc : sub_compact_states) {
     sc.AggregateCompactionStats(compaction_stats);
-    retained_or_promoted_bytes += sc.retained_or_promoted_bytes;
     compaction_job_stats.Add(sc.compaction_job_stats);
   }
 }
