@@ -395,7 +395,8 @@ Compaction::Compaction(
                   _compaction_reason == CompactionReason::kRefitLevel
               ? Compaction::kInvalidLevel
               : EvaluatePenultimateLevel(vstorage, immutable_options_,
-                                         start_level_, output_level_)) {
+                                         mutable_cf_options_, start_level_,
+                                         output_level_)) {
   MarkFilesBeingCompacted(true);
   if (is_manual_compaction_) {
     compaction_reason_ = CompactionReason::kManualCompaction;
@@ -979,20 +980,16 @@ uint64_t Compaction::MinInputFileEpochNumber() const {
 
 int Compaction::EvaluatePenultimateLevel(
     const VersionStorageInfo* vstorage,
-    const ImmutableOptions& immutable_options, const int start_level,
+    const ImmutableOptions& immutable_options,
+    const MutableCFOptions& mutable_cf_options, const int start_level,
     const int output_level) {
   if (start_level + 1 != output_level) {
     return kInvalidLevel;
   }
-  return start_level;
-#if 0
   // TODO: currently per_key_placement feature only support level and universal
   //  compaction
   if (immutable_options.compaction_style != kCompactionStyleLevel &&
       immutable_options.compaction_style != kCompactionStyleUniversal) {
-    return kInvalidLevel;
-  }
-  if (output_level != immutable_options.num_levels - 1) {
     return kInvalidLevel;
   }
 
@@ -1015,7 +1012,9 @@ int Compaction::EvaluatePenultimateLevel(
   }
 
   bool supports_per_key_placement =
-      immutable_options.preclude_last_level_data_seconds > 0;
+      (immutable_options.preclude_last_level_data_seconds > 0 &&
+       output_level == immutable_options.num_levels - 1) ||
+      mutable_cf_options.get_ralt();
 
   // it could be overridden by unittest
   TEST_SYNC_POINT_CALLBACK("Compaction::SupportsPerKeyPlacement:Enabled",
@@ -1025,7 +1024,6 @@ int Compaction::EvaluatePenultimateLevel(
   }
 
   return penultimate_level;
-#endif
 }
 
 }  // namespace ROCKSDB_NAMESPACE
