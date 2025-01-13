@@ -147,6 +147,12 @@ void Compaction::SetInputVersion(Version* _input_version) {
     cached_records_to_promote_ = cache->TakeRange(
         cfd_->internal_stats(), ralt, smallest_user_key_, largest_user_key_);
   }
+  size_t taken_bytes = 0;
+  for (const auto& record : cached_records_to_promote_) {
+    taken_bytes += record.first.size() + record.second.size();
+  }
+  RecordTick(cfd_->ioptions()->stats, Tickers::PROMOTION_BUFFER_TAKEN_BYTES,
+             taken_bytes);
 }
 
 void Compaction::GetBoundaryKeys(
