@@ -1749,6 +1749,15 @@ Status CompactionJob::InstallCompactionResults(
           compaction_stats_.penultimate_level_stats.bytes_written,
           compaction_stats_.stats.bytes_written,
           compaction_stats_.TotalBytesWritten());
+      compaction->output_level();
+      Tickers type;
+      if (compaction->start_level_path_id() == 0) {
+        type = Tickers::TO_FD_LAST_BYTES;
+      } else {
+        type = Tickers::TO_SD_FRONT_BYTES;
+      }
+      RecordTick(stats_, type,
+                  compaction_stats_.penultimate_level_stats.bytes_written);
     } else {
       ROCKS_LOG_BUFFER(log_buffer_,
                        "[%s] [JOB %d] Compacted %s => %" PRIu64 " bytes",
