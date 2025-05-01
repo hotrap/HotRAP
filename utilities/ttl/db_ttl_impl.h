@@ -5,7 +5,6 @@
 
 #pragma once
 
-#ifndef ROCKSDB_LITE
 #include <deque>
 #include <string>
 #include <vector>
@@ -16,7 +15,6 @@
 #include "rocksdb/merge_operator.h"
 #include "rocksdb/system_clock.h"
 #include "rocksdb/utilities/db_ttl.h"
-#include "rocksdb/utilities/utility_db.h"
 #include "utilities/compaction_filters/layered_compaction_filter_base.h"
 
 #ifdef _WIN32
@@ -80,7 +78,7 @@ class DBWithTTLImpl : public DBWithTTL {
   virtual Status Write(const WriteOptions& opts, WriteBatch* updates) override;
 
   using StackableDB::NewIterator;
-  virtual Iterator* NewIterator(const ReadOptions& opts,
+  virtual Iterator* NewIterator(const ReadOptions& _read_options,
                                 ColumnFamilyHandle* column_family) override;
 
   virtual DB* GetBaseDB() override { return db_; }
@@ -104,7 +102,7 @@ class DBWithTTLImpl : public DBWithTTL {
 
   void SetTtl(int32_t ttl) override { SetTtl(DefaultColumnFamily(), ttl); }
 
-  void SetTtl(ColumnFamilyHandle *h, int32_t ttl) override;
+  void SetTtl(ColumnFamilyHandle* h, int32_t ttl) override;
 
  private:
   // remember whether the Close completes or not
@@ -112,7 +110,6 @@ class DBWithTTLImpl : public DBWithTTL {
 };
 
 class TtlIterator : public Iterator {
-
  public:
   explicit TtlIterator(Iterator* iter) : iter_(iter) { assert(iter_); }
 
@@ -190,9 +187,7 @@ class TtlCompactionFilterFactory : public CompactionFilterFactory {
 
   std::unique_ptr<CompactionFilter> CreateCompactionFilter(
       const CompactionFilter::Context& context) override;
-  void SetTtl(int32_t ttl) {
-    ttl_ = ttl;
-  }
+  void SetTtl(int32_t ttl) { ttl_ = ttl; }
 
   const char* Name() const override { return kClassName(); }
   static const char* kClassName() { return "TtlCompactionFilterFactory"; }
@@ -210,7 +205,6 @@ class TtlCompactionFilterFactory : public CompactionFilterFactory {
 };
 
 class TtlMergeOperator : public MergeOperator {
-
  public:
   explicit TtlMergeOperator(const std::shared_ptr<MergeOperator>& merge_op,
                             SystemClock* clock);
@@ -247,4 +241,3 @@ int RegisterTtlObjects(ObjectLibrary& library, const std::string& /*arg*/);
 }  // extern "C"
 
 }  // namespace ROCKSDB_NAMESPACE
-#endif  // ROCKSDB_LITE

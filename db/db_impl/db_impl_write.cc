@@ -11,7 +11,7 @@
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
 #include "db/event_helpers.h"
-#include "db/promotion_cache.h"
+#include "db/promotion_buffer.h"
 #include "logging/logging.h"
 #include "monitoring/perf_context_imp.h"
 #include "options/options_helper.h"
@@ -25,11 +25,39 @@ namespace ROCKSDB_NAMESPACE {
 // Convenience methods
 Status DBImpl::Put(const WriteOptions& o, ColumnFamilyHandle* column_family,
                    const Slice& key, const Slice& val) {
+  const Status s = FailIfCfHasTs(column_family);
+  if (!s.ok()) {
+    return s;
+  }
   return DB::Put(o, column_family, key, val);
+}
+
+Status DBImpl::Put(const WriteOptions& o, ColumnFamilyHandle* column_family,
+                   const Slice& key, const Slice& ts, const Slice& val) {
+  const Status s = FailIfTsMismatchCf(column_family, ts);
+  if (!s.ok()) {
+    return s;
+  }
+  return DB::Put(o, column_family, key, ts, val);
+}
+
+Status DBImpl::PutEntity(const WriteOptions& options,
+                         ColumnFamilyHandle* column_family, const Slice& key,
+                         const WideColumns& columns) {
+  const Status s = FailIfCfHasTs(column_family);
+  if (!s.ok()) {
+    return s;
+  }
+
+  return DB::PutEntity(options, column_family, key, columns);
 }
 
 Status DBImpl::Merge(const WriteOptions& o, ColumnFamilyHandle* column_family,
                      const Slice& key, const Slice& val) {
+  const Status s = FailIfCfHasTs(column_family);
+  if (!s.ok()) {
+    return s;
+  }
   auto cfh = static_cast_with_check<ColumnFamilyHandleImpl>(column_family);
   if (!cfh->cfd()->ioptions()->merge_operator) {
     return Status::NotSupported("Provide a merge_operator when opening DB");
@@ -38,15 +66,73 @@ Status DBImpl::Merge(const WriteOptions& o, ColumnFamilyHandle* column_family,
   }
 }
 
+Status DBImpl::Merge(const WriteOptions& o, ColumnFamilyHandle* column_family,
+                     const Slice& key, const Slice& ts, const Slice& val) {
+  const Status s = FailIfTsMismatchCf(column_family, ts);
+  if (!s.ok()) {
+    return s;
+  }
+  return DB::Merge(o, column_family, key, ts, val);
+}
+
 Status DBImpl::Delete(const WriteOptions& write_options,
                       ColumnFamilyHandle* column_family, const Slice& key) {
+  const Status s = FailIfCfHasTs(column_family);
+  if (!s.ok()) {
+    return s;
+  }
   return DB::Delete(write_options, column_family, key);
+}
+
+Status DBImpl::Delete(const WriteOptions& write_options,
+                      ColumnFamilyHandle* column_family, const Slice& key,
+                      const Slice& ts) {
+  const Status s = FailIfTsMismatchCf(column_family, ts);
+  if (!s.ok()) {
+    return s;
+  }
+  return DB::Delete(write_options, column_family, key, ts);
 }
 
 Status DBImpl::SingleDelete(const WriteOptions& write_options,
                             ColumnFamilyHandle* column_family,
                             const Slice& key) {
+  const Status s = FailIfCfHasTs(column_family);
+  if (!s.ok()) {
+    return s;
+  }
   return DB::SingleDelete(write_options, column_family, key);
+}
+
+Status DBImpl::SingleDelete(const WriteOptions& write_options,
+                            ColumnFamilyHandle* column_family, const Slice& key,
+                            const Slice& ts) {
+  const Status s = FailIfTsMismatchCf(column_family, ts);
+  if (!s.ok()) {
+    return s;
+  }
+  return DB::SingleDelete(write_options, column_family, key, ts);
+}
+
+Status DBImpl::DeleteRange(const WriteOptions& write_options,
+                           ColumnFamilyHandle* column_family,
+                           const Slice& begin_key, const Slice& end_key) {
+  const Status s = FailIfCfHasTs(column_family);
+  if (!s.ok()) {
+    return s;
+  }
+  return DB::DeleteRange(write_options, column_family, begin_key, end_key);
+}
+
+Status DBImpl::DeleteRange(const WriteOptions& write_options,
+                           ColumnFamilyHandle* column_family,
+                           const Slice& begin_key, const Slice& end_key,
+                           const Slice& ts) {
+  const Status s = FailIfTsMismatchCf(column_family, ts);
+  if (!s.ok()) {
+    return s;
+  }
+  return DB::DeleteRange(write_options, column_family, begin_key, end_key, ts);
 }
 
 void DBImpl::SetRecoverableStatePreReleaseCallback(
@@ -55,16 +141,31 @@ void DBImpl::SetRecoverableStatePreReleaseCallback(
 }
 
 Status DBImpl::Write(const WriteOptions& write_options, WriteBatch* my_batch) {
-  return WriteImpl(write_options, my_batch, nullptr, nullptr);
+  Status s;
+  if (write_options.protection_bytes_per_key > 0) {
+    s = WriteBatchInternal::UpdateProtectionInfo(
+        my_batch, write_options.protection_bytes_per_key);
+  }
+  if (s.ok()) {
+    s = WriteImpl(write_options, my_batch, /*callback=*/nullptr,
+                  /*log_used=*/nullptr);
+  }
+  return s;
 }
 
-#ifndef ROCKSDB_LITE
 Status DBImpl::WriteWithCallback(const WriteOptions& write_options,
                                  WriteBatch* my_batch,
                                  WriteCallback* callback) {
-  return WriteImpl(write_options, my_batch, callback, nullptr);
+  Status s;
+  if (write_options.protection_bytes_per_key > 0) {
+    s = WriteBatchInternal::UpdateProtectionInfo(
+        my_batch, write_options.protection_bytes_per_key);
+  }
+  if (s.ok()) {
+    s = WriteImpl(write_options, my_batch, callback, nullptr);
+  }
+  return s;
 }
-#endif  // ROCKSDB_LITE
 
 // The main write queue. This is the only write queue that updates LastSequence.
 // When using one write queue, the same sequence also indicates the last
@@ -74,14 +175,53 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
                          uint64_t* log_used, uint64_t log_ref,
                          bool disable_memtable, uint64_t* seq_used,
                          size_t batch_cnt,
-                         PreReleaseCallback* pre_release_callback) {
+                         PreReleaseCallback* pre_release_callback,
+                         PostMemTableCallback* post_memtable_callback) {
   assert(!seq_per_batch_ || batch_cnt != 0);
+  assert(my_batch == nullptr || my_batch->Count() == 0 ||
+         write_options.protection_bytes_per_key == 0 ||
+         write_options.protection_bytes_per_key ==
+             my_batch->GetProtectionBytesPerKey());
   if (my_batch == nullptr) {
-    return Status::Corruption("Batch is nullptr!");
+    return Status::InvalidArgument("Batch is nullptr!");
+  } else if (!disable_memtable &&
+             WriteBatchInternal::TimestampsUpdateNeeded(*my_batch)) {
+    // If writing to memtable, then we require the caller to set/update the
+    // timestamps for the keys in the write batch.
+    // Otherwise, it means we are just writing to the WAL, and we allow
+    // timestamps unset for the keys in the write batch. This can happen if we
+    // use TransactionDB with write-committed policy, and we currently do not
+    // support user-defined timestamp with other policies.
+    // In the prepare phase, a transaction can write the batch to the WAL
+    // without inserting to memtable. The keys in the batch do not have to be
+    // assigned timestamps because they will be used only during recovery if
+    // there is a commit marker which includes their commit timestamp.
+    return Status::InvalidArgument("write batch must have timestamp(s) set");
+  } else if (write_options.rate_limiter_priority != Env::IO_TOTAL &&
+             write_options.rate_limiter_priority != Env::IO_USER) {
+    return Status::InvalidArgument(
+        "WriteOptions::rate_limiter_priority only allows "
+        "Env::IO_TOTAL and Env::IO_USER due to implementation constraints");
+  } else if (write_options.rate_limiter_priority != Env::IO_TOTAL &&
+             (write_options.disableWAL || manual_wal_flush_)) {
+    return Status::InvalidArgument(
+        "WriteOptions::rate_limiter_priority currently only supports "
+        "rate-limiting automatic WAL flush, which requires "
+        "`WriteOptions::disableWAL` and "
+        "`DBOptions::manual_wal_flush` both set to false");
+  } else if (write_options.protection_bytes_per_key != 0 &&
+             write_options.protection_bytes_per_key != 8) {
+    return Status::InvalidArgument(
+        "`WriteOptions::protection_bytes_per_key` must be zero or eight");
   }
+  // TODO: this use of operator bool on `tracer_` can avoid unnecessary lock
+  // grabs but does not seem thread-safe.
   if (tracer_) {
     InstrumentedMutexLock lock(&trace_mutex_);
-    if (tracer_) {
+    if (tracer_ && !tracer_->IsWriteOrderPreserved()) {
+      // We don't have to preserve write order so can trace anywhere. It's more
+      // efficient to trace here than to add latency to a phase of the log/apply
+      // pipeline.
       // TODO: maybe handle the tracing status?
       tracer_->Write(my_batch).PermitUncheckedError();
     }
@@ -102,6 +242,15 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
       immutable_db_options_.enable_pipelined_write) {
     return Status::NotSupported(
         "pipelined_writes is not compatible with unordered_write");
+  }
+  if (immutable_db_options_.enable_pipelined_write &&
+      post_memtable_callback != nullptr) {
+    return Status::NotSupported(
+        "pipelined write currently does not honor post_memtable_callback");
+  }
+  if (seq_per_batch_ && post_memtable_callback != nullptr) {
+    return Status::NotSupported(
+        "seq_per_batch currently does not honor post_memtable_callback");
   }
   // Otherwise IsLatestPersistentState optimization does not make sense
   assert(!WriteBatchInternal::IsLatestPersistentState(my_batch) ||
@@ -157,12 +306,13 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
                               log_ref, disable_memtable, seq_used);
   }
 
-  PERF_TIMER_GUARD(write_pre_and_post_process_time);
   WriteThread::Writer w(write_options, my_batch, callback, log_ref,
-                        disable_memtable, batch_cnt, pre_release_callback);
+                        disable_memtable, batch_cnt, pre_release_callback,
+                        post_memtable_callback);
   StopWatch write_sw(immutable_db_options_.clock, stats_, DB_WRITE);
 
   write_thread_.JoinBatchGroup(&w);
+  PERF_TIMER_GUARD(write_pre_and_post_process_time);
   if (w.state == WriteThread::STATE_PARALLEL_MEMTABLE_WRITER) {
     // we are a non-leader in a parallel group
 
@@ -186,6 +336,16 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
       // we're responsible for exit batch group
       // TODO(myabandeh): propagate status to write_group
       auto last_sequence = w.write_group->last_sequence;
+      for (auto* tmp_w : *(w.write_group)) {
+        assert(tmp_w);
+        if (tmp_w->post_memtable_callback) {
+          Status tmp_s =
+              (*tmp_w->post_memtable_callback)(last_sequence, disable_memtable);
+          // TODO: propagate the execution status of post_memtable_callback to
+          // caller.
+          assert(tmp_s.ok());
+        }
+      }
       versions_->SetLastSequence(last_sequence);
       MemTableInsertStatusCheck(w.status);
       write_thread_.ExitAsBatchGroupFollower(&w);
@@ -201,9 +361,11 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
       *seq_used = w.sequence;
     }
     // write is complete and leader has updated sequence
+    RecordTick(stats_, NON_LEADER_WRITE_COUNT);
     return w.FinalStatus();
   }
   // else we are the leader of the write batch group
+  RecordTick(stats_, LEADER_WRITE_COUNT);
   assert(w.state == WriteThread::STATE_GROUP_LEADER);
   Status status;
   // Once reaches this point, the current writer "w" will try to do its write
@@ -211,14 +373,11 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   // when it finds suitable, and finish them in the same write batch.
   // This is how a write job could be done by the other writer.
   WriteContext write_context;
+  LogContext log_context(write_options.sync);
   WriteThread::WriteGroup write_group;
   bool in_parallel_group = false;
   uint64_t last_sequence = kMaxSequenceNumber;
 
-  mutex_.Lock();
-
-  bool need_log_sync = write_options.sync;
-  bool need_log_dir_sync = need_log_sync && !log_dir_synced_;
   assert(!two_write_queues_ || !disable_memtable);
   {
     // With concurrent writes we do preprocess only in the write thread that
@@ -228,7 +387,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     // PreprocessWrite does its own perf timing.
     PERF_TIMER_STOP(write_pre_and_post_process_time);
 
-    status = PreprocessWrite(write_options, &need_log_sync, &write_context);
+    status = PreprocessWrite(write_options, &log_context, &write_context);
     if (!two_write_queues_) {
       // Assign it after ::PreprocessWrite since the sequence might advance
       // inside it by WriteRecoverableState
@@ -237,9 +396,6 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 
     PERF_TIMER_START(write_pre_and_post_process_time);
   }
-  log::Writer* log_writer = logs_.back().writer;
-
-  mutex_.Unlock();
 
   // Add to log and apply to memtable.  We can release the lock
   // during this phase since &w is currently responsible for logging
@@ -253,6 +409,17 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   IOStatus io_s;
   Status pre_release_cb_status;
   if (status.ok()) {
+    // TODO: this use of operator bool on `tracer_` can avoid unnecessary lock
+    // grabs but does not seem thread-safe.
+    if (tracer_) {
+      InstrumentedMutexLock lock(&trace_mutex_);
+      if (tracer_ && tracer_->IsWriteOrderPreserved()) {
+        for (auto* writer : write_group) {
+          // TODO: maybe handle the tracing status?
+          tracer_->Write(writer->batch).PermitUncheckedError();
+        }
+      }
+    }
     // Rules for when we can update the memtable concurrently
     // 1. supported by memtable
     // 2. Puts are not okay if inplace_update_support
@@ -271,6 +438,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     size_t total_byte_size = 0;
     size_t pre_release_callback_cnt = 0;
     for (auto* writer : write_group) {
+      assert(writer);
       if (writer->CheckCallback(this)) {
         valid_batches += writer->batch_cnt;
         if (writer->ShouldWriteToMemtable()) {
@@ -323,9 +491,14 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 
     if (!two_write_queues_) {
       if (status.ok() && !write_options.disableWAL) {
+        assert(log_context.log_file_number_size);
+        LogFileNumberSize& log_file_number_size =
+            *(log_context.log_file_number_size);
         PERF_TIMER_GUARD(write_wal_time);
-        io_s = WriteToWAL(write_group, log_writer, log_used, need_log_sync,
-                          need_log_dir_sync, last_sequence + 1);
+        io_s =
+            WriteToWAL(write_group, log_context.writer, log_used,
+                       log_context.need_log_sync, log_context.need_log_dir_sync,
+                       last_sequence + 1, log_file_number_size);
       }
     } else {
       if (status.ok() && !write_options.disableWAL) {
@@ -413,25 +586,37 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   }
   PERF_TIMER_START(write_pre_and_post_process_time);
 
+  if (!io_s.ok()) {
+    // Check WriteToWAL status
+    IOStatusCheck(io_s);
+  }
   if (!w.CallbackFailed()) {
     if (!io_s.ok()) {
       assert(pre_release_cb_status.ok());
-      IOStatusCheck(io_s);
     } else {
       WriteStatusCheck(pre_release_cb_status);
     }
   } else {
-    assert(io_s.ok() && pre_release_cb_status.ok());
+    assert(pre_release_cb_status.ok());
   }
 
-  if (need_log_sync) {
-    mutex_.Lock();
+  if (log_context.need_log_sync) {
+    VersionEdit synced_wals;
+    log_write_mutex_.Lock();
     if (status.ok()) {
-      status = MarkLogsSynced(logfile_number_, need_log_dir_sync);
+      MarkLogsSynced(logfile_number_, log_context.need_log_dir_sync,
+                     &synced_wals);
     } else {
       MarkLogsNotSynced(logfile_number_);
     }
-    mutex_.Unlock();
+    log_write_mutex_.Unlock();
+    if (status.ok() && synced_wals.IsWalAddition()) {
+      InstrumentedMutexLock l(&mutex_);
+      // TODO: plumb Env::IOActivity
+      const ReadOptions read_options;
+      status = ApplyWALToManifest(read_options, &synced_wals);
+    }
+
     // Requesting sync with two_write_queues_ is expected to be very rare. We
     // hence provide a simple implementation that is not necessarily efficient.
     if (two_write_queues_) {
@@ -451,6 +636,16 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   }
   if (should_exit_batch_group) {
     if (status.ok()) {
+      for (auto* tmp_w : write_group) {
+        assert(tmp_w);
+        if (tmp_w->post_memtable_callback) {
+          Status tmp_s =
+              (*tmp_w->post_memtable_callback)(last_sequence, disable_memtable);
+          // TODO: propagate the execution status of post_memtable_callback to
+          // caller.
+          assert(tmp_s.ok());
+        }
+      }
       // Note: if we are to resume after non-OK statuses we need to revisit how
       // we reacts to non-OK statuses here.
       versions_->SetLastSequence(last_sequence);
@@ -475,7 +670,8 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
   WriteContext write_context;
 
   WriteThread::Writer w(write_options, my_batch, callback, log_ref,
-                        disable_memtable);
+                        disable_memtable, /*_batch_cnt=*/0,
+                        /*_pre_release_callback=*/nullptr);
   write_thread_.JoinBatchGroup(&w);
   TEST_SYNC_POINT("DBImplWrite::PipelinedWriteImpl:AfterJoinBatchGroup");
   if (w.state == WriteThread::STATE_GROUP_LEADER) {
@@ -483,15 +679,11 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
     if (w.callback && !w.callback->AllowWriteBatching()) {
       write_thread_.WaitForMemTableWriters();
     }
-    mutex_.Lock();
-    bool need_log_sync = !write_options.disableWAL && write_options.sync;
-    bool need_log_dir_sync = need_log_sync && !log_dir_synced_;
+    LogContext log_context(!write_options.disableWAL && write_options.sync);
     // PreprocessWrite does its own perf timing.
     PERF_TIMER_STOP(write_pre_and_post_process_time);
-    w.status = PreprocessWrite(write_options, &need_log_sync, &write_context);
+    w.status = PreprocessWrite(write_options, &log_context, &write_context);
     PERF_TIMER_START(write_pre_and_post_process_time);
-    log::Writer* log_writer = logs_.back().writer;
-    mutex_.Unlock();
 
     // This can set non-OK status if callback fail.
     last_batch_group_size_ =
@@ -502,8 +694,20 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
     size_t total_byte_size = 0;
 
     if (w.status.ok()) {
+      // TODO: this use of operator bool on `tracer_` can avoid unnecessary lock
+      // grabs but does not seem thread-safe.
+      if (tracer_) {
+        InstrumentedMutexLock lock(&trace_mutex_);
+        if (tracer_ != nullptr && tracer_->IsWriteOrderPreserved()) {
+          for (auto* writer : wal_write_group) {
+            // TODO: maybe handle the tracing status?
+            tracer_->Write(writer->batch).PermitUncheckedError();
+          }
+        }
+      }
       SequenceNumber next_sequence = current_sequence;
-      for (auto writer : wal_write_group) {
+      for (auto* writer : wal_write_group) {
+        assert(writer);
         if (writer->CheckCallback(this)) {
           if (writer->ShouldWriteToMemtable()) {
             writer->sequence = next_sequence;
@@ -542,29 +746,39 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
                           wal_write_group.size - 1);
         RecordTick(stats_, WRITE_DONE_BY_OTHER, wal_write_group.size - 1);
       }
-      io_s = WriteToWAL(wal_write_group, log_writer, log_used, need_log_sync,
-                        need_log_dir_sync, current_sequence);
+      assert(log_context.log_file_number_size);
+      LogFileNumberSize& log_file_number_size =
+          *(log_context.log_file_number_size);
+      io_s =
+          WriteToWAL(wal_write_group, log_context.writer, log_used,
+                     log_context.need_log_sync, log_context.need_log_dir_sync,
+                     current_sequence, log_file_number_size);
       w.status = io_s;
     }
 
-    if (!w.CallbackFailed()) {
-      if (!io_s.ok()) {
-        IOStatusCheck(io_s);
-      } else {
-        WriteStatusCheck(w.status);
-      }
+    if (!io_s.ok()) {
+      // Check WriteToWAL status
+      IOStatusCheck(io_s);
+    } else if (!w.CallbackFailed()) {
+      WriteStatusCheck(w.status);
     }
 
-    if (need_log_sync) {
-      mutex_.Lock();
+    VersionEdit synced_wals;
+    if (log_context.need_log_sync) {
+      InstrumentedMutexLock l(&log_write_mutex_);
       if (w.status.ok()) {
-        w.status = MarkLogsSynced(logfile_number_, need_log_dir_sync);
+        MarkLogsSynced(logfile_number_, log_context.need_log_dir_sync,
+                       &synced_wals);
       } else {
         MarkLogsNotSynced(logfile_number_);
       }
-      mutex_.Unlock();
     }
-
+    if (w.status.ok() && synced_wals.IsWalAddition()) {
+      InstrumentedMutexLock l(&mutex_);
+      // TODO: plumb Env::IOActivity
+      const ReadOptions read_options;
+      w.status = ApplyWALToManifest(read_options, &synced_wals);
+    }
     write_thread_.ExitAsBatchGroupLeader(wal_write_group, w.status);
   }
 
@@ -708,11 +922,20 @@ Status DBImpl::WriteImplWALOnly(
     // TODO(myabandeh): Make preliminary checks thread-safe so we could do them
     // without paying the cost of obtaining the mutex.
     if (status.ok()) {
-      InstrumentedMutexLock l(&mutex_);
-      bool need_log_sync = false;
-      status = PreprocessWrite(write_options, &need_log_sync, &write_context);
+      LogContext log_context;
+      status = PreprocessWrite(write_options, &log_context, &write_context);
       WriteStatusCheckOnLocked(status);
     }
+    if (!status.ok()) {
+      WriteThread::WriteGroup write_group;
+      write_thread->EnterAsBatchGroupLeader(&w, &write_group);
+      write_thread->ExitAsBatchGroupLeader(write_group, status);
+      return status;
+    }
+  } else {
+    InstrumentedMutexLock lock(&mutex_);
+    Status status =
+        DelayWrite(/*num_bytes=*/0ull, *write_thread, write_options);
     if (!status.ok()) {
       WriteThread::WriteGroup write_group;
       write_thread->EnterAsBatchGroupLeader(&w, &write_group);
@@ -726,10 +949,22 @@ Status DBImpl::WriteImplWALOnly(
   write_thread->EnterAsBatchGroupLeader(&w, &write_group);
   // Note: no need to update last_batch_group_size_ here since the batch writes
   // to WAL only
+  // TODO: this use of operator bool on `tracer_` can avoid unnecessary lock
+  // grabs but does not seem thread-safe.
+  if (tracer_) {
+    InstrumentedMutexLock lock(&trace_mutex_);
+    if (tracer_ != nullptr && tracer_->IsWriteOrderPreserved()) {
+      for (auto* writer : write_group) {
+        // TODO: maybe handle the tracing status?
+        tracer_->Write(writer->batch).PermitUncheckedError();
+      }
+    }
+  }
 
   size_t pre_release_callback_cnt = 0;
   size_t total_byte_size = 0;
   for (auto* writer : write_group) {
+    assert(writer);
     if (writer->CheckCallback(this)) {
       total_byte_size = WriteBatchInternal::AppendedByteSize(
           total_byte_size, WriteBatchInternal::ByteSize(writer->batch));
@@ -776,11 +1011,18 @@ Status DBImpl::WriteImplWALOnly(
     seq_inc = total_batch_cnt;
   }
   Status status;
-  IOStatus io_s;
-  io_s.PermitUncheckedError();  // Allow io_s to be uninitialized
   if (!write_options.disableWAL) {
-    io_s = ConcurrentWriteToWAL(write_group, log_used, &last_sequence, seq_inc);
+    IOStatus io_s =
+        ConcurrentWriteToWAL(write_group, log_used, &last_sequence, seq_inc);
     status = io_s;
+    // last_sequence may not be set if there is an error
+    // This error checking and return is moved up to avoid using uninitialized
+    // last_sequence.
+    if (!io_s.ok()) {
+      IOStatusCheck(io_s);
+      write_thread->ExitAsBatchGroupLeader(write_group, status);
+      return status;
+    }
   } else {
     // Otherwise we inc seq number to do solely the seq allocation
     last_sequence = versions_->FetchAddLastAllocatedSequence(seq_inc);
@@ -815,11 +1057,7 @@ Status DBImpl::WriteImplWALOnly(
   PERF_TIMER_START(write_pre_and_post_process_time);
 
   if (!w.CallbackFailed()) {
-    if (!io_s.ok()) {
-      IOStatusCheck(io_s);
-    } else {
-      WriteStatusCheck(status);
-    }
+    WriteStatusCheck(status);
   }
   if (status.ok()) {
     size_t index = 0;
@@ -857,9 +1095,8 @@ Status DBImpl::WriteImplWALOnly(
 void DBImpl::WriteStatusCheckOnLocked(const Status& status) {
   // Is setting bg_error_ enough here?  This will at least stop
   // compaction and fail any further writes.
-  // Caller must hold mutex_.
+  InstrumentedMutexLock l(&mutex_);
   assert(!status.IsIOFenced() || !error_handler_.GetBGError().ok());
-  mutex_.AssertHeld();
   if (immutable_db_options_.paranoid_checks && !status.ok() &&
       !status.IsBusy() && !status.IsIncomplete()) {
     // Maybe change the return status to void?
@@ -890,6 +1127,9 @@ void DBImpl::IOStatusCheck(const IOStatus& io_status) {
     // Maybe change the return status to void?
     error_handler_.SetBGError(io_status, BackgroundErrorReason::kWriteCallback);
     mutex_.Unlock();
+  } else {
+    // Force writable file to be continue writable.
+    logs_.back().writer->file()->reset_seen_error();
   }
 }
 
@@ -910,24 +1150,30 @@ void DBImpl::MemTableInsertStatusCheck(const Status& status) {
 }
 
 Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
-                               bool* need_log_sync,
+                               LogContext* log_context,
                                WriteContext* write_context) {
-  mutex_.AssertHeld();
-  assert(write_context != nullptr && need_log_sync != nullptr);
+  assert(write_context != nullptr && log_context != nullptr);
   Status status;
 
   if (error_handler_.IsDBStopped()) {
+    InstrumentedMutexLock l(&mutex_);
     status = error_handler_.GetBGError();
   }
 
   PERF_TIMER_GUARD(write_scheduling_flushes_compactions_time);
 
-  assert(!single_column_family_mode_ ||
-         versions_->GetColumnFamilySet()->NumberOfColumnFamilies() == 1);
-  if (UNLIKELY(status.ok() && !single_column_family_mode_ &&
-               total_log_size_ > GetMaxTotalWalSize())) {
-    WaitForPendingWrites();
-    status = SwitchWAL(write_context);
+  if (UNLIKELY(status.ok() && total_log_size_ > GetMaxTotalWalSize())) {
+    assert(versions_);
+    InstrumentedMutexLock l(&mutex_);
+    const ColumnFamilySet* const column_families =
+        versions_->GetColumnFamilySet();
+    assert(column_families);
+    size_t num_cfs = column_families->NumberOfColumnFamilies();
+    assert(num_cfs >= 1);
+    if (num_cfs > 1) {
+      WaitForPendingWrites();
+      status = SwitchWAL(write_context);
+    }
   }
 
   if (UNLIKELY(status.ok() && write_buffer_manager_->ShouldFlush())) {
@@ -936,15 +1182,18 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
     // thread is writing to another DB with the same write buffer, they may also
     // be flushed. We may end up with flushing much more DBs than needed. It's
     // suboptimal but still correct.
+    InstrumentedMutexLock l(&mutex_);
     WaitForPendingWrites();
     status = HandleWriteBufferManagerFlush(write_context);
   }
 
   if (UNLIKELY(status.ok() && !trim_history_scheduler_.Empty())) {
+    InstrumentedMutexLock l(&mutex_);
     status = TrimMemtableHistory(write_context);
   }
 
   if (UNLIKELY(status.ok() && !flush_scheduler_.Empty())) {
+    InstrumentedMutexLock l(&mutex_);
     WaitForPendingWrites();
     status = ScheduleFlushes(write_context);
   }
@@ -960,7 +1209,8 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
     // for previous one. It might create a fairness issue that expiration
     // might happen for smaller writes but larger writes can go through.
     // Can optimize it if it is an issue.
-    status = DelayWrite(last_batch_group_size_, write_options);
+    InstrumentedMutexLock l(&mutex_);
+    status = DelayWrite(last_batch_group_size_, write_thread_, write_options);
     PERF_TIMER_START(write_pre_and_post_process_time);
   }
 
@@ -971,14 +1221,18 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
   // exceeded at this point so no new write (including current one) will go
   // through until memory usage is decreased.
   if (UNLIKELY(status.ok() && write_buffer_manager_->ShouldStall())) {
+    default_cf_internal_stats_->AddDBStats(
+        InternalStats::kIntStatsWriteBufferManagerLimitStopsCounts, 1,
+        true /* concurrent */);
     if (write_options.no_slowdown) {
       status = Status::Incomplete("Write stall");
     } else {
+      InstrumentedMutexLock l(&mutex_);
       WriteBufferManagerStallWrites();
     }
   }
-
-  if (status.ok() && *need_log_sync) {
+  InstrumentedMutexLock l(&log_write_mutex_);
+  if (status.ok() && log_context->need_log_sync) {
     // Wait until the parallel syncs are finished. Any sync process has to sync
     // the front log too so it is enough to check the status of front()
     // We do a while loop since log_sync_cv_ is signalled when any sync is
@@ -986,32 +1240,35 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
     // Note: there does not seem to be a reason to wait for parallel sync at
     // this early step but it is not important since parallel sync (SyncWAL) and
     // need_log_sync are usually not used together.
-    while (logs_.front().getting_synced) {
+    while (logs_.front().IsSyncing()) {
       log_sync_cv_.Wait();
     }
     for (auto& log : logs_) {
-      assert(!log.getting_synced);
       // This is just to prevent the logs to be synced by a parallel SyncWAL
       // call. We will do the actual syncing later after we will write to the
       // WAL.
       // Note: there does not seem to be a reason to set this early before we
       // actually write to the WAL
-      log.getting_synced = true;
+      log.PrepareForSync();
     }
   } else {
-    *need_log_sync = false;
+    log_context->need_log_sync = false;
   }
+  log_context->writer = logs_.back().writer;
+  log_context->need_log_dir_sync =
+      log_context->need_log_dir_sync && !log_dir_synced_;
+  log_context->log_file_number_size = std::addressof(alive_log_files_.back());
 
   return status;
 }
 
-WriteBatch* DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
-                               WriteBatch* tmp_batch, size_t* write_with_wal,
-                               WriteBatch** to_be_cached_state) {
+Status DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
+                          WriteBatch* tmp_batch, WriteBatch** merged_batch,
+                          size_t* write_with_wal,
+                          WriteBatch** to_be_cached_state) {
   assert(write_with_wal != nullptr);
   assert(tmp_batch != nullptr);
   assert(*to_be_cached_state == nullptr);
-  WriteBatch* merged_batch = nullptr;
   *write_with_wal = 0;
   auto* leader = write_group.leader;
   assert(!leader->disable_wal);  // Same holds for all in the batch group
@@ -1020,22 +1277,24 @@ WriteBatch* DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
     // we simply write the first WriteBatch to WAL if the group only
     // contains one batch, that batch should be written to the WAL,
     // and the batch is not wanting to be truncated
-    merged_batch = leader->batch;
-    if (WriteBatchInternal::IsLatestPersistentState(merged_batch)) {
-      *to_be_cached_state = merged_batch;
+    *merged_batch = leader->batch;
+    if (WriteBatchInternal::IsLatestPersistentState(*merged_batch)) {
+      *to_be_cached_state = *merged_batch;
     }
     *write_with_wal = 1;
   } else {
     // WAL needs all of the batches flattened into a single batch.
     // We could avoid copying here with an iov-like AddRecord
     // interface
-    merged_batch = tmp_batch;
+    *merged_batch = tmp_batch;
     for (auto writer : write_group) {
       if (!writer->CallbackFailed()) {
-        Status s = WriteBatchInternal::Append(merged_batch, writer->batch,
+        Status s = WriteBatchInternal::Append(*merged_batch, writer->batch,
                                               /*WAL_only*/ true);
-        // Always returns Status::OK.
-        assert(s.ok());
+        if (!s.ok()) {
+          tmp_batch->Clear();
+          return s;
+        }
         if (WriteBatchInternal::IsLatestPersistentState(writer->batch)) {
           // We only need to cache the last of such write batch
           *to_be_cached_state = writer->batch;
@@ -1044,16 +1303,25 @@ WriteBatch* DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
       }
     }
   }
-  return merged_batch;
+  // return merged_batch;
+  return Status::OK();
 }
 
 // When two_write_queues_ is disabled, this function is called from the only
 // write thread. Otherwise this must be called holding log_write_mutex_.
 IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
                             log::Writer* log_writer, uint64_t* log_used,
-                            uint64_t* log_size) {
+                            uint64_t* log_size,
+                            Env::IOPriority rate_limiter_priority,
+                            LogFileNumberSize& log_file_number_size) {
   assert(log_size != nullptr);
+
   Slice log_entry = WriteBatchInternal::Contents(&merged_batch);
+  TEST_SYNC_POINT_CALLBACK("DBImpl::WriteToWAL:log_entry", &log_entry);
+  auto s = merged_batch.VerifyChecksum();
+  if (!s.ok()) {
+    return status_to_io_status(std::move(s));
+  }
   *log_size = log_entry.size();
   // When two_write_queues_ WriteToWAL has to be protected from concurretn calls
   // from the two queues anyway and log_write_mutex_ is already held. Otherwise
@@ -1066,7 +1334,13 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
   if (UNLIKELY(needs_locking)) {
     log_write_mutex_.Lock();
   }
-  IOStatus io_s = log_writer->AddRecord(log_entry);
+  IOStatus io_s = log_writer->MaybeAddUserDefinedTimestampSizeRecord(
+      versions_->GetColumnFamiliesTimestampSizeForRecord(),
+      rate_limiter_priority);
+  if (!io_s.ok()) {
+    return io_s;
+  }
+  io_s = log_writer->AddRecord(log_entry, rate_limiter_priority);
 
   if (UNLIKELY(needs_locking)) {
     log_write_mutex_.Unlock();
@@ -1075,9 +1349,7 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
     *log_used = logfile_number_;
   }
   total_log_size_ += log_entry.size();
-  // TODO(myabandeh): it might be unsafe to access alive_log_files_.back() here
-  // since alive_log_files_ might be modified concurrently
-  alive_log_files_.back().AddSize(log_entry.size());
+  log_file_number_size.AddSize(*log_size);
   log_empty_ = false;
   return io_s;
 }
@@ -1085,14 +1357,21 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
 IOStatus DBImpl::WriteToWAL(const WriteThread::WriteGroup& write_group,
                             log::Writer* log_writer, uint64_t* log_used,
                             bool need_log_sync, bool need_log_dir_sync,
-                            SequenceNumber sequence) {
+                            SequenceNumber sequence,
+                            LogFileNumberSize& log_file_number_size) {
   IOStatus io_s;
+  assert(!two_write_queues_);
   assert(!write_group.leader->disable_wal);
   // Same holds for all in the batch group
   size_t write_with_wal = 0;
   WriteBatch* to_be_cached_state = nullptr;
-  WriteBatch* merged_batch = MergeBatch(write_group, &tmp_batch_,
-                                        &write_with_wal, &to_be_cached_state);
+  WriteBatch* merged_batch;
+  io_s = status_to_io_status(MergeBatch(write_group, &tmp_batch_, &merged_batch,
+                                        &write_with_wal, &to_be_cached_state));
+  if (UNLIKELY(!io_s.ok())) {
+    return io_s;
+  }
+
   if (merged_batch == write_group.leader->batch) {
     write_group.leader->log_used = logfile_number_;
   } else if (write_with_wal > 1) {
@@ -1104,7 +1383,9 @@ IOStatus DBImpl::WriteToWAL(const WriteThread::WriteGroup& write_group,
   WriteBatchInternal::SetSequence(merged_batch, sequence);
 
   uint64_t log_size;
-  io_s = WriteToWAL(*merged_batch, log_writer, log_used, &log_size);
+  io_s = WriteToWAL(*merged_batch, log_writer, log_used, &log_size,
+                    write_group.leader->rate_limiter_priority,
+                    log_file_number_size);
   if (to_be_cached_state) {
     cached_recoverable_state_ = *to_be_cached_state;
     cached_recoverable_state_empty_ = false;
@@ -1174,13 +1455,18 @@ IOStatus DBImpl::ConcurrentWriteToWAL(
     SequenceNumber* last_sequence, size_t seq_inc) {
   IOStatus io_s;
 
+  assert(two_write_queues_ || immutable_db_options_.unordered_write);
   assert(!write_group.leader->disable_wal);
   // Same holds for all in the batch group
   WriteBatch tmp_batch;
   size_t write_with_wal = 0;
   WriteBatch* to_be_cached_state = nullptr;
-  WriteBatch* merged_batch =
-      MergeBatch(write_group, &tmp_batch, &write_with_wal, &to_be_cached_state);
+  WriteBatch* merged_batch;
+  io_s = status_to_io_status(MergeBatch(write_group, &tmp_batch, &merged_batch,
+                                        &write_with_wal, &to_be_cached_state));
+  if (UNLIKELY(!io_s.ok())) {
+    return io_s;
+  }
 
   // We need to lock log_write_mutex_ since logs_ and alive_log_files might be
   // pushed back concurrently
@@ -1197,8 +1483,14 @@ IOStatus DBImpl::ConcurrentWriteToWAL(
   WriteBatchInternal::SetSequence(merged_batch, sequence);
 
   log::Writer* log_writer = logs_.back().writer;
+  LogFileNumberSize& log_file_number_size = alive_log_files_.back();
+
+  assert(log_writer->get_log_number() == log_file_number_size.number);
+
   uint64_t log_size;
-  io_s = WriteToWAL(*merged_batch, log_writer, log_used, &log_size);
+  io_s = WriteToWAL(*merged_batch, log_writer, log_used, &log_size,
+                    write_group.leader->rate_limiter_priority,
+                    log_file_number_size);
   if (to_be_cached_state) {
     cached_recoverable_state_ = *to_be_cached_state;
     cached_recoverable_state_empty_ = false;
@@ -1270,14 +1562,40 @@ Status DBImpl::WriteRecoverableState() {
 }
 
 void DBImpl::SelectColumnFamiliesForAtomicFlush(
-    autovector<ColumnFamilyData*>* cfds) {
-  for (ColumnFamilyData* cfd : *versions_->GetColumnFamilySet()) {
+    autovector<ColumnFamilyData*>* selected_cfds,
+    const autovector<ColumnFamilyData*>& provided_candidate_cfds) {
+  mutex_.AssertHeld();
+  assert(selected_cfds);
+
+  autovector<ColumnFamilyData*> candidate_cfds;
+
+  // Generate candidate cfds if not provided
+  if (provided_candidate_cfds.empty()) {
+    for (ColumnFamilyData* cfd : *versions_->GetColumnFamilySet()) {
+      if (!cfd->IsDropped() && cfd->initialized()) {
+        cfd->Ref();
+        candidate_cfds.push_back(cfd);
+      }
+    }
+  } else {
+    candidate_cfds = provided_candidate_cfds;
+  }
+
+  for (ColumnFamilyData* cfd : candidate_cfds) {
     if (cfd->IsDropped()) {
       continue;
     }
     if (cfd->imm()->NumNotFlushed() != 0 || !cfd->mem()->IsEmpty() ||
         !cached_recoverable_state_empty_.load()) {
-      cfds->push_back(cfd);
+      selected_cfds->push_back(cfd);
+    }
+  }
+
+  // Unref the newly generated candidate cfds (when not provided) in
+  // `candidate_cfds`
+  if (provided_candidate_cfds.empty()) {
+    for (auto candidate_cfd : candidate_cfds) {
+      candidate_cfd->UnrefAndTryDelete();
     }
   }
 }
@@ -1379,14 +1697,14 @@ Status DBImpl::SwitchWAL(WriteContext* write_context) {
       cfd->imm()->FlushRequested();
       if (!immutable_db_options_.atomic_flush) {
         FlushRequest flush_req;
-        GenerateFlushRequest({cfd}, &flush_req);
-        SchedulePendingFlush(flush_req, FlushReason::kWalFull);
+        GenerateFlushRequest({cfd}, FlushReason::kWalFull, &flush_req);
+        SchedulePendingFlush(flush_req);
       }
     }
     if (immutable_db_options_.atomic_flush) {
       FlushRequest flush_req;
-      GenerateFlushRequest(cfds, &flush_req);
-      SchedulePendingFlush(flush_req, FlushReason::kWalFull);
+      GenerateFlushRequest(cfds, FlushReason::kWalFull, &flush_req);
+      SchedulePendingFlush(flush_req);
     }
     MaybeScheduleFlushOrCompaction();
   }
@@ -1403,12 +1721,6 @@ Status DBImpl::HandleWriteBufferManagerFlush(WriteContext* write_context) {
   // thread is writing to another DB with the same write buffer, they may also
   // be flushed. We may end up with flushing much more DBs than needed. It's
   // suboptimal but still correct.
-  ROCKS_LOG_INFO(
-      immutable_db_options_.info_log,
-      "Flushing column family with oldest memtable entry. Write buffers are "
-      "using %" ROCKSDB_PRIszt " bytes out of a total of %" ROCKSDB_PRIszt ".",
-      write_buffer_manager_->memory_usage(),
-      write_buffer_manager_->buffer_size());
   // no need to refcount because drop is happening in write thread, so can't
   // happen while we're in the write thread
   autovector<ColumnFamilyData*> cfds;
@@ -1422,9 +1734,11 @@ Status DBImpl::HandleWriteBufferManagerFlush(WriteContext* write_context) {
       if (cfd->IsDropped()) {
         continue;
       }
-      if (!cfd->mem()->IsEmpty()) {
-        // We only consider active mem table, hoping immutable memtable is
-        // already in the process of flushing.
+      if (!cfd->mem()->IsEmpty() && !cfd->imm()->IsFlushPendingOrRunning()) {
+        // We only consider flush on CFs with bytes in the mutable memtable,
+        // and no immutable memtables for which flush has yet to finish. If
+        // we triggered flush on CFs already trying to flush, we would risk
+        // creating too many immutable memtables leading to write stalls.
         uint64_t seq = cfd->mem()->GetCreationSeq();
         if (cfd_picked == nullptr || seq < seq_num_for_cf_picked) {
           cfd_picked = cfd;
@@ -1436,6 +1750,15 @@ Status DBImpl::HandleWriteBufferManagerFlush(WriteContext* write_context) {
       cfds.push_back(cfd_picked);
     }
     MaybeFlushStatsCF(&cfds);
+  }
+  if (!cfds.empty()) {
+    ROCKS_LOG_INFO(
+        immutable_db_options_.info_log,
+        "Flushing triggered to alleviate write buffer memory usage. Write "
+        "buffer is using %" ROCKSDB_PRIszt
+        " bytes out of a total of %" ROCKSDB_PRIszt ".",
+        write_buffer_manager_->memory_usage(),
+        write_buffer_manager_->buffer_size());
   }
 
   WriteThread::Writer nonmem_w;
@@ -1465,14 +1788,15 @@ Status DBImpl::HandleWriteBufferManagerFlush(WriteContext* write_context) {
       cfd->imm()->FlushRequested();
       if (!immutable_db_options_.atomic_flush) {
         FlushRequest flush_req;
-        GenerateFlushRequest({cfd}, &flush_req);
-        SchedulePendingFlush(flush_req, FlushReason::kWriteBufferManager);
+        GenerateFlushRequest({cfd}, FlushReason::kWriteBufferManager,
+                             &flush_req);
+        SchedulePendingFlush(flush_req);
       }
     }
     if (immutable_db_options_.atomic_flush) {
       FlushRequest flush_req;
-      GenerateFlushRequest(cfds, &flush_req);
-      SchedulePendingFlush(flush_req, FlushReason::kWriteBufferManager);
+      GenerateFlushRequest(cfds, FlushReason::kWriteBufferManager, &flush_req);
+      SchedulePendingFlush(flush_req);
     }
     MaybeScheduleFlushOrCompaction();
   }
@@ -1480,34 +1804,46 @@ Status DBImpl::HandleWriteBufferManagerFlush(WriteContext* write_context) {
 }
 
 uint64_t DBImpl::GetMaxTotalWalSize() const {
-  mutex_.AssertHeld();
-  return mutable_db_options_.max_total_wal_size == 0
-             ? 4 * max_total_in_memory_state_
-             : mutable_db_options_.max_total_wal_size;
+  uint64_t max_total_wal_size =
+      max_total_wal_size_.load(std::memory_order_acquire);
+  if (max_total_wal_size > 0) {
+    return max_total_wal_size;
+  }
+  return 4 * max_total_in_memory_state_.load(std::memory_order_acquire);
 }
 
 // REQUIRES: mutex_ is held
-// REQUIRES: this thread is currently at the front of the writer queue
-Status DBImpl::DelayWrite(uint64_t num_bytes,
+// REQUIRES: this thread is currently at the leader for write_thread
+Status DBImpl::DelayWrite(uint64_t num_bytes, WriteThread& write_thread,
                           const WriteOptions& write_options) {
+  mutex_.AssertHeld();
   uint64_t time_delayed = 0;
   bool delayed = false;
   {
     StopWatch sw(immutable_db_options_.clock, stats_, WRITE_STALL,
-                 &time_delayed);
-    uint64_t delay =
-        write_controller_.GetDelay(immutable_db_options_.clock, num_bytes);
+                 Histograms::HISTOGRAM_ENUM_MAX, &time_delayed);
+    // To avoid parallel timed delays (bad throttling), only support them
+    // on the primary write queue.
+    uint64_t delay;
+    if (&write_thread == &write_thread_) {
+      delay =
+          write_controller_.GetDelay(immutable_db_options_.clock, num_bytes);
+    } else {
+      assert(num_bytes == 0);
+      delay = 0;
+    }
+    TEST_SYNC_POINT("DBImpl::DelayWrite:Start");
     if (delay > 0) {
       if (write_options.no_slowdown) {
         return Status::Incomplete("Write stall");
       }
       TEST_SYNC_POINT("DBImpl::DelayWrite:Sleep");
 
-      // Notify write_thread_ about the stall so it can setup a barrier and
+      // Notify write_thread about the stall so it can setup a barrier and
       // fail any pending writers with no_slowdown
-      write_thread_.BeginWriteStall();
-      TEST_SYNC_POINT("DBImpl::DelayWrite:BeginWriteStallDone");
+      write_thread.BeginWriteStall();
       mutex_.Unlock();
+      TEST_SYNC_POINT("DBImpl::DelayWrite:BeginWriteStallDone");
       // We will delay the write until we have slept for `delay` microseconds
       // or we don't need a delay anymore. We check for cancellation every 1ms
       // (slightly longer because WriteController minimum delay is 1ms, in
@@ -1525,25 +1861,31 @@ Status DBImpl::DelayWrite(uint64_t num_bytes,
         immutable_db_options_.clock->SleepForMicroseconds(kDelayInterval);
       }
       mutex_.Lock();
-      write_thread_.EndWriteStall();
+      write_thread.EndWriteStall();
     }
 
     // Don't wait if there's a background error, even if its a soft error. We
     // might wait here indefinitely as the background compaction may never
     // finish successfully, resulting in the stall condition lasting
     // indefinitely
-    while (error_handler_.GetBGError().ok() && write_controller_.IsStopped()) {
+    while (error_handler_.GetBGError().ok() && write_controller_.IsStopped() &&
+           !shutting_down_.load(std::memory_order_relaxed)) {
       if (write_options.no_slowdown) {
         return Status::Incomplete("Write stall");
       }
       delayed = true;
 
-      // Notify write_thread_ about the stall so it can setup a barrier and
+      // Notify write_thread about the stall so it can setup a barrier and
       // fail any pending writers with no_slowdown
-      write_thread_.BeginWriteStall();
-      TEST_SYNC_POINT("DBImpl::DelayWrite:Wait");
+      write_thread.BeginWriteStall();
+      if (&write_thread == &write_thread_) {
+        TEST_SYNC_POINT("DBImpl::DelayWrite:Wait");
+      } else {
+        TEST_SYNC_POINT("DBImpl::DelayWrite:NonmemWait");
+      }
       bg_cv_.Wait();
-      write_thread_.EndWriteStall();
+      TEST_SYNC_POINT_CALLBACK("DBImpl::DelayWrite:AfterWait", &mutex_);
+      write_thread.EndWriteStall();
     }
   }
   assert(!delayed || !write_options.no_slowdown);
@@ -1558,9 +1900,13 @@ Status DBImpl::DelayWrite(uint64_t num_bytes,
   // proceed
   Status s;
   if (write_controller_.IsStopped()) {
-    // If writes are still stopped, it means we bailed due to a background
-    // error
-    s = Status::Incomplete(error_handler_.GetBGError().ToString());
+    if (!shutting_down_.load(std::memory_order_relaxed)) {
+      // If writes are still stopped and db not shutdown, it means we bailed
+      // due to a background error
+      s = Status::Incomplete(error_handler_.GetBGError().ToString());
+    } else {
+      s = Status::ShutdownInProgress("stalled writes");
+    }
   }
   if (error_handler_.IsDBStopped()) {
     s = error_handler_.GetBGError();
@@ -1664,8 +2010,8 @@ Status DBImpl::TrimMemtableHistory(WriteContext* context) {
   }
   for (auto& cfd : cfds) {
     autovector<MemTable*> to_delete;
-    bool trimmed = cfd->imm()->TrimHistory(
-        &context->memtables_to_free_, cfd->mem()->ApproximateMemoryUsage());
+    bool trimmed = cfd->imm()->TrimHistory(&context->memtables_to_free_,
+                                           cfd->mem()->MemoryAllocatedBytes());
     if (trimmed) {
       context->superversion_context.NewSuperVersion();
       assert(context->superversion_context.new_superversion.get() != nullptr);
@@ -1720,13 +2066,13 @@ Status DBImpl::ScheduleFlushes(WriteContext* context) {
     if (immutable_db_options_.atomic_flush) {
       AssignAtomicFlushSeq(cfds);
       FlushRequest flush_req;
-      GenerateFlushRequest(cfds, &flush_req);
-      SchedulePendingFlush(flush_req, FlushReason::kWriteBufferFull);
+      GenerateFlushRequest(cfds, FlushReason::kWriteBufferFull, &flush_req);
+      SchedulePendingFlush(flush_req);
     } else {
       for (auto* cfd : cfds) {
         FlushRequest flush_req;
-        GenerateFlushRequest({cfd}, &flush_req);
-        SchedulePendingFlush(flush_req, FlushReason::kWriteBufferFull);
+        GenerateFlushRequest({cfd}, FlushReason::kWriteBufferFull, &flush_req);
+        SchedulePendingFlush(flush_req);
       }
     }
     MaybeScheduleFlushOrCompaction();
@@ -1734,7 +2080,6 @@ Status DBImpl::ScheduleFlushes(WriteContext* context) {
   return status;
 }
 
-#ifndef ROCKSDB_LITE
 void DBImpl::NotifyOnMemTableSealed(ColumnFamilyData* /*cfd*/,
                                     const MemTableInfo& mem_table_info) {
   if (immutable_db_options_.listeners.size() == 0U) {
@@ -1744,11 +2089,12 @@ void DBImpl::NotifyOnMemTableSealed(ColumnFamilyData* /*cfd*/,
     return;
   }
 
+  mutex_.Unlock();
   for (auto listener : immutable_db_options_.listeners) {
     listener->OnMemTableSealed(mem_table_info);
   }
+  mutex_.Lock();
 }
-#endif  // ROCKSDB_LITE
 
 // REQUIRES: mutex_ is held
 // REQUIRES: this thread is currently at the front of the writer queue
@@ -1756,6 +2102,8 @@ void DBImpl::NotifyOnMemTableSealed(ColumnFamilyData* /*cfd*/,
 // two_write_queues_ is true (This is to simplify the reasoning.)
 Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
   mutex_.AssertHeld();
+  // TODO: plumb Env::IOActivity
+  const ReadOptions read_options;
   log::Writer* new_log = nullptr;
   MemTable* new_mem = nullptr;
   IOStatus io_s;
@@ -1787,14 +2135,12 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
   const MutableCFOptions mutable_cf_options = *cfd->GetLatestMutableCFOptions();
 
   // Set memtable_info for memtable sealed callback
-#ifndef ROCKSDB_LITE
   MemTableInfo memtable_info;
   memtable_info.cf_name = cfd->GetName();
   memtable_info.first_seqno = cfd->mem()->GetFirstSequenceNumber();
   memtable_info.earliest_seqno = cfd->mem()->GetEarliestSequenceNumber();
   memtable_info.num_entries = cfd->mem()->num_entries();
   memtable_info.num_deletes = cfd->mem()->num_deletes();
-#endif  // ROCKSDB_LITE
   // Log this later after lock release. It may be outdated, e.g., if background
   // flush happens before logging, but that should be ok.
   int num_imm_unflushed = cfd->imm()->NumNotFlushed();
@@ -1819,6 +2165,10 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
                  "[%s] New memtable created with log file: #%" PRIu64
                  ". Immutable memtables: %d.\n",
                  cfd->GetName().c_str(), new_log_number, num_imm_unflushed);
+  // There should be no concurrent write as the thread is at the front of
+  // writer queue
+  cfd->mem()->ConstructFragmentedRangeTombstones();
+
   mutex_.Lock();
   if (recycle_log_number != 0) {
     // Since renaming the file is done outside DB mutex, we need to ensure
@@ -1829,11 +2179,15 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
     log_recycle_files_.pop_front();
   }
   if (s.ok() && creating_new_log) {
-    log_write_mutex_.Lock();
+    InstrumentedMutexLock l(&log_write_mutex_);
     assert(new_log != nullptr);
     if (!logs_.empty()) {
       // Alway flush the buffer of the last log before switching to a new one
       log::Writer* cur_log_writer = logs_.back().writer;
+      if (error_handler_.IsRecoveryInProgress()) {
+        // In recovery path, we force another try of writing WAL buffer.
+        cur_log_writer->file()->reset_seen_error();
+      }
       io_s = cur_log_writer->WriteBuffer();
       if (s.ok()) {
         s = io_s;
@@ -1853,7 +2207,6 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
       logs_.emplace_back(logfile_number_, new_log);
       alive_log_files_.push_back(LogFileNumberSize(logfile_number_));
     }
-    log_write_mutex_.Unlock();
   }
 
   if (!s.ok()) {
@@ -1902,7 +2255,8 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
 
       VersionEdit wal_deletion;
       wal_deletion.DeleteWalsBefore(min_wal_number_to_keep);
-      s = versions_->LogAndApplyToDefaultColumnFamily(&wal_deletion, &mutex_);
+      s = versions_->LogAndApplyToDefaultColumnFamily(
+          read_options, &wal_deletion, &mutex_, directories_.GetDbDir());
       if (!s.ok() && versions_->io_status().IsIOError()) {
         s = error_handler_.SetBGError(versions_->io_status(),
                                       BackgroundErrorReason::kManifestWrite);
@@ -1940,42 +2294,44 @@ Status DBImpl::SwitchMemtable(ColumnFamilyData* cfd, WriteContext* context) {
   cfd->mem()->SetNextLogNumber(logfile_number_);
 
   {
-    auto guard = cfd->internal_stats()
-                     ->hotrap_timers()
-                     .timer(TimerType::kInvalidateOld)
-                     .start();
-    Arena arena;
-    ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
-    auto caches = cfd->promotion_caches().Read();
-    while (mem_it->Valid()) {
-      std::string user_key = mem_it->user_key().ToString();
-      for (const auto& level_cache : *caches) {
-        const PromotionCache& cache = level_cache.second;
-        auto imm_list_guard = cache.imm_list().Read();
-        const std::list<ImmPromotionCache>& imm_list = imm_list_guard->list;
-        for (const ImmPromotionCache& imm : imm_list) {
-          // TODO: Avoid requiring ownership after upgrading to C++14
-          auto it = imm.cache.find(user_key);
-          if (it != imm.cache.end()) imm.updated.Lock()->insert(user_key);
+    // We need to hold the read lock of promotion_buffers so that there won't be
+    // any new PromotionBuffer and we are holding the lock of all imm_lists.
+    auto caches = cfd->promotion_buffers().Read();
+    std::vector<ReadGuard<ImmPromotionBufferList>> imm_lists;
+    for (const auto& level_cache : *caches) {
+      const PromotionBuffer& cache = level_cache.second;
+      imm_lists.push_back(cache.imm_list().Read());
+    }
+    if (!imm_lists.empty()) {
+      auto guard = cfd->internal_stats()
+                       ->hotrap_timers()
+                       .timer(TimerType::kInvalidateOld)
+                       .start();
+      Arena arena;
+      ScopedArenaIterator mem_it(cfd->mem()->NewIterator(ReadOptions(), &arena));
+      for (mem_it->SeekToFirst(); mem_it->Valid(); mem_it->Next()) {
+        std::string user_key = mem_it->user_key().ToString();
+        for (auto& imm_list : imm_lists) {
+          for (const ImmPromotionBuffer& imm : imm_list->list) {
+            // TODO: Avoid requiring ownership after upgrading to C++14
+            auto it = imm.cache.find(user_key);
+            if (it != imm.cache.end()) imm.updated.Lock()->insert(user_key);
+          }
         }
       }
     }
+
+    assert(new_mem != nullptr);
+    cfd->imm()->Add(cfd->mem(), &context->memtables_to_free_);
+    new_mem->Ref();
+    cfd->SetMemtable(new_mem);
+    InstallSuperVersionAndScheduleWork(cfd, &context->superversion_context,
+                                       mutable_cf_options);
   }
 
-  assert(new_mem != nullptr);
-  cfd->imm()->Add(cfd->mem(), &context->memtables_to_free_);
-  new_mem->Ref();
-  cfd->SetMemtable(new_mem);
-  InstallSuperVersionAndScheduleWork(cfd, &context->superversion_context,
-                                     mutable_cf_options);
-
-#ifndef ROCKSDB_LITE
-  mutex_.Unlock();
   // Notify client that memtable is sealed, now that we have successfully
   // installed a new memtable
   NotifyOnMemTableSealed(cfd, memtable_info);
-  mutex_.Lock();
-#endif  // ROCKSDB_LITE
   // It is possible that we got here without checking the value of i_os, but
   // that is okay.  If we did, it most likely means that s was already an error.
   // In any case, ignore any unchecked error for i_os here.
@@ -2009,34 +2365,60 @@ size_t DBImpl::GetWalPreallocateBlockSize(uint64_t write_buffer_size) const {
 // can call if they wish
 Status DB::Put(const WriteOptions& opt, ColumnFamilyHandle* column_family,
                const Slice& key, const Slice& value) {
-  if (nullptr == opt.timestamp) {
-    // Pre-allocate size of write batch conservatively.
-    // 8 bytes are taken by header, 4 bytes for count, 1 byte for type,
-    // and we allocate 11 extra bytes for key length, as well as value length.
-    WriteBatch batch(key.size() + value.size() + 24);
-    Status s = batch.Put(column_family, key, value);
-    if (!s.ok()) {
-      return s;
-    }
-    return Write(opt, &batch);
+  // Pre-allocate size of write batch conservatively.
+  // 8 bytes are taken by header, 4 bytes for count, 1 byte for type,
+  // and we allocate 11 extra bytes for key length, as well as value length.
+  WriteBatch batch(key.size() + value.size() + 24, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key, 0 /* default_cf_ts_sz */);
+  Status s = batch.Put(column_family, key, value);
+  if (!s.ok()) {
+    return s;
   }
-  const Slice* ts = opt.timestamp;
-  assert(nullptr != ts);
-  size_t ts_sz = ts->size();
-  assert(column_family->GetComparator());
-  assert(ts_sz == column_family->GetComparator()->timestamp_size());
-  WriteBatch batch;
-  Status s;
-  if (key.data() + key.size() == ts->data()) {
-    Slice key_with_ts = Slice(key.data(), key.size() + ts_sz);
-    s = batch.Put(column_family, key_with_ts, value);
-  } else {
-    std::array<Slice, 2> key_with_ts_slices{{key, *ts}};
-    SliceParts key_with_ts(key_with_ts_slices.data(), 2);
-    std::array<Slice, 1> value_slices{{value}};
-    SliceParts values(value_slices.data(), 1);
-    s = batch.Put(column_family, key_with_ts, values);
+  return Write(opt, &batch);
+}
+
+Status DB::Put(const WriteOptions& opt, ColumnFamilyHandle* column_family,
+               const Slice& key, const Slice& ts, const Slice& value) {
+  ColumnFamilyHandle* default_cf = DefaultColumnFamily();
+  assert(default_cf);
+  const Comparator* const default_cf_ucmp = default_cf->GetComparator();
+  assert(default_cf_ucmp);
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key,
+                   default_cf_ucmp->timestamp_size());
+  Status s = batch.Put(column_family, key, ts, value);
+  if (!s.ok()) {
+    return s;
   }
+  return Write(opt, &batch);
+}
+
+Status DB::PutEntity(const WriteOptions& options,
+                     ColumnFamilyHandle* column_family, const Slice& key,
+                     const WideColumns& columns) {
+  const ColumnFamilyHandle* const default_cf = DefaultColumnFamily();
+  assert(default_cf);
+
+  const Comparator* const default_cf_ucmp = default_cf->GetComparator();
+  assert(default_cf_ucmp);
+
+  WriteBatch batch(/* reserved_bytes */ 0, /* max_bytes */ 0,
+                   options.protection_bytes_per_key,
+                   default_cf_ucmp->timestamp_size());
+
+  const Status s = batch.PutEntity(column_family, key, columns);
+  if (!s.ok()) {
+    return s;
+  }
+
+  return Write(options, &batch);
+}
+
+Status DB::Delete(const WriteOptions& opt, ColumnFamilyHandle* column_family,
+                  const Slice& key) {
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key, 0 /* default_cf_ts_sz */);
+  Status s = batch.Delete(column_family, key);
   if (!s.ok()) {
     return s;
   }
@@ -2044,30 +2426,15 @@ Status DB::Put(const WriteOptions& opt, ColumnFamilyHandle* column_family,
 }
 
 Status DB::Delete(const WriteOptions& opt, ColumnFamilyHandle* column_family,
-                  const Slice& key) {
-  if (nullptr == opt.timestamp) {
-    WriteBatch batch;
-    Status s = batch.Delete(column_family, key);
-    if (!s.ok()) {
-      return s;
-    }
-    return Write(opt, &batch);
-  }
-  const Slice* ts = opt.timestamp;
-  assert(ts != nullptr);
-  size_t ts_sz = ts->size();
-  assert(column_family->GetComparator());
-  assert(ts_sz == column_family->GetComparator()->timestamp_size());
-  WriteBatch batch;
-  Status s;
-  if (key.data() + key.size() == ts->data()) {
-    Slice key_with_ts = Slice(key.data(), key.size() + ts_sz);
-    s = batch.Delete(column_family, key_with_ts);
-  } else {
-    std::array<Slice, 2> key_with_ts_slices{{key, *ts}};
-    SliceParts key_with_ts(key_with_ts_slices.data(), 2);
-    s = batch.Delete(column_family, key_with_ts);
-  }
+                  const Slice& key, const Slice& ts) {
+  ColumnFamilyHandle* default_cf = DefaultColumnFamily();
+  assert(default_cf);
+  const Comparator* const default_cf_ucmp = default_cf->GetComparator();
+  assert(default_cf_ucmp);
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key,
+                   default_cf_ucmp->timestamp_size());
+  Status s = batch.Delete(column_family, key, ts);
   if (!s.ok()) {
     return s;
   }
@@ -2076,43 +2443,56 @@ Status DB::Delete(const WriteOptions& opt, ColumnFamilyHandle* column_family,
 
 Status DB::SingleDelete(const WriteOptions& opt,
                         ColumnFamilyHandle* column_family, const Slice& key) {
-  Status s;
-  if (opt.timestamp == nullptr) {
-    WriteBatch batch;
-    s = batch.SingleDelete(column_family, key);
-    if (!s.ok()) {
-      return s;
-    }
-    s = Write(opt, &batch);
-    return s;
-  }
-
-  const Slice* ts = opt.timestamp;
-  assert(ts != nullptr);
-  size_t ts_sz = ts->size();
-  assert(column_family->GetComparator());
-  assert(ts_sz == column_family->GetComparator()->timestamp_size());
-  WriteBatch batch;
-  if (key.data() + key.size() == ts->data()) {
-    Slice key_with_ts = Slice(key.data(), key.size() + ts_sz);
-    s = batch.SingleDelete(column_family, key_with_ts);
-  } else {
-    std::array<Slice, 2> key_with_ts_slices{{key, *ts}};
-    SliceParts key_with_ts(key_with_ts_slices.data(), 2);
-    s = batch.SingleDelete(column_family, key_with_ts);
-  }
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key, 0 /* default_cf_ts_sz */);
+  Status s = batch.SingleDelete(column_family, key);
   if (!s.ok()) {
     return s;
   }
-  s = Write(opt, &batch);
-  return s;
+  return Write(opt, &batch);
+}
+
+Status DB::SingleDelete(const WriteOptions& opt,
+                        ColumnFamilyHandle* column_family, const Slice& key,
+                        const Slice& ts) {
+  ColumnFamilyHandle* default_cf = DefaultColumnFamily();
+  assert(default_cf);
+  const Comparator* const default_cf_ucmp = default_cf->GetComparator();
+  assert(default_cf_ucmp);
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key,
+                   default_cf_ucmp->timestamp_size());
+  Status s = batch.SingleDelete(column_family, key, ts);
+  if (!s.ok()) {
+    return s;
+  }
+  return Write(opt, &batch);
 }
 
 Status DB::DeleteRange(const WriteOptions& opt,
                        ColumnFamilyHandle* column_family,
                        const Slice& begin_key, const Slice& end_key) {
-  WriteBatch batch;
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key, 0 /* default_cf_ts_sz */);
   Status s = batch.DeleteRange(column_family, begin_key, end_key);
+  if (!s.ok()) {
+    return s;
+  }
+  return Write(opt, &batch);
+}
+
+Status DB::DeleteRange(const WriteOptions& opt,
+                       ColumnFamilyHandle* column_family,
+                       const Slice& begin_key, const Slice& end_key,
+                       const Slice& ts) {
+  ColumnFamilyHandle* default_cf = DefaultColumnFamily();
+  assert(default_cf);
+  const Comparator* const default_cf_ucmp = default_cf->GetComparator();
+  assert(default_cf_ucmp);
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key,
+                   default_cf_ucmp->timestamp_size());
+  Status s = batch.DeleteRange(column_family, begin_key, end_key, ts);
   if (!s.ok()) {
     return s;
   }
@@ -2121,11 +2501,29 @@ Status DB::DeleteRange(const WriteOptions& opt,
 
 Status DB::Merge(const WriteOptions& opt, ColumnFamilyHandle* column_family,
                  const Slice& key, const Slice& value) {
-  WriteBatch batch;
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key, 0 /* default_cf_ts_sz */);
   Status s = batch.Merge(column_family, key, value);
   if (!s.ok()) {
     return s;
   }
   return Write(opt, &batch);
 }
+
+Status DB::Merge(const WriteOptions& opt, ColumnFamilyHandle* column_family,
+                 const Slice& key, const Slice& ts, const Slice& value) {
+  ColumnFamilyHandle* default_cf = DefaultColumnFamily();
+  assert(default_cf);
+  const Comparator* const default_cf_ucmp = default_cf->GetComparator();
+  assert(default_cf_ucmp);
+  WriteBatch batch(0 /* reserved_bytes */, 0 /* max_bytes */,
+                   opt.protection_bytes_per_key,
+                   default_cf_ucmp->timestamp_size());
+  Status s = batch.Merge(column_family, key, ts, value);
+  if (!s.ok()) {
+    return s;
+  }
+  return Write(opt, &batch);
+}
+
 }  // namespace ROCKSDB_NAMESPACE

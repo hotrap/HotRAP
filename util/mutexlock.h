@@ -9,11 +9,17 @@
 
 #pragma once
 #include <assert.h>
+
 #include <atomic>
+#include <functional>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
+
 #include "port/port.h"
-#include "port/port_posix.h"
+#include "util/fastrange.h"
+#include "util/hash.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -29,9 +35,7 @@ namespace ROCKSDB_NAMESPACE {
 
 class MutexLock {
  public:
-  explicit MutexLock(const port::Mutex *mu) : mu_(mu) {
-    this->mu_->Lock();
-  }
+  explicit MutexLock(const port::Mutex *mu) : mu_(mu) { this->mu_->Lock(); }
   // No copying allowed
   MutexLock(const MutexLock &) = delete;
   void operator=(const MutexLock &) = delete;
@@ -44,23 +48,29 @@ class MutexLock {
   }
 
   ~MutexLock() {
-    if (mu_) this->mu_->Unlock();
+    if (mu_) __drop();
+  }
+
+  void drop() {
+    assert(mu_);
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() { this->mu_->Unlock(); }
+
   const port::Mutex *mu_;
 };
 
 //
 // Acquire a ReadLock on the specified RWMutex.
-// The Lock will be automatically released then the
+// The Lock will be automatically released when the
 // object goes out of scope.
 //
 class ReadLock {
  public:
-  explicit ReadLock(const port::RWMutex *mu) : mu_(mu) {
-    this->mu_->ReadLock();
-  }
+  explicit ReadLock(const port::RWMutex *mu) : mu_(mu) { this->mu_->ReadLock(); }
   // No copying allowed
   ReadLock(const ReadLock &) = delete;
   void operator=(const ReadLock &) = delete;
@@ -104,10 +114,18 @@ class ReadUnlock {
   }
 
   ~ReadUnlock() {
-    if (mu_ != nullptr) mu_->ReadUnlock();
+    if (mu_) __drop();
+  }
+
+  void drop() {
+    assert(mu_);
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() { mu_->ReadUnlock(); }
+
   const port::RWMutex *mu_;
 };
 
@@ -118,9 +136,7 @@ class ReadUnlock {
 //
 class WriteLock {
  public:
-  explicit WriteLock(const port::RWMutex *mu) : mu_(mu) {
-    this->mu_->WriteLock();
-  }
+  explicit WriteLock(const port::RWMutex *mu) : mu_(mu) { this->mu_->WriteLock(); }
   // No copying allowed
   WriteLock(const WriteLock &) = delete;
   void operator=(const WriteLock &) = delete;
@@ -156,10 +172,17 @@ class WriteUnlock {
   }
 
   ~WriteUnlock() {
-    if (mu_ != nullptr) mu_->WriteUnlock();
+    if (mu_) __drop();
+  }
+
+  void drop() {
+    assert(mu_);
+    __drop();
+    mu_ = nullptr;
   }
 
  private:
+  void __drop() { mu_->WriteUnlock(); }
   const port::RWMutex *mu_;
 };
 
@@ -172,6 +195,8 @@ class MutexGuard {
       : data_(rhs.data_), lock_(std::move(rhs.lock_)) {}
   T &operator*() const { return data_; }
   T *operator->() const { return &data_; }
+
+  void drop() { lock_.drop(); }
 
  private:
   MutexGuard(T &data, const port::Mutex *mu) : data_(data), lock_(mu) {}
@@ -205,6 +230,8 @@ class ReadGuard {
   const T &operator*() const { return *data_; }
   const T *operator->() const { return data_; }
 
+  void drop() { lock_.drop(); }
+
  private:
   const T *data_;
   ReadUnlock lock_;
@@ -226,6 +253,8 @@ class WriteGuard {
   T &operator*() const { return *data_; }
   T *operator->() const { return data_; }
 
+  void drop() { lock_.drop(); }
+
  private:
   T *data_;
   WriteUnlock lock_;
@@ -245,17 +274,17 @@ class RWMutexProtected {
     lock_.WriteLock();
     return WriteGuard<T>(data_, &lock_);
   }
-  optional<ReadGuard<T>> TryRead() const {
+  std::optional<ReadGuard<T>> TryRead() const {
     if (lock_.TryReadLock())
       return ReadGuard<T>(data_, &lock_);
     else
-      return nullopt;
+      return std::nullopt;
   }
-  optional<WriteGuard<T>> TryWrite() const {
+  std::optional<WriteGuard<T>> TryWrite() const {
     if (lock_.TryWriteLock())
       return WriteGuard<T>(data_, &lock_);
     else
-      return nullopt;
+      return std::nullopt;
   }
 
  private:
@@ -298,10 +327,25 @@ class SpinMutex {
   std::atomic<bool> locked_;
 };
 
-// We want to prevent false sharing
+// For preventing false sharing, especially for mutexes.
+// NOTE: if a mutex is less than half the size of a cache line, it would
+// make more sense for Striped structure below to pack more than one mutex
+// into each cache line, as this would only reduce contention for the same
+// amount of space and cache sharing. However, a mutex is often 40 bytes out
+// of a 64 byte cache line.
 template <class T>
-struct ALIGN_AS(CACHE_LINE_SIZE) LockData {
-  T lock_;
+struct ALIGN_AS(CACHE_LINE_SIZE) CacheAlignedWrapper {
+  T obj_;
+};
+template <class T>
+struct Unwrap {
+  using type = T;
+  static type &Go(T &t) { return t; }
+};
+template <class T>
+struct Unwrap<CacheAlignedWrapper<T>> {
+  using type = T;
+  static type &Go(CacheAlignedWrapper<T> &t) { return t.obj_; }
 };
 
 //
@@ -313,40 +357,28 @@ struct ALIGN_AS(CACHE_LINE_SIZE) LockData {
 // single lock and allowing independent operations to lock different stripes and
 // proceed concurrently, instead of creating contention for a single lock.
 //
-template <class T, class P>
+template <class T, class Key = Slice, class Hash = SliceNPHasher64>
 class Striped {
  public:
-  Striped(size_t stripes, std::function<uint64_t(const P &)> hash)
-      : stripes_(stripes), hash_(hash) {
+  explicit Striped(size_t stripe_count)
+      : stripe_count_(stripe_count), data_(new T[stripe_count]) {}
 
-    locks_ = reinterpret_cast<LockData<T> *>(
-        port::cacheline_aligned_alloc(sizeof(LockData<T>) * stripes));
-    for (size_t i = 0; i < stripes; i++) {
-      new (&locks_[i]) LockData<T>();
-    }
-
+  using Unwrapped = typename Unwrap<T>::type;
+  Unwrapped &Get(const Key &key, uint64_t seed = 0) {
+    size_t index = FastRangeGeneric(hash_(key, seed), stripe_count_);
+    return Unwrap<T>::Go(data_[index]);
   }
 
-  virtual ~Striped() {
-    if (locks_ != nullptr) {
-      assert(stripes_ > 0);
-      for (size_t i = 0; i < stripes_; i++) {
-        locks_[i].~LockData<T>();
-      }
-      port::cacheline_aligned_free(locks_);
-    }
-  }
-
-  T *get(const P &key) {
-    uint64_t h = hash_(key);
-    size_t index = h % stripes_;
-    return &reinterpret_cast<LockData<T> *>(&locks_[index])->lock_;
+  size_t ApproximateMemoryUsage() const {
+    // NOTE: could use malloc_usable_size() here, but that could count unmapped
+    // pages and could mess up unit test OccLockBucketsTest::CacheAligned
+    return sizeof(*this) + stripe_count_ * sizeof(T);
   }
 
  private:
-  size_t stripes_;
-  LockData<T> *locks_;
-  std::function<uint64_t(const P &)> hash_;
+  size_t stripe_count_;
+  std::unique_ptr<T[]> data_;
+  Hash hash_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

@@ -11,9 +11,15 @@
 #elif defined(__GNUC__) && __GNUC__ >= 7
 #define FALLTHROUGH_INTENDED [[gnu::fallthrough]]
 #else
-#define FALLTHROUGH_INTENDED do {} while (0)
+#define FALLTHROUGH_INTENDED \
+  do {                       \
+  } while (0)
 #endif
 #endif
+
+#define DECLARE_DEFAULT_MOVES(Name) \
+  Name(Name&&) noexcept = default;  \
+  Name& operator=(Name&&) = default
 
 // ASAN (Address sanitizer)
 
@@ -42,8 +48,10 @@
 //   STATIC_AVOID_DESTRUCTION(Foo, foo)(arg1, arg2);
 #ifdef MUST_FREE_HEAP_ALLOCATIONS
 #define STATIC_AVOID_DESTRUCTION(Type, name) static Type name
+constexpr bool kMustFreeHeapAllocations = true;
 #else
 #define STATIC_AVOID_DESTRUCTION(Type, name) static Type& name = *new Type
+constexpr bool kMustFreeHeapAllocations = false;
 #endif
 
 // TSAN (Thread sanitizer)
@@ -60,3 +68,30 @@
 #else
 #define TSAN_SUPPRESSION
 #endif  // TSAN_SUPPRESSION
+
+// Compile-time CPU feature testing compatibility
+//
+// A way to be extra sure these defines have been included.
+#define ASSERT_FEATURE_COMPAT_HEADER() /* empty */
+
+// MSVC doesn't support the same defines that gcc and clang provide
+// but does some like __AVX__. Here we can infer some features from others.
+#ifdef __AVX__
+#define __SSE4_2__ 1
+#define __PCLMUL__ 1
+#endif  // __AVX__
+
+// A way to disable PCLMUL
+#ifdef NO_PCLMUL
+#undef __PCLMUL__
+#endif
+
+// popcnt is generally implied by SSE4.2
+#if defined(__SSE4_2__)
+#define __POPCNT__ 1
+#endif
+
+// A way to disable POPCNT
+#ifdef NO_POPCNT
+#undef __POPCNT__
+#endif

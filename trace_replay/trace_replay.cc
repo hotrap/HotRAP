@@ -317,7 +317,7 @@ Status TracerHelper::DecodeTraceRecord(Trace* trace, int trace_file_version,
       cf_ids.reserve(multiget_size);
       multiget_keys.reserve(multiget_size);
       for (uint32_t i = 0; i < multiget_size; i++) {
-        uint32_t tmp_cfid;
+        uint32_t tmp_cfid = 0;
         Slice tmp_key;
         GetFixed32(&cfids_payload, &tmp_cfid);
         GetLengthPrefixedSlice(&keys_payload, &tmp_key);
@@ -532,11 +532,46 @@ bool Tracer::ShouldSkipTrace(const TraceType& trace_type) {
   if (IsTraceFileOverMax()) {
     return true;
   }
-  if ((trace_options_.filter & kTraceFilterGet && trace_type == kTraceGet) ||
-      (trace_options_.filter & kTraceFilterWrite &&
-       trace_type == kTraceWrite)) {
+
+  TraceFilterType filter_mask = kTraceFilterNone;
+  switch (trace_type) {
+    case kTraceNone:
+    case kTraceBegin:
+    case kTraceEnd:
+      filter_mask = kTraceFilterNone;
+      break;
+    case kTraceWrite:
+      filter_mask = kTraceFilterWrite;
+      break;
+    case kTraceGet:
+      filter_mask = kTraceFilterGet;
+      break;
+    case kTraceIteratorSeek:
+      filter_mask = kTraceFilterIteratorSeek;
+      break;
+    case kTraceIteratorSeekForPrev:
+      filter_mask = kTraceFilterIteratorSeekForPrev;
+      break;
+    case kBlockTraceIndexBlock:
+    case kBlockTraceFilterBlock:
+    case kBlockTraceDataBlock:
+    case kBlockTraceUncompressionDictBlock:
+    case kBlockTraceRangeDeletionBlock:
+    case kIOTracer:
+      filter_mask = kTraceFilterNone;
+      break;
+    case kTraceMultiGet:
+      filter_mask = kTraceFilterMultiGet;
+      break;
+    case kTraceMax:
+      assert(false);
+      filter_mask = kTraceFilterNone;
+      break;
+  }
+  if (filter_mask != kTraceFilterNone && trace_options_.filter & filter_mask) {
     return true;
   }
+
   ++trace_request_count_;
   if (trace_request_count_ < trace_options_.sampling_frequency) {
     return true;

@@ -20,7 +20,6 @@
 #include "util/string_util.h"
 
 namespace ROCKSDB_NAMESPACE {
-#ifndef ROCKSDB_LITE
 static std::unordered_map<std::string, OptionTypeInfo> plain_table_type_info = {
     {"user_key_len",
      {offsetof(struct PlainTableOptions, user_key_len), OptionType::kUInt32T,
@@ -67,7 +66,7 @@ Status PlainTableFactory::NewTableReader(
       table, table_options_.bloom_bits_per_key, table_options_.hash_table_ratio,
       table_options_.index_sparseness, table_options_.huge_page_tlb_size,
       table_options_.full_scan_mode, table_reader_options.immortal,
-      table_reader_options.prefix_extractor);
+      table_reader_options.prefix_extractor.get());
 }
 
 TableBuilder* PlainTableFactory::NewTableBuilder(
@@ -123,17 +122,6 @@ std::string PlainTableFactory::GetPrintableOptions() const {
   return ret;
 }
 
-Status GetPlainTableOptionsFromString(const PlainTableOptions& table_options,
-                                      const std::string& opts_str,
-                                      PlainTableOptions* new_table_options) {
-  ConfigOptions config_options;
-  config_options.input_strings_escaped = false;
-  config_options.ignore_unknown_options = false;
-  config_options.invoke_prepare_options = false;
-  return GetPlainTableOptionsFromString(config_options, table_options, opts_str,
-                                        new_table_options);
-}
-
 Status GetPlainTableOptionsFromString(const ConfigOptions& config_options,
                                       const PlainTableOptions& table_options,
                                       const std::string& opts_str,
@@ -153,23 +141,20 @@ Status GetPlainTableOptionsFromString(const ConfigOptions& config_options,
     return Status::InvalidArgument(s.getState());
   }
 }
-#endif  // ROCKSDB_LITE
 
-#ifndef ROCKSDB_LITE
 static int RegisterBuiltinMemTableRepFactory(ObjectLibrary& library,
                                              const std::string& /*arg*/) {
   // The MemTableRepFactory built-in classes will be either a class
   // (VectorRepFactory) or a nickname (vector), followed optionally by ":#",
   // where # is the "size" of the factory.
-  auto AsRegex = [](const std::string& name, const std::string& alt) {
-    std::string regex;
-    regex.append("(").append(name);
-    regex.append("|").append(alt).append(")(:[0-9]*)?");
-    return regex;
+  auto AsPattern = [](const std::string& name, const std::string& alt) {
+    auto pattern = ObjectLibrary::PatternEntry(name, true);
+    pattern.AnotherName(alt);
+    pattern.AddNumber(":");
+    return pattern;
   };
-
-  library.Register<MemTableRepFactory>(
-      AsRegex(VectorRepFactory::kClassName(), VectorRepFactory::kNickName()),
+  library.AddFactory<MemTableRepFactory>(
+      AsPattern(VectorRepFactory::kClassName(), VectorRepFactory::kNickName()),
       [](const std::string& uri, std::unique_ptr<MemTableRepFactory>* guard,
          std::string* /*errmsg*/) {
         auto colon = uri.find(":");
@@ -181,8 +166,8 @@ static int RegisterBuiltinMemTableRepFactory(ObjectLibrary& library,
         }
         return guard->get();
       });
-  library.Register<MemTableRepFactory>(
-      AsRegex(SkipListFactory::kClassName(), SkipListFactory::kNickName()),
+  library.AddFactory<MemTableRepFactory>(
+      AsPattern(SkipListFactory::kClassName(), SkipListFactory::kNickName()),
       [](const std::string& uri, std::unique_ptr<MemTableRepFactory>* guard,
          std::string* /*errmsg*/) {
         auto colon = uri.find(":");
@@ -194,8 +179,8 @@ static int RegisterBuiltinMemTableRepFactory(ObjectLibrary& library,
         }
         return guard->get();
       });
-  library.Register<MemTableRepFactory>(
-      AsRegex("HashLinkListRepFactory", "hash_linkedlist"),
+  library.AddFactory<MemTableRepFactory>(
+      AsPattern("HashLinkListRepFactory", "hash_linkedlist"),
       [](const std::string& uri, std::unique_ptr<MemTableRepFactory>* guard,
          std::string* /*errmsg*/) {
         // Expecting format: hash_linkedlist:<hash_bucket_count>
@@ -208,8 +193,8 @@ static int RegisterBuiltinMemTableRepFactory(ObjectLibrary& library,
         }
         return guard->get();
       });
-  library.Register<MemTableRepFactory>(
-      AsRegex("HashSkipListRepFactory", "prefix_hash"),
+  library.AddFactory<MemTableRepFactory>(
+      AsPattern("HashSkipListRepFactory", "prefix_hash"),
       [](const std::string& uri, std::unique_ptr<MemTableRepFactory>* guard,
          std::string* /*errmsg*/) {
         // Expecting format: prefix_hash:<hash_bucket_count>
@@ -222,7 +207,7 @@ static int RegisterBuiltinMemTableRepFactory(ObjectLibrary& library,
         }
         return guard->get();
       });
-  library.Register<MemTableRepFactory>(
+  library.AddFactory<MemTableRepFactory>(
       "cuckoo",
       [](const std::string& /*uri*/,
          std::unique_ptr<MemTableRepFactory>* /*guard*/, std::string* errmsg) {
@@ -230,9 +215,10 @@ static int RegisterBuiltinMemTableRepFactory(ObjectLibrary& library,
         return nullptr;
       });
 
-  return 5;
+  size_t num_types;
+  return static_cast<int>(library.GetFactoryCount(&num_types));
 }
-#endif  // ROCKSDB_LITE
+
 Status GetMemTableRepFactoryFromString(
     const std::string& opts_str, std::unique_ptr<MemTableRepFactory>* result) {
   ConfigOptions config_options;
@@ -244,12 +230,10 @@ Status GetMemTableRepFactoryFromString(
 Status MemTableRepFactory::CreateFromString(
     const ConfigOptions& config_options, const std::string& value,
     std::unique_ptr<MemTableRepFactory>* result) {
-#ifndef ROCKSDB_LITE
   static std::once_flag once;
   std::call_once(once, [&]() {
     RegisterBuiltinMemTableRepFactory(*(ObjectLibrary::Default().get()), "");
   });
-#endif  // ROCKSDB_LITE
   std::string id;
   std::unordered_map<std::string, std::string> opt_map;
   Status status = Customizable::GetOptionsMap(config_options, result->get(),
@@ -263,46 +247,21 @@ Status MemTableRepFactory::CreateFromString(
   } else if (id.empty()) {  // We have no Id but have options.  Not good
     return Status::NotSupported("Cannot reset object ", id);
   } else {
-#ifndef ROCKSDB_LITE
     status = NewUniqueObject<MemTableRepFactory>(config_options, id, opt_map,
                                                  result);
-#else
-    // To make it possible to configure the memtables in LITE mode, the ID
-    // is of the form <name>:<size>, where name is the name of the class and
-    // <size> is the length of the object (e.g. skip_list:10).
-    std::vector<std::string> opts_list = StringSplit(id, ':');
-    if (opts_list.empty() || opts_list.size() > 2 || !opt_map.empty()) {
-      status = Status::InvalidArgument("Can't parse memtable_factory option ",
-                                       value);
-    } else if (opts_list[0] == "skip_list" ||
-               opts_list[0] == SkipListFactory::kClassName()) {
-      // Expecting format
-      // skip_list:<lookahead>
-      if (opts_list.size() == 2) {
-        size_t lookahead = ParseSizeT(opts_list[1]);
-        result->reset(new SkipListFactory(lookahead));
-      } else {
-        result->reset(new SkipListFactory());
-      }
-    } else if (!config_options.ignore_unsupported_options) {
-      status = Status::NotSupported("Cannot load object in LITE mode ", id);
-    }
-#endif  // ROCKSDB_LITE
   }
   return status;
 }
 
-#ifndef ROCKSDB_LITE
-Status GetPlainTableOptionsFromMap(
-    const PlainTableOptions& table_options,
-    const std::unordered_map<std::string, std::string>& opts_map,
-    PlainTableOptions* new_table_options, bool input_strings_escaped,
-    bool ignore_unknown_options) {
-  ConfigOptions config_options;
-  config_options.input_strings_escaped = input_strings_escaped;
-  config_options.ignore_unknown_options = ignore_unknown_options;
-  return GetPlainTableOptionsFromMap(config_options, table_options, opts_map,
-                                     new_table_options);
+Status MemTableRepFactory::CreateFromString(
+    const ConfigOptions& config_options, const std::string& value,
+    std::shared_ptr<MemTableRepFactory>* result) {
+  std::unique_ptr<MemTableRepFactory> factory;
+  Status s = CreateFromString(config_options, value, &factory);
+  if (factory && s.ok()) {
+    result->reset(factory.release());
+  }
+  return s;
 }
 
 Status GetPlainTableOptionsFromMap(
@@ -334,5 +293,4 @@ const std::string PlainTablePropertyNames::kBloomVersion =
 const std::string PlainTablePropertyNames::kNumBloomBlocks =
     "rocksdb.plain.table.bloom.numblocks";
 
-#endif  // ROCKSDB_LITE
 }  // namespace ROCKSDB_NAMESPACE
