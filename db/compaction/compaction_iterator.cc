@@ -1213,6 +1213,10 @@ void CompactionIterator::GarbageCollectBlobIfNeeded() {
 }
 
 void CompactionIterator::DecideOutputLevel() {
+  auto cfd = compaction_->input_version()->cfd();
+  auto& hotrap_timers = cfd->internal_stats()->hotrap_timers();
+  auto guard = hotrap_timers.timer(TimerType::kDecideOutputLevel).start();
+
   assert(compaction_->SupportsPerKeyPlacement());
   output_to_penultimate_level_ = false;
   // if the key is newer than the cutoff sequence or within the earliest
@@ -1233,8 +1237,7 @@ void CompactionIterator::DecideOutputLevel() {
   }
 #endif  // NDEBUG
 
-  const Comparator* ucmp =
-      compaction_->input_version()->cfd()->ioptions()->user_comparator;
+  const Comparator* ucmp = cfd->ioptions()->user_comparator;
   if (!output_to_penultimate_level_ && hot_iter_.has_value() &&
       promotable_range_.contains(ikey_.user_key, ucmp)) {
     const rocksdb::Slice* hot = hot_iter_->peek();

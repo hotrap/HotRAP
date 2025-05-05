@@ -120,11 +120,7 @@ enum class TimerType : size_t {
   kCheckStablyHot,
   kCheckNewerVersion,
   kWriteBackToMutablePromotionBuffer,
-  // kRouterIteratorNext,
-  // kWithoutRouterNext,
-  // kIntraIterNext,
-  // kFD2SDNext,
-  // kHotIterNext,
+  kDecideOutputLevel,
   kAddToBuilder,
   kEnd,
 };
