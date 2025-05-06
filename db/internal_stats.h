@@ -563,6 +563,8 @@ class InternalStats {
     bg_error_count_ = 0;
     started_at_ = clock_->NowMicros();
     has_cf_change_since_dump_ = true;
+    hotrap_timers_.reset();
+    hotrap_timers_per_level().reset();
   }
 
   void AddCompactionStats(int level, Env::Priority thread_pri,
