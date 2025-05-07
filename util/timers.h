@@ -21,6 +21,10 @@ class AtomicTimer {
     nsec_.fetch_add(time.as_nanos(), std::memory_order_relaxed);
   }
   TimerGuard start() const;
+  void reset() const {
+    count_.store(0, std::memory_order_relaxed);
+    nsec_.store(0, std::memory_order_relaxed);
+  }
 
  private:
   mutable std::atomic<uint64_t> count_;
@@ -49,6 +53,11 @@ class Timers {
   Timers(size_t num) : timers_(num) {}
   size_t num() const { return timers_.size(); }
   const AtomicTimer &timer(size_t type) const { return timers_[type]; }
+  void reset() const {
+    for (auto &timer : timers_) {
+      timer.reset();
+    }
+  }
 
  private:
   std::vector<AtomicTimer> timers_;
@@ -76,6 +85,12 @@ class TimersPerLevel {
   const AtomicTimer &timer(size_t level, size_t type) const {
     return timers_in_level(level).timer(type);
   }
+  void reset() const {
+    auto v = v_.Read();
+    for (auto &timers : *v) {
+      timers.reset();
+    }
+  }
 
  private:
   rocksdb::RWMutexProtected<std::deque<Timers>> v_;
@@ -90,6 +105,7 @@ class TypedTimers {
     return timers_.timer(static_cast<size_t>(type));
   }
   const Timers &timers() const { return timers_; }
+  void reset() const { timers_.reset(); }
 
  private:
   static constexpr size_t NUM = static_cast<size_t>(Type::kEnd);
@@ -104,6 +120,7 @@ class TypedTimersPerLevel {
     return v_.timer(level, static_cast<size_t>(type));
   }
   const TimersPerLevel &timers_per_level() const { return v_; }
+  void reset() const { v_.reset(); }
 
  private:
   TimersPerLevel v_;
