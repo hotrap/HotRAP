@@ -1239,12 +1239,15 @@ void CompactionIterator::DecideOutputLevel() {
       promotable_range_.contains(ikey_.user_key, ucmp)) {
     const rocksdb::Slice* hot = hot_iter_->peek();
     while (hot != nullptr) {
-      if (ucmp->Compare(*hot, ikey_.user_key) >= 0) break;
+      auto res = ucmp->Compare(*hot, ikey_.user_key);
+      if (res >= 0) {
+        if (res == 0) {
+          output_to_penultimate_level_ = true;
+        }
+        break;
+      }
       hot_iter_->next();
       hot = hot_iter_->peek();
-    }
-    if (hot && ucmp->Compare(*hot, ikey_.user_key) == 0) {
-      output_to_penultimate_level_ = true;
     }
   }
 
