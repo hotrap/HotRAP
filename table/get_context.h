@@ -105,6 +105,7 @@ class GetContext {
              PinnableWideColumns* columns, bool* value_found,
              MergeContext* merge_context, bool do_merge,
              SequenceNumber* max_covering_tombstone_seq, SystemClock* clock,
+             bool need_to_read_sequence,
              PinnedIteratorsManager* _pinned_iters_mgr = nullptr,
              ReadCallback* callback = nullptr, bool* is_blob_index = nullptr,
              uint64_t tracing_get_id = 0, BlobFetcher* blob_fetcher = nullptr);
@@ -114,6 +115,7 @@ class GetContext {
              PinnableWideColumns* columns, std::string* timestamp,
              bool* value_found, MergeContext* merge_context, bool do_merge,
              SequenceNumber* max_covering_tombstone_seq, SystemClock* clock,
+             bool need_to_read_sequence,
              PinnedIteratorsManager* _pinned_iters_mgr = nullptr,
              ReadCallback* callback = nullptr, bool* is_blob_index = nullptr,
              uint64_t tracing_get_id = 0, BlobFetcher* blob_fetcher = nullptr);
@@ -133,7 +135,8 @@ class GetContext {
   // Returns True if more keys need to be read (due to merges) or
   //         False if the complete value has been found.
   bool SaveValue(const ParsedInternalKey& parsed_key, const Slice& value,
-                 bool* matched, Cleanable* value_pinner = nullptr);
+                 bool* matched, Cleanable* value_pinner = nullptr,
+                 bool from_row_cache = false);
 
   // Simplified version of the previous function. Should only be used when we
   // know that the operation is a Put.
@@ -161,7 +164,7 @@ class GetContext {
   void SetReplayLog(std::string* replay_log) { replay_log_ = replay_log; }
 
   // Do we need to fetch the SequenceNumber for this key?
-  bool NeedToReadSequence() const { return true; }
+  bool NeedToReadSequence() const { return need_to_read_sequence_; }
 
   SequenceNumber seq() const { return seq_; }
 
@@ -231,6 +234,7 @@ class GetContext {
   SystemClock* clock_;
   // If a key is found, seq_ will be set to the SequenceNumber of most recent
   // write to the key or kMaxSequenceNumber if unknown
+  bool need_to_read_sequence_;
   SequenceNumber seq_;
   std::string* replay_log_;
   // Used to temporarily pin blocks when state_ == GetContext::kMerge
@@ -252,8 +256,7 @@ class GetContext {
 // log must have been created by another GetContext object, whose replay log
 // must have been set by calling GetContext::SetReplayLog().
 void replayGetContextLog(const Slice& replay_log, const Slice& user_key,
-                         GetContext* get_context,
-                         Cleanable* value_pinner = nullptr,
-                         SequenceNumber seq_no = kMaxSequenceNumber);
+                         GetContext* get_context, Cleanable* value_pinner,
+                         SequenceNumber seq_no, bool from_row_cache);
 
 }  // namespace ROCKSDB_NAMESPACE
