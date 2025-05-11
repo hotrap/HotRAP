@@ -2446,7 +2446,8 @@ void Version::TryPromote(
   if (user_key.size() + value->size() >= 16 * 1024) return;
   ralt->Access(user_key, value->size());
 #if 0
-  if (mutable_cf_options_.disable_hotrap || path_id(hit_level) == 0) {
+  if (mutable_cf_options_.disable_hotrap || path_id(hit_level) == 0 ||
+      seq == kMaxSequenceNumber) {
     ralt->Access(user_key, value->size());
     return;
   }
@@ -2755,7 +2756,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
       user_comparator(), merge_operator_, info_log_, db_statistics_,
       status->ok() ? GetContext::kNotFound : GetContext::kMerge, user_key,
       do_merge ? value : nullptr, columns, value_found, merge_context, do_merge,
-      max_covering_tombstone_seq, clock_,
+      max_covering_tombstone_seq, clock_, seq != nullptr,
       merge_operator_ ? pinned_iters_mgr : nullptr, callback, is_blob_to_use,
       tracing_get_id, &blob_fetcher);
 
@@ -2773,6 +2774,7 @@ void Version::Get(DBImpl* db, const ReadOptions& read_options,
                  .key_exists = key_exists};
   Get(env_get, get_context, last_level);
   if (seq) {
+    assert(get_context.seq() != kMaxSequenceNumber);
     *seq = get_context.seq();
   }
 }
@@ -2803,7 +2805,7 @@ void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,
         iter->s->ok() ? GetContext::kNotFound : GetContext::kMerge,
         iter->ukey_with_ts, iter->value, iter->columns, iter->timestamp,
         nullptr, &(iter->merge_context), true,
-        &iter->max_covering_tombstone_seq, clock_,
+        &iter->max_covering_tombstone_seq, clock_, false,
         merge_operator_ ? &pinned_iters_mgr : nullptr, callback,
         &iter->is_blob_index, tracing_mget_id, &blob_fetcher);
     // MergeInProgress status, if set, has been transferred to the get_context
