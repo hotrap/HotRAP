@@ -1235,19 +1235,20 @@ void CompactionIterator::DecideOutputLevel() {
 
   const Comparator* ucmp =
       compaction_->input_version()->cfd()->ioptions()->user_comparator;
-  if (!output_to_penultimate_level_ && hot_iter_.has_value() &&
-      promotable_range_.contains(ikey_.user_key, ucmp)) {
+  if (!output_to_penultimate_level_ && hot_iter_.has_value()) {
     const rocksdb::Slice* hot = hot_iter_->peek();
-    while (hot != nullptr) {
-      auto res = ucmp->Compare(*hot, ikey_.user_key);
-      if (res >= 0) {
-        if (res == 0) {
-          output_to_penultimate_level_ = true;
+    if (hot != nullptr && promotable_range_.contains(ikey_.user_key, ucmp)) {
+      do {
+        auto res = ucmp->Compare(*hot, ikey_.user_key);
+        if (res >= 0) {
+          if (res == 0) {
+            output_to_penultimate_level_ = true;
+          }
+          break;
         }
-        break;
-      }
-      hot_iter_->next();
-      hot = hot_iter_->peek();
+        hot_iter_->next();
+        hot = hot_iter_->peek();
+      } while (hot != nullptr);
     }
   }
 
